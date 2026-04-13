@@ -1,121 +1,121 @@
-from sys import exit
-from importlib import import_module
-from logging import (
-    FileHandler,
-    StreamHandler,
-    INFO,
-    basicConfig,
-    error as log_error,
-    info as log_info,
-    getLogger,
-    ERROR,
-)
-from os import path, remove, environ
-from pymongo.mongo_client import MongoClient
-from pymongo.server_api import ServerApi
+"""
+WZML-X Update Script
+
+Handles runtime updates from upstream Git repository.
+Can be run standalone: python update.py
+"""
+
+import os
+import sys
+import logging
 from subprocess import run as srun, call as scall
 
-getLogger("pymongo").setLevel(ERROR)
-
-var_list = [
-    "BOT_TOKEN",
-    "TELEGRAM_API",
-    "TELEGRAM_HASH",
-    "OWNER_ID",
-    "DATABASE_URL",
-    "BASE_URL",
-    "UPSTREAM_REPO",
-    "UPSTREAM_BRANCH",
-    "UPDATE_PKGS",
-]
-
-if path.exists("log.txt"):
-    with open("log.txt", "r+") as f:
-        f.truncate(0)
-
-if path.exists("rlog.txt"):
-    remove("rlog.txt")
-
-basicConfig(
+logging.basicConfig(
     format="[%(asctime)s] [%(levelname)s] - %(message)s",
     datefmt="%d-%b-%y %I:%M:%S %p",
-    handlers=[FileHandler("log.txt"), StreamHandler()],
-    level=INFO,
+    level=logging.INFO,
 )
-try:
-    settings = import_module("config")
-    config_file = {
-        key: value.strip() if isinstance(value, str) else value
-        for key, value in vars(settings).items()
-        if not key.startswith("__")
-    }
-except ModuleNotFoundError:
-    log_info("Config.py file is not Added! Checking ENVs..")
-    config_file = {}
+logger = logging.getLogger("wzml.update")
 
-env_updates = {
-    key: value.strip() if isinstance(value, str) else value
-    for key, value in environ.items()
-    if key in var_list
-}
-if env_updates:
-    log_info("Config data is updated with ENVs!")
-    config_file.update(env_updates)
 
-BOT_TOKEN = config_file.get("BOT_TOKEN", "")
-if not BOT_TOKEN:
-    log_error("BOT_TOKEN variable is missing! Exiting now")
-    exit(1)
+def main():
+    logger.info("=" * 50)
+    logger.info("WZML-X Update Check")
+    logger.info("=" * 50)
 
-BOT_ID = BOT_TOKEN.split(":", 1)[0]
-
-if DATABASE_URL := config_file.get("DATABASE_URL", "").strip():
     try:
-        conn = MongoClient(DATABASE_URL, server_api=ServerApi("1"))
-        db = conn.wzmlx
-        old_config = db.settings.deployConfig.find_one({"_id": BOT_ID}, {"_id": 0})
-        config_dict = db.settings.config.find_one({"_id": BOT_ID})
-        if (
-            old_config is not None and old_config == config_file or old_config is None
-        ) and config_dict is not None:
-            config_file["UPSTREAM_REPO"] = config_dict["UPSTREAM_REPO"]
-            config_file["UPSTREAM_BRANCH"] = config_dict.get("UPSTREAM_BRANCH", "wzv3")
-            config_file["UPDATE_PKGS"] = config_dict.get("UPDATE_PKGS", "True")
-        conn.close()
+        from config import get_config
+
+        config = get_config()
+        config.load_all()
     except Exception as e:
-        log_error(f"Database ERROR: {e}")
+        logger.error(f"Config load error: {e}")
+        sys.exit(1)
 
-UPSTREAM_REPO = config_file.get("UPSTREAM_REPO", "").strip()
-UPSTREAM_BRANCH = config_file.get("UPSTREAM_BRANCH", "").strip() or "wzv3"
+    telegram_config = config.telegram
+    database_config = config.database
 
-if UPSTREAM_REPO:
-    if path.exists(".git"):
-        srun(["rm", "-rf", ".git"])
+    if not telegram_config.BOT_TOKEN:
+        logger.error("BOT_TOKEN not configured!")
+        sys.exit(1)
 
-    update = srun(
-        [
-            f"git init -q \
-                     && git config --global user.email 105407900+SilentDemonSD@users.noreply.github.com \
-                     && git config --global user.name SilentDemonSD \
-                     && git add . \
-                     && git commit -sm update -q \
-                     && git remote add origin {UPSTREAM_REPO} \
-                     && git fetch origin -q \
-                     && git reset --hard origin/{UPSTREAM_BRANCH} -q"
-        ],
-        shell=True,
-    )
+    bot_id = telegram_config.BOT_TOKEN.split(":")[0]
 
-    repo = UPSTREAM_REPO.split("/")
-    UPSTREAM_REPO = f"https://github.com/{repo[-2]}/{repo[-1]}"
-    if update.returncode == 0:
-        log_info("Successfully updated with Latest Updates !")
-    else:
-        log_error("Something went Wrong ! Recheck your details or Ask Support !")
-    log_info(f"UPSTREAM_REPO: {UPSTREAM_REPO} | UPSTREAM_BRANCH: {UPSTREAM_BRANCH}")
+    upstream_repo = os.environ.get("UPSTREAM_REPO", "")
+    upstream_branch = os.environ.get("UPSTREAM_BRANCH", "wzv3")
+    update_pkgs = os.environ.get("UPDATE_PKGS", "True")
+
+    if database_config.DATABASE_URL:
+        try:
+            from pymongo import MongoClient
+            from pymongo.server_api import ServerApi
+
+            conn = MongoClient(
+                database_config.DATABASE_URL, server_api=ServerApi("1")
+            )
+            db = conn.wzmlx
+
+            deploy_config = db.settings.deployConfig.find_one(
+                {"_id": bot_id}, {"_id": 0}
+            )
+            stored_config = db.settings.config.find_one({"_id": bot_id})
+
+            if stored_config:
+                upstream_repo = stored_config.get("UPSTREAM_REPO", upstream_repo)
+                upstream_branch = stored_config.get(
+                    "UPSTREAM_BRANCH", upstream_branch
+                )
+                update_pkgs = stored_config.get("UPDATE_PKGS", update_pkgs)
+
+            conn.close()
+            logger.info("Loaded config from database")
+        except Exception as e:
+            logger.warning(f"Database config error: {e}")
+
+    if upstream_repo:
+        logger.info(f"Upstream repo: {upstream_repo}")
+        logger.info(f"Upstream branch: {upstream_branch}")
+
+        if os.path.exists(".git"):
+            srun(["rm", "-rf", ".git"], shell=True)
+
+        git_cmd = f"""
+git init -q
+&& git config --global user.email update@wzml-x
+&& git config --global user.name WZML-X
+&& git add .
+&& git commit -sm update -q
+&& git remote add origin {upstream_repo}
+&& git fetch origin -q
+&& git reset --hard origin/{upstream_branch} -q
+"""
+        result = srun([git_cmd], shell=True)
+
+        if result.returncode == 0:
+            logger.info("Successfully updated from upstream!")
+        else:
+            logger.error("Update failed! Check upstream repo/branch")
+
+        repo = upstream_repo.split("/")
+        upstream_repo = f"https://github.com/{repo[-2]}/{repo[-1]}"
+        logger.info(f"UPSTREAM_REPO: {upstream_repo} | UPSTREAM_BRANCH: {upstream_branch}")
+
+    if update_pkgs and str(update_pkgs).lower() == "true":
+        logger.info("Updating Python packages...")
+        scall("uv pip install -U -r requirements.txt", shell=True)
+        logger.info("Packages updated!")
+
+    logger.info("=" * 50)
+    logger.info("Update complete!")
+    logger.info("=" * 50)
 
 
-UPDATE_PKGS = config_file.get("UPDATE_PKGS", "True")
-if (isinstance(UPDATE_PKGS, str) and UPDATE_PKGS.lower() == "true") or UPDATE_PKGS:
-    scall("uv pip install -U -r requirements.txt", shell=True)
-    log_info("Successfully Updated all the Packages !")
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        logger.info("Interrupted")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        sys.exit(1)

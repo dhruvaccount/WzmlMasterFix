@@ -1,0 +1,157 @@
+telegram:
+  BOT_TOKEN: ""
+  API: 0
+  HASH: ""
+  OWNER_ID: 0
+  USER_SESSION_STRING: ""
+  HELPER_TOKENS: ""
+  PROXY: {}
+  BASE_URL: ""
+  BOT_USERNAME: ""
+  HYDRA_IP: ""
+  HYDRA_API_KEY: ""
+  CMD_SUFFIX: ""
+  DEFAULT_LANG: "en"
+  TIMEZONE: "Asia/Kolkata"
+  AUTHORIZED_CHATS: []
+  SUDO_USERS: []
+
+database:
+  DATABASE_URL: ""
+  MONGO_DB_NAME: "wzmlx"
+  DATABASE_CLIENT: "mongodb"
+
+limits:
+  MAX_WORKERS: 4
+  API_HOST: "0.0.0.0"
+  API_PORT: 8080
+  DIRECT_LIMIT: 0
+  MEGA_LIMIT: 0
+  TORRENT_LIMIT: 0
+  GD_DL_LIMIT: 0
+  RC_DL_LIMIT: 0
+  CLONE_LIMIT: 0
+  JD_LIMIT: 0
+  NZB_LIMIT: 0
+  YTDLP_LIMIT: 0
+  PLAYLIST_LIMIT: 0
+  LEECH_LIMIT: 0
+  EXTRACT_LIMIT: 0
+  ARCHIVE_LIMIT: 0
+  STORAGE_LIMIT: 0
+  BOT_MAX_TASKS: 0
+  USER_MAX_TASKS: 0
+  USER_TIME_INTERVAL: 0
+  VERIFY_TIMEOUT: 0
+  STATUS_LIMIT: 10
+  STATUS_UPDATE_INTERVAL: 15
+  QUEUE_ALL: 0
+  QUEUE_DOWNLOAD: 0
+  QUEUE_UPLOAD: 0
+  TORRENT_TIMEOUT: 0
+  BASE_URL_PORT: 0
+  WEB_PINCODE: true
+  DEFAULT_UPLOAD: "rc"
+
+task_tools:
+  FORCE_SUB_IDS: []
+
+bot_settings:
+  BOT_PM: false
+  SET_COMMANDS: true
+  INCOMPLETE_TASK_NOTIFIER: false
+  MEDIA_STORE: true
+  NAME_SWAP: ""
+
+gdrive:
+  GDRIVE_ID: ""
+  GD_DESP: "Uploaded with WZ Bot"
+  IS_TEAM_DRIVE: false
+  STOP_DUPLICATE: false
+  INDEX_URL: ""
+  USE_SERVICE_ACCOUNTS: false
+
+rclone:
+  RCLONE_PATH: ""
+  RCLONE_FLAGS: {}
+  RCLONE_SERVE_URL: ""
+  SHOW_CLOUD_LINK: true
+  RCLONE_SERVE_PORT: 0
+  RCLONE_SERVE_USER: ""
+  RCLONE_SERVE_PASS: ""
+
+mega:
+  MEGA_EMAIL: ""
+  MEGA_PASSWORD: ""
+
+jdownloader:
+  JD_EMAIL: ""
+  JD_PASS: ""
+
+sabnzbd:
+  USENET_SERVERS: []
+
+leech:
+  LEECH_SPLIT_SIZE: 0
+  AS_DOCUMENT: false
+  EQUAL_SPLITS: false
+  MEDIA_GROUP: false
+  USER_TRANSMISSION: true
+  HYBRID_LEECH: true
+  LEECH_PREFIX: ""
+  LEECH_SUFFIX: ""
+  LEECH_FONT: ""
+  LEECH_CAPTION: ""
+  THUMBNAIL_LAYOUT: ""
+  DELETE_LINKS: false
+  FFMPEG_CMDS: {}
+  UPLOAD_PATHS: {}
+
+logs:
+  LEECH_DUMP_CHAT: 0
+  LINKS_LOG_ID: 0
+  MIRROR_LOG_ID: 0
+  CLEAN_LOG_MSG: false
+  LOGIN_PASS: ""
+
+rss:
+  RSS_DELAY: 600
+  RSS_CHAT: 0
+  RSS_SIZE_LIMIT: 0
+
+search:
+  SEARCH_API_LINK: ""
+  SEARCH_LIMIT: 0
+  SEARCH_PLUGINS: []
+  FILELION_API: ""
+  STREAMWISH_API: ""
+  INSTADL_API: ""
+  EXCLUDED_EXTENSIONS: []
+  IMDB_TEMPLATE: ""
+
+disable:
+  TORRENTS: false
+  LEECH: false
+  BULK: false
+  MULTI: false
+  SEED: false
+  FF_MODE: false
+
+telegraph:
+  AUTHOR_NAME: "WZML-X"
+  AUTHOR_URL: "https://t.me/WZML_X"
+
+yt:
+  YT_DESP: "Uploaded to YouTube by WZML-X bot"
+  YT_TAGS:
+    - telegram
+    - bot
+    - youtube
+  YT_CATEGORY_ID: 22
+  YT_PRIVACY_STATUS: "unlisted"
+  YT_DLP_OPTIONS: {}
+
+update:
+  UPSTREAM_REPO: ""
+  UPSTREAM_BRANCH: "master"
+  UPDATE_PKGS: true

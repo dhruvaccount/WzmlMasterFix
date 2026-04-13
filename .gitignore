@@ -1,20 +1,71 @@
-.venv/*
-SKILL.md
+# Virtual Environment
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Testing
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+log.txt
+
+# Credentials & Secrets
 config.py
 token.pickle
 credentials.json
 rclone.conf
 .netrc
-log.txt
-cfg.zip
 accounts/*
-thumbnails/*
-rclone/*
 tokens/*
 cookies/*
+*.env
+.env
+
+# Cache
+thumbnails/*
 mediainfo/*
+rclone/*
 sabnzbd/*
+
+# Downloads & Uploads
+downloads/*
+
+# Generated Files
 list_drives.txt
 shortener.txt
 cookies.txt
-downloads/*
+SKILL.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+tmp/
+temp/
+*.tmp

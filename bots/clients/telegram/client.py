@@ -1,0 +1,275 @@
+"""Telegram client using split handlers"""
+
+import logging
+from typing import Any, Callable, Dict, Optional
+
+try:
+    import pyrogram
+    from pyrogram import Client, types
+except ImportError:
+    raise ImportError("pyrogram required: pip install pyrotgfork")
+
+from bots.base import ClientAdapter
+from bots.clients.telegram.handlers import BotHandler, CommandContext
+
+logger = logging.getLogger("wzml.telegram.client")
+
+
+class TelegramClient(ClientAdapter):
+    """Telegram client adapter using split handlers"""
+
+    name = "telegram"
+    platform = "telegram"
+
+    def __init__(self, bot_token: str = None):
+        self.bot_token = bot_token
+        self._bot: Optional[Client] = None
+        self._running = False
+        self._handlers: Dict[str, Callable] = {}
+        self._callback_handlers: Dict[str, Callable] = {}
+
+        self._search_results = {}
+        self._rss_feeds = {}
+        self._gdrive_search_results = {}
+
+    async def start(self, bot_token: str = None) -> bool:
+        token = bot_token or self.bot_token
+        if not token:
+            raise ValueError("No bot token")
+
+        self._bot = pyrogram.Client(
+            name="wzml_bot",
+            api_id=0,
+            api_hash="",
+            bot_token=token,
+        )
+        await self._bot.start()
+
+        me = self._bot.get_me()
+        logger.info(f"Bot started: @{me.username}")
+
+        self._register_handlers()
+
+        self._running = True
+        logger.info(f"Telegram client initialized with {len(self._handlers)} handlers")
+
+        return True
+
+    async def stop(self) -> bool:
+        if self._bot:
+            await self._bot.stop()
+        self._running = False
+        logger.info("Telegram client stopped")
+        return True
+
+    def _register_handlers(self):
+        """Register all handlers"""
+        from bots.clients.telegram.handlers.mirror import (
+            MirrorHandler,
+            YtdlpHandler,
+            CloneHandler,
+            CancelHandler,
+            CancelAllHandler,
+        )
+        from bots.clients.telegram.handlers.status import StatusHandler
+        from bots.clients.telegram.handlers.search import SearchHandler
+        from bots.clients.telegram.handlers.rss import RSSHandler
+        from bots.clients.telegram.handlers.gdrive import (
+            GDriveCountHandler,
+            GDriveDeleteHandler,
+            GDriveListHandler,
+        )
+        from bots.clients.telegram.handlers.mediainfo import MediaInfoHandler
+        from bots.clients.telegram.handlers.nzb import NZBSearchHandler
+        from bots.clients.telegram.handlers.system import (
+            PingHandler,
+            StatsHandler,
+            LogHandler,
+            RestartHandler,
+            ExecHandler,
+            ShellHandler,
+            BroadcastHandler,
+        )
+        from bots.clients.telegram.handlers.settings import (
+            UserSettingsHandler,
+            BotSettingsHandler,
+            ServicesHandler,
+            IMDBHandler,
+            HelpHandler,
+        )
+
+        mirror = MirrorHandler()
+        ytdlp = YtdlpHandler()
+        clone = CloneHandler()
+        cancel = CancelHandler()
+        cancel_all = CancelAllHandler()
+        status = StatusHandler()
+        search = SearchHandler()
+        rss = RSSHandler()
+        gdrive_count = GDriveCountHandler()
+        gdrive_delete = GDriveDeleteHandler()
+        gdrive_list = GDriveListHandler()
+        mediainfo = MediaInfoHandler()
+        nzb = NZBSearchHandler()
+        ping = PingHandler()
+        stats = StatsHandler()
+        log = LogHandler()
+        restart = RestartHandler()
+        exec_cmd = ExecHandler()
+        shell = ShellHandler()
+        broadcast = BroadcastHandler()
+        user_settings = UserSettingsHandler()
+        bot_settings = BotSettingsHandler()
+        services = ServicesHandler()
+        imdb = IMDBHandler()
+        help_cmd = HelpHandler()
+
+        self._handlers = {
+            "mirror": mirror.handle,
+            "leech": lambda c, c2: mirror.handle(c, c2, is_leech=True),
+            "qb_mirror": lambda c, c2: mirror.handle(c, c2, is_qbit=True),
+            "qb_leech": lambda c, c2: mirror.handle(c, c2, is_leech=True, is_qbit=True),
+            "jd_mirror": lambda c, c2: mirror.handle(c, c2, is_jd=True),
+            "jd_leech": lambda c, c2: mirror.handle(c, c2, is_leech=True, is_jd=True),
+            "nzb_mirror": lambda c, c2: mirror.handle(c, c2, is_nzb=True),
+            "nzb_leech": lambda c, c2: mirror.handle(c, c2, is_leech=True, is_nzb=True),
+            "ytdl": ytdlp.handle,
+            "ytdl_leech": lambda c, c2: ytdlp.handle(c, c2, is_leech=True),
+            "clone": clone.handle,
+            "cancel": cancel.handle,
+            "cancelall": cancel_all.handle,
+            "status": status.handle,
+            "search": search.handle,
+            "rss": rss.handle,
+            "gdcount": gdrive_count.handle,
+            "gddelete": gdrive_delete.handle,
+            "gdlist": gdrive_list.handle,
+            "mediainfo": mediainfo.handle,
+            "nzbsearch": nzb.handle,
+            "ping": ping.handle,
+            "stats": stats.handle,
+            "log": log.handle,
+            "restart": restart.handle,
+            "exec": lambda c, c2: exec_cmd.handle(c, c2, is_async=False),
+            "aexec": lambda c, c2: exec_cmd.handle(c, c2, is_async=True),
+            "shell": shell.handle,
+            "broadcast": broadcast.handle,
+            "usetting": user_settings.handle,
+            "bsetting": bot_settings.handle,
+            "services": services.handle,
+            "imdb": imdb.handle,
+            "help": help_cmd.handle,
+        }
+
+    async def send_message(
+        self,
+        chat_id: int,
+        text: str,
+        reply_markup: Any = None,
+    ) -> Optional[types.Message]:
+        if not self._bot:
+            return None
+        try:
+            return await self._bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=reply_markup,
+            )
+        except Exception as e:
+            logger.error(f"Send message error: {e}")
+            return None
+
+    async def send_photo(
+        self,
+        chat_id: int,
+        photo: str,
+        caption: str = "",
+    ) -> Optional[types.Message]:
+        if not self._bot:
+            return None
+        try:
+            return await self._bot.send_photo(
+                chat_id=chat_id,
+                photo=photo,
+                caption=caption,
+            )
+        except Exception as e:
+            logger.error(f"Send photo error: {e}")
+            return None
+
+    async def edit_message(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        reply_markup: Any = None,
+    ) -> Optional[types.Message]:
+        if not self._bot:
+            return None
+        try:
+            return await self._bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=reply_markup,
+            )
+        except Exception as e:
+            logger.error(f"Edit message error: {e}")
+            return None
+
+    async def delete_message(
+        self,
+        chat_id: int,
+        message_id: int,
+    ) -> bool:
+        if not self._bot:
+            return False
+        try:
+            await self._bot.delete_messages(
+                chat_id=chat_id,
+                message_ids=message_id,
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Delete message error: {e}")
+            return False
+
+    async def download_media(
+        self,
+        media,
+        file_name: str = None,
+    ) -> str:
+        if not self._bot:
+            return None
+        try:
+            return await self._bot.download_media(media, file_name=file_name)
+        except Exception as e:
+            logger.error(f"Download media error: {e}")
+            return None
+
+
+_telegram_client: Optional[TelegramClient] = None
+
+
+async def get_telegram_client(bot_token: str = None) -> TelegramClient:
+    """Get or create telegram client"""
+    global _telegram_client
+
+    if _telegram_client is None:
+        if not bot_token:
+            from config import get_config
+
+            config = get_config()
+            config.load_all()
+            bot_token = config.telegram.BOT_TOKEN
+
+        if not bot_token:
+            raise ValueError("No bot token")
+
+        _telegram_client = TelegramClient(bot_token)
+        await _telegram_client.start(bot_token)
+
+    return _telegram_client
+
+
+__all__ = ["TelegramClient", "get_telegram_client"]

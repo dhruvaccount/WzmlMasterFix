@@ -1,0 +1,83 @@
+"""
+Telegram-specific helpers
+
+These require pyrogram (pyrotgfork) and should not be in core/
+"""
+
+from bots.clients.telegram.helpers.telegram_commands import TELEGRAM_COMMANDS
+from bots.clients.telegram.helpers.message_utils import (
+    send_message,
+    edit_message,
+    delete_message,
+    auto_delete_message,
+    send_photo,
+    send_video,
+    send_document,
+    send_audio,
+    get_readable_time,
+    get_readable_bytes,
+    get_extension,
+    get_filename,
+    get_mime_type,
+    arg_parser,
+    pre_task_check,
+    get_content_type,
+    is_url,
+    is_magnet,
+    is_torrent,
+    is_gdrive_link,
+    is_mega_link,
+    is_nzb_link,
+    is_youtube_link,
+    is_telegram_link,
+    is_rclone_path,
+    is_gdrive_id,
+    set_telegram_client,
+    get_telegram_client,
+)
+from bots.clients.telegram.helpers.button_utils import ButtonMaker
+from bots.clients.telegram.helpers.filters import (
+    CustomFilters,
+    is_auth,
+    is_admin,
+    is_group,
+    is_private,
+)
+
+__all__ = [
+    "TELEGRAM_COMMANDS",
+    "send_message",
+    "edit_message",
+    "delete_message",
+    "auto_delete_message",
+    "send_photo",
+    "send_video",
+    "send_document",
+    "send_audio",
+    "get_readable_time",
+    "get_readable_bytes",
+    "get_extension",
+    "get_filename",
+    "get_mime_type",
+    "arg_parser",
+    "pre_task_check",
+    "get_content_type",
+    "is_url",
+    "is_magnet",
+    "is_torrent",
+    "is_gdrive_link",
+    "is_mega_link",
+    "is_nzb_link",
+    "is_youtube_link",
+    "is_telegram_link",
+    "is_rclone_path",
+    "is_gdrive_id",
+    "set_telegram_client",
+    "get_telegram_client",
+    "ButtonMaker",
+    "CustomFilters",
+    "is_auth",
+    "is_admin",
+    "is_group",
+    "is_private",
+]
