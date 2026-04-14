@@ -59,17 +59,14 @@ class DownloaderPlugin(PluginBase):
     async def download(self, context: PluginContext, config: dict) -> PluginResult:
         pass
 
-    @abstractmethod
     async def pause(self) -> bool:
-        pass
+        return False
 
-    @abstractmethod
     async def resume(self) -> bool:
-        pass
+        return False
 
-    @abstractmethod
     async def cancel(self) -> bool:
-        pass
+        return False
 
 
 class UploaderPlugin(PluginBase):

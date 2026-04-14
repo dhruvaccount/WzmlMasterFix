@@ -58,7 +58,14 @@ PROCESSOR_PLUGINS = {
 }
 
 
-ALL_PLUGINS = {**DOWNLOADER_PLUGINS, **UPLOADER_PLUGINS, **PROCESSOR_PLUGINS}
+ALL_PLUGINS = {}
+for p_dict in (DOWNLOADER_PLUGINS, UPLOADER_PLUGINS, PROCESSOR_PLUGINS):
+    for p_name, p_info in p_dict.items():
+        if p_name in ALL_PLUGINS:
+            ALL_PLUGINS[p_name]["actions"].extend(p_info["actions"])
+            ALL_PLUGINS[p_name]["actions"] = list(set(ALL_PLUGINS[p_name]["actions"]))
+        else:
+            ALL_PLUGINS[p_name] = p_info.copy()
 
 
 @dataclass
@@ -281,103 +288,103 @@ def _create_builtin_pipelines() -> None:
         # Direct
         (
             "gdrive",
-            "Direct → GDrive",
+            "Direct  GDrive",
             [
-                {"plugin": "direct", "action": "download"},
-                {"plugin": "gdrive", "action": "upload"},
+                {"plugin": "downloader.direct", "action": "download"},
+                {"plugin": "uploader.gdrive", "action": "upload"},
             ],
         ),
         (
             "telegram",
-            "Direct → Telegram",
+            "Direct  Telegram",
             [
-                {"plugin": "direct", "action": "download"},
-                {"plugin": "telegram", "action": "upload"},
+                {"plugin": "downloader.direct", "action": "download"},
+                {"plugin": "uploader.telegram", "action": "upload"},
             ],
         ),
         # qBit
         (
             "qb_mirror",
-            "qBit → GDrive",
+            "qBit  GDrive",
             [
-                {"plugin": "qbit", "action": "download"},
-                {"plugin": "gdrive", "action": "upload"},
+                {"plugin": "downloader.qbit", "action": "download"},
+                {"plugin": "uploader.gdrive", "action": "upload"},
             ],
         ),
         (
             "qb_leech",
-            "qBit → Telegram",
+            "qBit  Telegram",
             [
-                {"plugin": "qbit", "action": "download"},
-                {"plugin": "telegram", "action": "upload"},
+                {"plugin": "downloader.qbit", "action": "download"},
+                {"plugin": "uploader.telegram", "action": "upload"},
             ],
         ),
         # JD
         (
             "jd_mirror",
-            "JD → GDrive",
+            "JD  GDrive",
             [
-                {"plugin": "jd", "action": "download"},
-                {"plugin": "gdrive", "action": "upload"},
+                {"plugin": "downloader.jd", "action": "download"},
+                {"plugin": "uploader.gdrive", "action": "upload"},
             ],
         ),
         (
             "jd_leech",
-            "JD → Telegram",
+            "JD  Telegram",
             [
-                {"plugin": "jd", "action": "download"},
-                {"plugin": "telegram", "action": "upload"},
+                {"plugin": "downloader.jd", "action": "download"},
+                {"plugin": "uploader.telegram", "action": "upload"},
             ],
         ),
         # NZB
         (
             "nzb_mirror",
-            "NZB → GDrive",
+            "NZB  GDrive",
             [
-                {"plugin": "nzb", "action": "download"},
-                {"plugin": "gdrive", "action": "upload"},
+                {"plugin": "downloader.nzb", "action": "download"},
+                {"plugin": "uploader.gdrive", "action": "upload"},
             ],
         ),
         (
             "nzb_leech",
-            "NZB → Telegram",
+            "NZB  Telegram",
             [
-                {"plugin": "nzb", "action": "download"},
-                {"plugin": "telegram", "action": "upload"},
+                {"plugin": "downloader.nzb", "action": "download"},
+                {"plugin": "uploader.telegram", "action": "upload"},
             ],
         ),
         # YT-DLP
         (
             "yt_gdrive",
-            "YT-DLP → GDrive",
+            "YT-DLP  GDrive",
             [
-                {"plugin": "yt_dlp", "action": "download"},
-                {"plugin": "gdrive", "action": "upload"},
+                {"plugin": "downloader.yt_dlp", "action": "download"},
+                {"plugin": "uploader.gdrive", "action": "upload"},
             ],
         ),
         (
             "yt_telegram",
-            "YT-DLP → Telegram",
+            "YT-DLP  Telegram",
             [
-                {"plugin": "yt_dlp", "action": "download"},
-                {"plugin": "telegram", "action": "upload"},
+                {"plugin": "downloader.yt_dlp", "action": "download"},
+                {"plugin": "uploader.telegram", "action": "upload"},
             ],
         ),
         # Mega
         (
             "mega_mirror",
-            "Mega → GDrive",
+            "Mega  GDrive",
             [
-                {"plugin": "mega", "action": "download"},
-                {"plugin": "gdrive", "action": "upload"},
+                {"plugin": "downloader.mega", "action": "download"},
+                {"plugin": "uploader.gdrive", "action": "upload"},
             ],
         ),
         (
             "mega_leech",
-            "Mega → Telegram",
+            "Mega  Telegram",
             [
-                {"plugin": "mega", "action": "download"},
-                {"plugin": "telegram", "action": "upload"},
+                {"plugin": "downloader.mega", "action": "download"},
+                {"plugin": "uploader.telegram", "action": "upload"},
             ],
         ),
         # Clone
@@ -385,25 +392,25 @@ def _create_builtin_pipelines() -> None:
             "gdrive_clone",
             "GDrive Clone",
             [
-                {"plugin": "gdrive", "action": "download"},
-                {"plugin": "gdrive", "action": "upload"},
+                {"plugin": "downloader.gdrive", "action": "download"},
+                {"plugin": "uploader.gdrive", "action": "upload"},
             ],
         ),
         # Legacy mappings (keeping for compatibility if any code uses them)
         (
             "download_upload",
-            "Download → Upload",
+            "Download  Upload",
             [
-                {"plugin": "direct", "action": "download"},
-                {"plugin": "gdrive", "action": "upload"},
+                {"plugin": "downloader.direct", "action": "download"},
+                {"plugin": "uploader.gdrive", "action": "upload"},
             ],
         ),
         (
             "torrent_gdrive",
-            "Torrent → GDrive",
+            "Torrent  GDrive",
             [
-                {"plugin": "qbit", "action": "download"},
-                {"plugin": "gdrive", "action": "upload"},
+                {"plugin": "downloader.qbit", "action": "download"},
+                {"plugin": "uploader.gdrive", "action": "upload"},
             ],
         ),
     ]

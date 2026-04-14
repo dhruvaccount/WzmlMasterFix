@@ -22,10 +22,11 @@ async def test_full_flow():
 
     # Create custom pipeline
     pipeline = create_pipeline(
+        pipeline_id="integration_test",
         name="Integration Test Pipeline",
         stages=[
-            {"plugin": "direct", "action": "download"},
-            {"plugin": "gdrive", "action": "upload"},
+            {"plugin": "downloader.direct", "action": "download"},
+            {"plugin": "uploader.gdrive", "action": "upload"},
         ],
         custom=True,
     )

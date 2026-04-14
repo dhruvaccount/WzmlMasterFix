@@ -99,10 +99,10 @@ class WZMLApp:
             logger.warning("DATABASE_URL not set - using in-memory storage")
 
     async def load_plugins(self):
-        from plugins import get_available_plugins
+        from plugins.loader import load_all_plugins
 
-        plugins = get_available_plugins()
-        logger.info(f"Loaded {len(plugins)} plugins")
+        loaded = load_all_plugins()
+        logger.info(f"Loaded {loaded} plugins dynamically")
 
     async def start_workers(self):
         from core.worker import WorkerPool

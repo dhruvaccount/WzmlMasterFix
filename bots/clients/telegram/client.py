@@ -222,18 +222,13 @@ class TelegramClient(ClientAdapter):
                 logger.warning(f"Command {command} not in handlers")
 
     async def send_message(
-        self,
-        chat_id: int,
-        text: str,
-        reply_markup: Any = None,
+        self, chat_id: int, text: str, reply_markup: Any = None, **kwargs
     ) -> Optional[types.Message]:
         if not self._bot:
             return None
         try:
             return await self._bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                reply_markup=reply_markup,
+                chat_id=chat_id, text=text, reply_markup=reply_markup, **kwargs
             )
         except Exception as e:
             logger.error(f"Send message error: {e}")
@@ -263,6 +258,7 @@ class TelegramClient(ClientAdapter):
         message_id: int,
         text: str,
         reply_markup: Any = None,
+        **kwargs,
     ) -> Optional[types.Message]:
         if not self._bot:
             return None
@@ -272,6 +268,7 @@ class TelegramClient(ClientAdapter):
                 message_id=message_id,
                 text=text,
                 reply_markup=reply_markup,
+                **kwargs,
             )
         except Exception as e:
             logger.error(f"Edit message error: {e}")
