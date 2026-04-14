@@ -34,7 +34,7 @@ class WZMLApp:
         self.bot = None
         self._running = False
 
-    async def start(self):
+async def start(self):
         logger.info("=" * 50)
         logger.info("WZML-X Starting...")
         logger.info("=" * 50)
@@ -52,25 +52,28 @@ class WZMLApp:
             await self.start_workers()
             logger.info("[OK] Workers started")
 
-            await self.start_api()
-            logger.info("[OK] API server started")
-
             await self.start_bot()
             logger.info("[OK] Telegram bot started")
+
+            await self.start_api()
+            logger.info("[OK] API server started")
 
             self._running = True
 
             logger.info("=" * 50)
             logger.info("WZML-X Started Successfully!")
             logger.info("=" * 50)
-            logger.info(f"API: http://{self.config.telegram.BASE_URL or 'localhost:8080'}")
-            logger.info(f"Bot: @{self.config.telegram.BOT_USERNAME or 'Telegram bot'}")
+
+            bot_username = getattr(self, '_bot_username', None) or 'Telegram bot'
+            logger.info(f"API: http://{self.config.limits.API_HOST or 'localhost'}:{self.config.limits.API_PORT or 8080}")
+            logger.info(f"Bot: @{bot_username}")
 
             return True
 
         except Exception as e:
             logger.error(f"Failed to start: {e}")
             import traceback
+
             traceback.print_exc()
             return False
 
@@ -78,17 +81,15 @@ class WZMLApp:
         from config import get_config
 
         self.config = get_config()
-        self.config.load_all()
-
         if not self.config.telegram.BOT_TOKEN:
             logger.warning("BOT_TOKEN not configured - bot will not start")
 
     async def connect_database(self):
         if self.config.database.DATABASE_URL:
             try:
-                from db.mongodb import connect_db
+                from db.mongodb import init_mongodb
 
-                await connect_db(self.config.database.DATABASE_URL)
+                await init_mongodb()
                 logger.info("MongoDB connected")
             except Exception as e:
                 logger.warning(f"MongoDB not available: {e}")
@@ -106,7 +107,9 @@ class WZMLApp:
 
         self.workers = WorkerPool(max_workers=self.config.limits.MAX_WORKERS or 4)
         await self.workers.start()
-        logger.info(f"Worker pool started with {self.config.limits.MAX_WORKERS or 4} workers")
+        logger.info(
+            f"Worker pool started with {self.config.limits.MAX_WORKERS or 4} workers"
+        )
 
     async def start_api(self):
         import uvicorn
@@ -119,9 +122,11 @@ class WZMLApp:
             log_level="info",
         )
         self.api_server = uvicorn.Server(config)
-        
+
         asyncio.create_task(self.api_server.serve())
-        logger.info(f"API server starting on {self.config.limits.API_HOST or '0.0.0.0'}:{self.config.limits.API_PORT or 8080}")
+        logger.info(
+            f"API server starting on {self.config.limits.API_HOST or '0.0.0.0'}:{self.config.limits.API_PORT or 8080}"
+        )
 
     async def start_bot(self):
         if not self.config.telegram.BOT_TOKEN:
@@ -129,11 +134,17 @@ class WZMLApp:
             return
 
         try:
-            from bots.telegram.client import BotClient
+            from bots.clients.telegram.client import TelegramClient
 
-            self.bot = BotClient(self.config.telegram.BOT_TOKEN)
+            self.bot = TelegramClient(self.config.telegram.BOT_TOKEN)
             await self.bot.start(self.config.telegram.BOT_TOKEN)
-            logger.info("Telegram bot started")
+
+            if self.bot._bot:
+                me = self.bot._bot.get_me()
+                self._bot_username = me.username
+                logger.info(f"Bot started: @{self._bot_username}")
+            else:
+                logger.info("Telegram bot started")
         except Exception as e:
             logger.error(f"Failed to start bot: {e}")
 
@@ -188,5 +199,6 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Fatal error: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
