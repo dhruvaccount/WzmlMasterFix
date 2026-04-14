@@ -54,6 +54,10 @@ class TelegramClient(ClientAdapter):
         )
         await self._bot.start()
 
+        from bots.clients.telegram.helpers.message_utils import set_telegram_client
+
+        set_telegram_client(self._bot)
+
         me = await self._bot.get_me()
         logger.info(f"Bot started: @{me.username}")
 

@@ -24,10 +24,14 @@ class JDownloaderDownloader(DownloaderPlugin):
         self._gid = None
 
     async def initialize(
-        self, email: str, password: str, device_id: str = None
+        self, email: str = None, password: str = None, device_id: str = None
     ) -> bool:
         try:
             from myjd import MyJDownloader
+
+            if not email or not password:
+                logger.warning("JD credentials not provided, skipping initialization.")
+                return False
 
             myjd = MyJDownloader(email, password)
             if await myjd.connect():

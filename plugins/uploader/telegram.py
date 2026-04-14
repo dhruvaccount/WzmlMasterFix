@@ -25,20 +25,33 @@ class TelegramUploader(UploaderPlugin):
 
     async def initialize(self, bot_token: str = None) -> bool:
         try:
-            if bot_token:
-                from config import get_config
+            from bots.clients.telegram.helpers.message_utils import get_telegram_client
 
-                cfg = get_config()
+            # Use global client if already running
+            global_client = get_telegram_client()
+            if global_client:
+                self._bot = global_client
+                me = await self._bot.get_me()
+                logger.info(f"Telegram uploader using global client: @{me.username}")
+                return True
 
+            from config import get_config
+
+            cfg = get_config()
+            token = bot_token or cfg.telegram.BOT_TOKEN
+
+            if token:
                 self._bot = Client(
                     name="wzml_uploader",
                     api_id=cfg.telegram.API,
                     api_hash=cfg.telegram.HASH,
-                    bot_token=bot_token,
+                    bot_token=token,
                 )
                 await self._bot.start()
                 me = await self._bot.get_me()
-                logger.info(f"Telegram uploader initialized: @{me.username}")
+                logger.info(
+                    f"Telegram uploader initialized local client: @{me.username}"
+                )
                 return True
             else:
                 logger.warning("No bot token provided")

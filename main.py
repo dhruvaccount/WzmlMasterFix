@@ -46,14 +46,14 @@ class WZMLApp:
             await self.connect_database()
             logger.info("[OK] Database connected")
 
+            await self.start_bot()
+            logger.info("[OK] Telegram bot started")
+
             await self.load_plugins()
-            logger.info("[OK] Plugins loaded")
+            logger.info("[OK] Plugins loaded & initialized")
 
             await self.start_workers()
             logger.info("[OK] Workers started")
-
-            await self.start_bot()
-            logger.info("[OK] Telegram bot started")
 
             await self.start_api()
             logger.info("[OK] API server started")
@@ -100,9 +100,28 @@ class WZMLApp:
 
     async def load_plugins(self):
         from plugins.loader import load_all_plugins
+        from core.registry import get_registry
 
         loaded = load_all_plugins()
         logger.info(f"Loaded {loaded} plugins dynamically")
+
+        registry = get_registry()
+        initialized_count = 0
+        for name in registry.list_plugins():
+            try:
+                plugin = registry.get_plugin(name)
+                if hasattr(plugin, "initialize"):
+                    success = await plugin.initialize()
+                    if success:
+                        initialized_count += 1
+                    else:
+                        logger.warning(
+                            f"Plugin {name} initialization returned False or failed"
+                        )
+            except Exception as e:
+                logger.error(f"Error initializing plugin {name}: {e}")
+
+        logger.info(f"Successfully initialized {initialized_count} plugins")
 
     async def start_workers(self):
         from core.worker import WorkerPool

@@ -23,7 +23,9 @@ class Aria2Downloader(DownloaderPlugin):
         self._client = None
         self._gid = None
 
-    async def initialize(self, rpc_url: str, secret: str = None) -> bool:
+    async def initialize(
+        self, rpc_url: str = "http://localhost:6800/rpc", secret: str = None
+    ) -> bool:
         try:
             from aria2p import API, Secret
 

@@ -19,9 +19,13 @@ class TelegramDownloader(DownloaderPlugin):
     async def initialize(self, bot_token: str = None) -> bool:
         try:
             from telegram import Bot
+            from config import get_config
 
-            if bot_token:
-                self._bot = Bot(token=bot_token)
+            cfg = get_config()
+            token = bot_token or cfg.telegram.BOT_TOKEN
+
+            if token:
+                self._bot = Bot(token=token)
                 logger.info("Telegram downloader initialized")
                 return True
             else:
