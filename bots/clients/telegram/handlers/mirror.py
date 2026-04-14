@@ -3,6 +3,7 @@
 import logging
 from typing import Optional, Any
 from dataclasses import dataclass
+from pyrogram import enums
 
 from core.task import Task, TaskStatus, create_task, get_tasks, cancel_task
 from core.queue import enqueue_task, get_queue_manager
@@ -84,7 +85,9 @@ class MirrorHandler(BotHandler):
         link = args.get("link", "").strip()
 
         if not link:
-            await client.send_message(context.chat_id, MIRROR_USAGE, parse_mode="html")
+            await client.send_message(
+                context.chat_id, MIRROR_USAGE, parse_mode=enums.ParseMode.HTML
+            )
             return MirrorResult()
 
         if is_qbit:
@@ -127,7 +130,9 @@ class MirrorHandler(BotHandler):
         msg += f"Mode: {'Leech' if is_leech else 'Mirror'}\n"
         msg += f"Source: {link[:100]}"
 
-        await client.send_message(context.chat_id, msg, reply_markup, parse_mode="html")
+        await client.send_message(
+            context.chat_id, msg, reply_markup, parse_mode=enums.ParseMode.HTML
+        )
 
         return MirrorResult(task=task, message=msg)
 
@@ -145,7 +150,9 @@ class YtdlpHandler(BotHandler):
         link = args.get("link", "").strip()
 
         if not link:
-            await client.send_message(context.chat_id, YTDLP_USAGE, parse_mode="html")
+            await client.send_message(
+                context.chat_id, YTDLP_USAGE, parse_mode=enums.ParseMode.HTML
+            )
             return MirrorResult()
 
         pipeline_id = "yt_telegram" if is_leech else "yt_gdrive"
@@ -175,7 +182,9 @@ class YtdlpHandler(BotHandler):
         msg += f"ID: <code>{task.id[:20]}</code>\n"
         msg += f"Quality: {quality}"
 
-        await client.send_message(context.chat_id, msg, reply_markup, parse_mode="html")
+        await client.send_message(
+            context.chat_id, msg, reply_markup, parse_mode=enums.ParseMode.HTML
+        )
 
         return MirrorResult(task=task, message=msg)
 
@@ -192,14 +201,16 @@ class CloneHandler(BotHandler):
         link = args.get("link", "").strip()
 
         if not link:
-            await client.send_message(context.chat_id, CLONE_USAGE, parse_mode="html")
+            await client.send_message(
+                context.chat_id, CLONE_USAGE, parse_mode=enums.ParseMode.HTML
+            )
             return MirrorResult()
 
         if "drive.google.com" not in link and "docs.google.com" not in link:
             await client.send_message(
                 context.chat_id,
                 "<b>Invalid GDrive Link!</b>\n\nSend a valid Google Drive link.",
-                parse_mode="html",
+                parse_mode=enums.ParseMode.HTML,
             )
             return MirrorResult()
 
@@ -225,7 +236,9 @@ class CloneHandler(BotHandler):
         msg += f"ID: <code>{task.id[:20]}</code>\n"
         msg += f"Source: {link[:100]}"
 
-        await client.send_message(context.chat_id, msg, reply_markup, parse_mode="html")
+        await client.send_message(
+            context.chat_id, msg, reply_markup, parse_mode=enums.ParseMode.HTML
+        )
 
         return MirrorResult(task=task, message=msg)
 
@@ -253,7 +266,7 @@ class CancelHandler(BotHandler):
                         await client.send_message(
                             context.chat_id,
                             f"<b>Task Cancelled</b>\n\nID: <code>{task.id[:20]}</code>",
-                            parse_mode="html",
+                            parse_mode=enums.ParseMode.HTML,
                         )
                         return task
                 except Exception:
@@ -273,12 +286,14 @@ class CancelHandler(BotHandler):
             await client.send_message(
                 context.chat_id,
                 f"<b>Task Cancelled</b>\n\nID: <code>{task.id[:20]}</code>",
-                parse_mode="html",
+                parse_mode=enums.ParseMode.HTML,
             )
             return task
 
         await client.send_message(
-            context.chat_id, "<b>No Running Task Found!</b>", parse_mode="html"
+            context.chat_id,
+            "<b>No Running Task Found!</b>",
+            parse_mode=enums.ParseMode.HTML,
         )
         return None
 
@@ -301,7 +316,9 @@ class CancelAllHandler(BotHandler):
             count += 1
 
         await client.send_message(
-            context.chat_id, f"<b>{count} Tasks Cancelled!</b>", parse_mode="html"
+            context.chat_id,
+            f"<b>{count} Tasks Cancelled!</b>",
+            parse_mode=enums.ParseMode.HTML,
         )
         return count
 

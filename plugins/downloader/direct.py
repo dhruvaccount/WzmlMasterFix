@@ -3,6 +3,7 @@ import logging
 import os
 import hashlib
 import mimetypes
+import time
 from typing import Any, Optional
 from urllib.parse import urlparse, parse_qs
 from urllib.request import urlopen, Request
@@ -58,7 +59,6 @@ class DirectDownloader(DownloaderPlugin):
                 os.makedirs(output_path, exist_ok=True)
 
             from core.task import update_task_progress
-            import time
             import aiohttp
 
             async with aiohttp.ClientSession() as session:

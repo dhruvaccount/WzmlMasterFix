@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import time
 from typing import Any, Optional
 
 from plugins.base import DownloaderPlugin, PluginContext, PluginResult
@@ -52,7 +53,6 @@ class YTDLPDownloader(DownloaderPlugin):
 
         try:
             import yt_dlp
-            import time
             from core.task import update_task_progress
 
             loop = asyncio.get_running_loop()

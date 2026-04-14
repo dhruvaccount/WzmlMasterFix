@@ -3,6 +3,7 @@
 import logging
 import subprocess
 import os
+import time
 from datetime import datetime
 from typing import Any
 
@@ -25,8 +26,6 @@ class PingHandler(BotHandler):
         context: CommandContext,
         client: Any,
     ) -> float:
-        import time
-
         start = time.time()
         msg = await client.send_message(context.chat_id, "Pong!")
         latency = (time.time() - start) * 1000

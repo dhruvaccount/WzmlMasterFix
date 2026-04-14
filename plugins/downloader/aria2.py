@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-import base64
+import time
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -80,7 +80,6 @@ class Aria2Downloader(DownloaderPlugin):
                 self._gid = self._gid[0].gid
 
             from core.task import update_task_progress, get_task
-            import time
 
             start_time = time.time()
             last_update = start_time

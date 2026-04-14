@@ -4,6 +4,7 @@ import logging
 import time
 import psutil
 from typing import Optional, Any
+from pyrogram import enums
 
 from core.task import get_tasks, TaskStatus, Task
 from core.queue import get_queue_stats
@@ -84,7 +85,10 @@ class StatusHandler(BotHandler):
         buttons.data_button("🔄 Refresh", "status_refresh", position="header")
 
         await client.send_message(
-            context.chat_id, msg, reply_markup=buttons.build_menu(2), parse_mode="html"
+            context.chat_id,
+            msg,
+            reply_markup=buttons.build_menu(2),
+            parse_mode=enums.ParseMode.HTML,
         )
         return "Status sent"
 

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import time
 from typing import Any, Optional
 
 from plugins.base import DownloaderPlugin, PluginContext, PluginResult
@@ -91,7 +92,6 @@ class QBitDownloader(DownloaderPlugin):
             await self._client.torrents.add(form.build())
 
             from core.task import update_task_progress, get_task
-            import time
 
             start_time = time.time()
             last_update = start_time

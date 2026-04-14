@@ -169,7 +169,12 @@ def arg_parser(text: str) -> dict:
         "list": [],
     }
 
-    i = 0
+    if not args:
+        return result
+
+    # Skip the command itself (e.g. /leech)
+    i = 1 if args[0].startswith("/") else 0
+
     while i < len(args):
         arg = args[i]
         if arg.startswith("-"):

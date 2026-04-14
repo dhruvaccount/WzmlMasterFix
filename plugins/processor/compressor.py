@@ -1,8 +1,7 @@
 import asyncio
 import logging
 import os
-import zipfile
-import tarfile
+import time
 from typing import Any, Optional
 
 from plugins.base import ProcessorPlugin, PluginContext, PluginResult
@@ -39,7 +38,6 @@ class CompressorProcessor(ProcessorPlugin):
                 output_path = source + f".{method}"
 
             from core.task import update_task_progress
-            import time
 
             start_time = time.time()
             last_update = start_time

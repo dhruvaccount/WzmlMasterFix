@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import time
 from typing import Any, Optional
 
 try:
@@ -60,8 +61,6 @@ class TelegramUploader(UploaderPlugin):
 
         try:
             from core.task import update_task_progress
-            import time
-            import os
 
             file_name = os.path.basename(file_path)
             file_ext = os.path.splitext(file_path)[1].lower()
