@@ -32,18 +32,20 @@ class TelegramClient(ClientAdapter):
         self._rss_feeds = {}
         self._gdrive_search_results = {}
 
-    async def start(self, bot_token: str = None) -> bool:
+async def start(self, bot_token: str = None) -> bool:
         token = bot_token or self.bot_token
         if not token:
             raise ValueError("No bot token")
 
         from config import get_config
+        from config import ALL_CONFIGS
 
         cfg = get_config()
-
-        logger.info(
-            f"DEBUG: API={cfg.telegram.API}, HASH={cfg.telegram.HASH[:10] if cfg.telegram.HASH else 'empty'}"
-        )
+        
+        logger.info(f"DEBUG: ALL_CONFIGS keys: {list(ALL_CONFIGS.keys())}")
+        logger.info(f"DEBUG: telegram cfg object: {cfg.telegram}")
+        logger.info(f"DEBUG: telegram __dict__: {cfg.telegram.__dict__}")
+        logger.info(f"DEBUG: API={cfg.telegram.API}, HASH={cfg.telegram.HASH}")
 
         self._bot = pyrogram.Client(
             name="wzml_bot",
