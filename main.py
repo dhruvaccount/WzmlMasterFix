@@ -142,7 +142,7 @@ class WZMLApp:
             await self.bot.start(self.config.telegram.BOT_TOKEN)
 
             if self.bot._bot:
-                me = self.bot._bot.get_me()
+                me = await self.bot._bot.get_me()
                 self._bot_username = me.username
                 logger.info(f"Bot started: @{self._bot_username}")
             else:

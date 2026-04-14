@@ -42,10 +42,9 @@ class TelegramClient(ClientAdapter):
 
         cfg = get_config()
 
-        logger.info(f"DEBUG: ALL_CONFIGS keys: {list(ALL_CONFIGS.keys())}")
-        logger.info(f"DEBUG: telegram cfg object: {cfg.telegram}")
-        logger.info(f"DEBUG: telegram __dict__: {cfg.telegram.__dict__}")
-        logger.info(f"DEBUG: API={cfg.telegram.API}, HASH={cfg.telegram.HASH}")
+        logger.info(
+            f"Connecting to Telegram with API={cfg.telegram.API}, HASH={cfg.telegram.HASH[:10]}..."
+        )
 
         self._bot = pyrogram.Client(
             name="wzml_bot",
@@ -55,7 +54,7 @@ class TelegramClient(ClientAdapter):
         )
         await self._bot.start()
 
-        me = self._bot.get_me()
+        me = await self._bot.get_me()
         logger.info(f"Bot started: @{me.username}")
 
         self._register_handlers()

@@ -36,7 +36,7 @@ class TelegramUploader(UploaderPlugin):
                     bot_token=bot_token,
                 )
                 await self._bot.start()
-                me = self._bot.get_me()
+                me = await self._bot.get_me()
                 logger.info(f"Telegram uploader initialized: @{me.username}")
                 return True
             else:
