@@ -1,8 +1,12 @@
 import asyncio
 import logging
 import os
+import json
 import base64
 import time
+import random
+import shutil
+import re
 from typing import Any, Optional
 from secrets import token_hex
 
@@ -11,6 +15,21 @@ from core.exceptions import PluginExecutionError
 
 logger = logging.getLogger("wzml.jd_downloader")
 
+async def cmd_exec(cmd, shell=False):
+    if shell:
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    else:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    stdout, stderr = await proc.communicate()
+    return stdout.decode().strip(), stderr.decode().strip(), proc.returncode
 
 class JDownloaderDownloader(DownloaderPlugin):
     name = "jd"
@@ -22,21 +41,104 @@ class JDownloaderDownloader(DownloaderPlugin):
         self._connected = False
         self._package_ids = []
         self._gid = None
+        self._jd_task = None
+        self._device_name = ""
+
+    async def _write_config(self, filepath, data):
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+    async def _boot_daemon(self, email: str, password: str):
+        await cmd_exec(["pkill", "-9", "-f", "java"])
+        
+        self._device_name = f"{random.randint(0, 1000)}@WZML-X"
+        logger.info(f"Starting JDownloader... Device: {self._device_name}")
+        
+        jdata = {
+            "autoconnectenabledv2": True,
+            "password": password,
+            "devicename": self._device_name,
+            "email": email,
+        }
+        
+        remote_data = {
+            "localapiserverheaderaccesscontrollalloworigin": "",
+            "deprecatedapiport": 3128,
+            "localapiserverheaderxcontenttypeoptions": "nosniff",
+            "localapiserverheaderxframeoptions": "DENY",
+            "externinterfaceenabled": True,
+            "deprecatedapilocalhostonly": True,
+            "localapiserverheaderreferrerpolicy": "no-referrer",
+            "deprecatedapienabled": True,
+            "localapiserverheadercontentsecuritypolicy": "default-src 'self'",
+            "jdanywhereapienabled": True,
+            "externinterfacelocalhostonly": False,
+            "localapiserverheaderxxssprotection": "1; mode=block",
+        }
+        
+        await self._write_config("/JDownloader/cfg/org.jdownloader.api.myjdownloader.MyJDownloaderSettings.json", jdata)
+        await self._write_config("/JDownloader/cfg/org.jdownloader.api.RemoteAPIConfig.json", remote_data)
+        
+        if not os.path.exists("/JDownloader/JDownloader.jar"):
+            pattern = re.compile(r"JDownloader\.jar\.backup\.\d$")
+            try:
+                for filename in os.listdir("/JDownloader"):
+                    if pattern.match(filename):
+                        os.rename(f"/JDownloader/{filename}", "/JDownloader/JDownloader.jar")
+                        break
+            except Exception:
+                pass
+            shutil.rmtree("/JDownloader/update", ignore_errors=True)
+            shutil.rmtree("/JDownloader/tmp", ignore_errors=True)
+
+        cmd = "cpulimit -l 20 -- java -Xms256m -Xmx500m -Dsun.jnu.encoding=UTF-8 -Dfile.encoding=UTF-8 -Djava.awt.headless=true -jar /JDownloader/JDownloader.jar"
+        
+        async def _runner():
+            while True:
+                _, __, code = await cmd_exec(cmd, shell=True)
+                if code == -9:
+                    break
+                await asyncio.sleep(2)
+
+        self._jd_task = asyncio.create_task(_runner())
 
     async def initialize(
         self, email: str = None, password: str = None, device_id: str = None
     ) -> bool:
         try:
-            from myjd import MyJDownloader
+            from myjd import MyJdApi
 
             if not email or not password:
                 logger.warning("JD credentials not provided, skipping initialization.")
                 return False
 
-            myjd = MyJDownloader(email, password)
-            if await myjd.connect():
-                self._device = await myjd.get_device(device_id)
-                self._device_id = device_id or myjd.device_id
+            await self._boot_daemon(email, password)
+
+            myjd = MyJdApi(email, password)
+            
+            # Wait for JD to boot and connect
+            for _ in range(15):
+                if await myjd.connect():
+                    break
+                await asyncio.sleep(2)
+            else:
+                logger.error("Failed to connect to MyJD after booting.")
+                return False
+
+            # Wait for device to be online
+            for _ in range(10):
+                devices = await myjd.list_devices()
+                device = next((d for d in devices if d.get("name") == self._device_name), None)
+                if device:
+                    device_id = device.get("id")
+                    break
+                await asyncio.sleep(2)
+
+            self._device = await myjd.get_device(device_id) if device_id else None
+            
+            if self._device:
+                self._device_id = device_id
                 self._connected = True
                 logger.info(f"JDownloader initialized: {self._device_id}")
                 return True

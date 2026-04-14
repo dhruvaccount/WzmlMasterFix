@@ -2,8 +2,11 @@ import asyncio
 import logging
 import os
 import time
+import base64
 from typing import Any, Optional
 from urllib.parse import urlparse
+
+from aioaria2 import Aria2WebsocketClient
 
 from plugins.base import DownloaderPlugin, PluginContext, PluginResult
 from core.exceptions import PluginExecutionError
@@ -20,18 +23,14 @@ class Aria2Downloader(DownloaderPlugin):
     def __init__(self):
         self._rpc_url = None
         self._secret = None
-        self._client = None
+        self._client: Optional[Aria2WebsocketClient] = None
         self._gid = None
 
     async def initialize(
-        self, rpc_url: str = "http://localhost:6800/rpc", secret: str = None
+        self, rpc_url: str = "http://localhost:6800/jsonrpc", secret: str = None
     ) -> bool:
         try:
-            from aria2p import API, Secret
-
-            if secret:
-                secret = Secret(secret)
-            self._client = API(rpc_url=rpc_url, secret=secret)
+            self._client = await Aria2WebsocketClient.new(rpc_url, token=secret if secret else None)
             self._rpc_url = rpc_url
             self._secret = secret
             logger.info(f"Aria2 initialized: {rpc_url}")
@@ -63,23 +62,9 @@ class Aria2Downloader(DownloaderPlugin):
                 with open(url, "rb") as tf:
                     torrent_data = tf.read()
                 encoded = base64.b64encode(torrent_data).decode()
-                self._gid = await asyncio.to_thread(
-                    self._client.add_torrent, encoded, options=a2c_opt
-                )
+                self._gid = await self._client.addTorrent(encoded, [], a2c_opt)
             else:
-                self._gid = await asyncio.to_thread(
-                    self._client.add_uri, [url], options=a2c_opt
-                )
-
-            # Since aria2p's client methods are mostly synchronous over requests, we use to_thread to avoid blocking
-            if hasattr(self._gid, "gid"):
-                self._gid = self._gid.gid
-            elif (
-                isinstance(self._gid, list)
-                and len(self._gid) > 0
-                and hasattr(self._gid[0], "gid")
-            ):
-                self._gid = self._gid[0].gid
+                self._gid = await self._client.addUri([url], a2c_opt)
 
             from core.task import update_task_progress, get_task
 
@@ -87,32 +72,28 @@ class Aria2Downloader(DownloaderPlugin):
             last_update = start_time
 
             while True:
-                # Check cancellation
                 t = await get_task(context.task_id)
                 if t and t.status.value == "cancelled":
-                    await asyncio.to_thread(self._client.remove, [self._gid])
+                    await self._client.forceRemove(self._gid)
                     return PluginResult(success=False, error="Task cancelled by user")
 
-                download = await asyncio.to_thread(self._client.get_download, self._gid)
+                download = await self._client.tellStatus(self._gid)
+                status = download.get("status")
 
-                if download.status == "complete":
+                if status == "complete":
                     break
-                elif download.status == "error":
-                    return PluginResult(
-                        success=False,
-                        error=download.error_message or "Aria2 download error",
-                    )
-                elif download.status == "removed":
+                elif status == "error":
+                    error_msg = download.get("errorMessage", "Aria2 download error")
+                    return PluginResult(success=False, error=error_msg)
+                elif status == "removed":
                     return PluginResult(success=False, error="Task cancelled by user")
 
                 now = time.time()
                 if now - last_update > 1.0:
-                    speed = download.download_speed
-                    downloaded = download.completed_length
-                    total = download.total_length
-                    eta = (
-                        int((total - downloaded) / speed) if speed > 0 and total else 0
-                    )
+                    speed = int(download.get("downloadSpeed", 0))
+                    downloaded = int(download.get("completedLength", 0))
+                    total = int(download.get("totalLength", 0))
+                    eta = int((total - downloaded) / speed) if speed > 0 and total else 0
                     pct = (downloaded / total) * 100 if total else 0.0
 
                     await update_task_progress(
@@ -129,25 +110,25 @@ class Aria2Downloader(DownloaderPlugin):
 
                 await asyncio.sleep(1)
 
-            download = await asyncio.to_thread(self._client.get_download, self._gid)
+            download = await self._client.tellStatus(self._gid)
+            name = download.get("bittorrent", {}).get("info", {}).get("name")
+            if not name:
+                files = download.get("files", [])
+                if files and files[0].get("path"):
+                    name = os.path.basename(files[0]["path"])
 
             result = {
                 "gid": self._gid,
-                "name": download.name,
-                "total_length": download.total_length,
-                "completed_length": download.completed_length,
-                "download_speed": download.download_speed,
-                "upload_speed": download.upload_speed,
-                "progress": download.progress,
-                "status": download.status,
-                "files": [f.path for f in download.files],
+                "name": name,
+                "total_length": int(download.get("totalLength", 0)),
+                "completed_length": int(download.get("completedLength", 0)),
+                "download_speed": int(download.get("downloadSpeed", 0)),
+                "upload_speed": int(download.get("uploadSpeed", 0)),
+                "status": download.get("status"),
+                "files": [f.get("path") for f in download.get("files", [])],
             }
 
-            output_file = (
-                os.path.join(output_path, download.name)
-                if download.name
-                else output_path
-            )
+            output_file = os.path.join(output_path, name) if name else output_path
 
             return PluginResult(
                 success=True,
@@ -166,17 +147,27 @@ class Aria2Downloader(DownloaderPlugin):
             return {}
 
         try:
-            download = await self._client.get_download(gid)
+            download = await self._client.tellStatus(gid)
+            name = download.get("bittorrent", {}).get("info", {}).get("name")
+            if not name:
+                files = download.get("files", [])
+                if files and files[0].get("path"):
+                    name = os.path.basename(files[0]["path"])
+                    
+            total = int(download.get("totalLength", 0))
+            completed = int(download.get("completedLength", 0))
+            progress = (completed / total * 100) if total else 0.0
+
             return {
                 "gid": gid,
-                "name": download.name,
-                "total_length": download.total_length,
-                "completed_length": download.completed_length,
-                "download_speed": download.download_speed,
-                "progress": download.progress,
-                "status": download.status,
-                "error_code": download.error_code,
-                "error_message": download.error_message,
+                "name": name,
+                "total_length": total,
+                "completed_length": completed,
+                "download_speed": int(download.get("downloadSpeed", 0)),
+                "progress": progress,
+                "status": download.get("status"),
+                "error_code": download.get("errorCode"),
+                "error_message": download.get("errorMessage"),
             }
         except Exception as e:
             logger.error(f"Aria2 status error: {e}")
@@ -188,7 +179,7 @@ class Aria2Downloader(DownloaderPlugin):
         if not gid:
             return False
         try:
-            await self._client.pause(gid)
+            await self._client.forcePause(gid)
             return True
         except Exception as e:
             logger.error(f"Aria2 pause error: {e}")
@@ -212,7 +203,7 @@ class Aria2Downloader(DownloaderPlugin):
         if not gid:
             return False
         try:
-            await self._client.remove([gid])
+            await self._client.forceRemove(gid)
             return True
         except Exception as e:
             logger.error(f"Aria2 cancel error: {e}")
@@ -224,7 +215,7 @@ class Aria2Downloader(DownloaderPlugin):
         if not gid:
             return False
         try:
-            await self._client.remove([gid], force=True)
+            await self._client.removeDownloadResult(gid)
             return True
         except Exception as e:
             logger.error(f"Aria2 purge error: {e}")
@@ -237,15 +228,15 @@ class Aria2Downloader(DownloaderPlugin):
             return []
 
         try:
-            download = await self._client.get_download(gid)
+            download = await self._client.tellStatus(gid)
             return [
                 {
-                    "path": f.path,
-                    "completed_length": f.completed_length,
-                    "total_length": f.total_length,
-                    "selected": f.is_selected,
+                    "path": f.get("path"),
+                    "completed_length": int(f.get("completedLength", 0)),
+                    "total_length": int(f.get("length", 0)),
+                    "selected": f.get("selected") == "true",
                 }
-                for f in download.files
+                for f in download.get("files", [])
             ]
         except Exception as e:
             logger.error(f"Aria2 files error: {e}")
@@ -253,9 +244,8 @@ class Aria2Downloader(DownloaderPlugin):
 
     async def select_files(self, gid: str, file_ids: list) -> bool:
         try:
-            await self._client.set_options({"file-allocation": "none"}, gid)
-            for fid in file_ids:
-                await self._client.change_option(f"file.fid={fid}", "enabled", "true")
+            options = {"select-file": ",".join(map(str, file_ids))}
+            await self._client.changeOption(gid, options)
             return True
         except Exception as e:
             logger.error(f"Aria2 select error: {e}")
@@ -263,13 +253,13 @@ class Aria2Downloader(DownloaderPlugin):
 
     async def get_stats(self) -> dict:
         try:
-            stats = await self._client.get_stats()
+            stats = await self._client.getGlobalStat()
             return {
-                "download_speed": stats.download_speed,
-                "upload_speed": stats.upload_speed,
-                "active": stats.num_active,
-                "waiting": stats.num_waiting,
-                "stopped": stats.num_stopped_total,
+                "download_speed": int(stats.get("downloadSpeed", 0)),
+                "upload_speed": int(stats.get("uploadSpeed", 0)),
+                "active": int(stats.get("numActive", 0)),
+                "waiting": int(stats.get("numWaiting", 0)),
+                "stopped": int(stats.get("numStopped", 0)),
             }
         except Exception as e:
             logger.error(f"Aria2 stats error: {e}")
@@ -277,13 +267,15 @@ class Aria2Downloader(DownloaderPlugin):
 
     async def list_downloads(self) -> list:
         try:
-            downloads = await self._client.get_downloads()
+            active = await self._client.tellActive()
+            waiting = await self._client.tellWaiting(0, 1000)
+            stopped = await self._client.tellStopped(0, 1000)
+            downloads = active + waiting + stopped
             return [
                 {
-                    "gid": d.gid,
-                    "name": d.name,
-                    "status": d.status,
-                    "progress": d.progress,
+                    "gid": d.get("gid"),
+                    "name": d.get("bittorrent", {}).get("info", {}).get("name") or (os.path.basename(d["files"][0]["path"]) if d.get("files") and d["files"][0].get("path") else ""),
+                    "status": d.get("status"),
                 }
                 for d in downloads
             ]

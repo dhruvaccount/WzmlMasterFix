@@ -27,19 +27,20 @@ class QBitDownloader(DownloaderPlugin):
     async def initialize(
         self,
         host: str = "localhost",
-        port: int = 8080,
+        port: int = 8090,
         username: str = None,
         password: str = None,
     ) -> bool:
         try:
-            from aioqbt import QbtAPI
+            from aioqbt.client import create_client
 
+            # qBittorrent in wzmlx is running on 8090 by default, no auth required locally unless set
+            url = f"http://{host}:{port}/api/v2/"
+            
             if username and password:
-                self._client = await QbtAPI.login(
-                    f"http://{host}:{port}/", username, password
-                )
+                self._client = await create_client(url, username=username, password=password)
             else:
-                self._client = await QbtAPI.login(f"http://{host}:{port}/")
+                self._client = await create_client(url)
 
             self._host = host
             self._port = port
@@ -63,13 +64,14 @@ class QBitDownloader(DownloaderPlugin):
         root_folder = config.get("root_folder", False)
 
         try:
-            from aioqbt import AddFormBuilder
+            from aioqbt.api import AddFormBuilder
+            import aiofiles
 
             form = AddFormBuilder.with_client(self._client)
 
             if os.path.exists(url):
-                with open(url, "rb") as f:
-                    data = f.read()
+                async with aiofiles.open(url, "rb") as f:
+                    data = await f.read()
                     form = form.include_file(data)
             else:
                 form = form.include_url(url)
@@ -78,8 +80,14 @@ class QBitDownloader(DownloaderPlugin):
 
             if category:
                 form = form.category(category)
-            if tags:
-                form = form.tags(tags)
+            # aioqbt doesn't seem to have a tags method on AddFormBuilder directly, 
+            # or it might be passed differently. Let's try .tags() as it was before, or just add tags after.
+            try:
+                if tags:
+                    form = form.tags(tags)
+            except AttributeError:
+                pass
+                
             if ratio_limit:
                 form = form.ratio_limit(ratio_limit)
             if seeding_time_limit:
@@ -99,6 +107,7 @@ class QBitDownloader(DownloaderPlugin):
             # Find the torrent hash
             await asyncio.sleep(2)  # Give qbit time to register
             torrents = await self._client.torrents.info(category=category)
+
 
             # This is a bit naive, we should ideally track by tag or savepath
             if torrents:
@@ -328,10 +337,10 @@ class QBitDownloader(DownloaderPlugin):
             prefs = await self._client.app.preferences()
             transfer = await self._client.transfer.info()
             return {
-                "dl_speed": preferences.get("dlspeed", 0),
-                "up_speed": transfer.get("up_info_functions", 0),
-                "active_torrents": preferences.get("num_active", 0),
-                "paused_torrents": preferences.get("num_paused", 0),
+                "dl_speed": prefs.get("dlspeed", 0) if isinstance(prefs, dict) else getattr(prefs, "dlspeed", 0),
+                "up_speed": transfer.up_info_speed if hasattr(transfer, "up_info_speed") else transfer.get("up_info_speed", 0),
+                "active_torrents": prefs.get("num_active", 0) if isinstance(prefs, dict) else getattr(prefs, "num_active", 0),
+                "paused_torrents": prefs.get("num_paused", 0) if isinstance(prefs, dict) else getattr(prefs, "num_paused", 0),
             }
         except Exception as e:
             logger.error(f"qBittorrent stats error: {e}")
