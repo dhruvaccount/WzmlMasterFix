@@ -25,10 +25,14 @@ class TelegramUploader(UploaderPlugin):
     async def initialize(self, bot_token: str = None) -> bool:
         try:
             if bot_token:
+                from config import get_config
+
+                cfg = get_config()
+
                 self._bot = Client(
                     name="wzml_uploader",
-                    api_id=0,
-                    api_hash="",
+                    api_id=cfg.telegram.API,
+                    api_hash=cfg.telegram.HASH,
                     bot_token=bot_token,
                 )
                 await self._bot.start()
