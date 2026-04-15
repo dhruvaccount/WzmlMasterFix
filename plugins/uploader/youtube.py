@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import time
 from typing import Any, Optional
 
 from plugins.base import UploaderPlugin, PluginContext, PluginResult
@@ -21,15 +22,13 @@ class YouTubeUploader(UploaderPlugin):
         try:
             from google.oauth2 import service_account
             from googleapiclient.discovery import build
-            from googleapiclient.http import MediaFileUpload
 
-            if credentials_path:
+            if credentials_path and os.path.exists(credentials_path):
                 self._credentials = (
                     service_account.Credentials.from_service_account_file(
                         credentials_path,
                         scopes=[
                             "https://www.googleapis.com/auth/youtube.upload",
-                            "https://www.googleapis.com/auth/youtube.force-ssl",
                         ],
                     )
                 )
@@ -37,17 +36,29 @@ class YouTubeUploader(UploaderPlugin):
                     "youtube",
                     "v3",
                     credentials=self._credentials,
-                    discoveryServiceName="youtube",
-                    discoveryApiVersion="v3",
+                    cache_discovery=False,
                 )
                 logger.info("YouTube uploader initialized")
                 return True
             else:
-                logger.warning("No credentials provided")
+                logger.warning(
+                    "No valid credentials_path provided for YouTube uploader"
+                )
                 return False
         except Exception as e:
             logger.error(f"YouTube init error: {e}")
             return False
+
+    def _get_service(self):
+        from googleapiclient.discovery import build
+
+        if self._service:
+            return self._service
+        if self._credentials:
+            return build(
+                "youtube", "v3", credentials=self._credentials, cache_discovery=False
+            )
+        raise Exception("No YouTube credentials configured")
 
     async def upload(self, context: PluginContext, config: dict) -> PluginResult:
         video_path = context.source
@@ -62,45 +73,75 @@ class YouTubeUploader(UploaderPlugin):
 
         try:
             from googleapiclient.http import MediaFileUpload
+            from core.task import update_task_progress, _task_store
+
+            service = self._get_service()
+            file_size = os.path.getsize(video_path)
 
             snippet = {
+                "categoryId": category_id,
                 "title": title,
                 "description": description,
-                "categoryId": category_id,
                 "tags": tags,
             }
 
-            if tags:
-                snippet["tags"] = tags
-
-            status = {"privacyStatus": privacy}
-
             body = {
                 "snippet": snippet,
-                "status": status,
+                "status": {"privacyStatus": privacy},
             }
 
             media = MediaFileUpload(
-                video_path, chunksize=1 * 1024 * 1024, resumable=True
+                video_path, chunksize=10 * 1024 * 1024, resumable=True
             )
 
-            request = self._service.videos().insert(
+            request = service.videos().insert(
                 part=",".join(body.keys()), body=body, media_body=media
             )
 
             response = None
+            start_time = time.time()
+            last_update = start_time
+
             while response is None:
-                status, response = request.next_chunk()
+                t = _task_store.get(context.task_id)
+                if t and t.status.value == "cancelled":
+                    raise Exception("Task cancelled by user")
+
+                status, response = await asyncio.to_thread(request.next_chunk)
                 if status:
-                    logger.info(f"Upload progress: {int(status.progress() * 100)}%")
+                    current = int(status.resumable_progress)
+                    total = int(status.total_size)
+
+                    now = time.time()
+                    if now - last_update > 1.0:
+                        speed = current / (now - start_time) if now > start_time else 0
+                        eta = (
+                            int((total - current) / speed) if speed > 0 and total else 0
+                        )
+                        pct = (current / total) * 100 if total else 0.0
+
+                        asyncio.create_task(
+                            update_task_progress(
+                                task_id=context.task_id,
+                                stage="Uploading to YouTube",
+                                plugin=self.name,
+                                progress=pct,
+                                speed=speed,
+                                eta=eta,
+                                uploaded=current,
+                                total=total,
+                            )
+                        )
+                        last_update = now
 
             video_id = response.get("id")
             video_url = f"https://youtube.com/watch?v={video_id}"
 
             result = {
-                "video_id": video_id,
-                "url": video_url,
+                "id": video_id,
                 "title": title,
+                "url": video_url,
+                "size": file_size,
             }
 
             return PluginResult(
@@ -115,116 +156,62 @@ class YouTubeUploader(UploaderPlugin):
 
     async def get_video(self, video_id: str) -> dict:
         try:
-            response = (
-                self._service.videos()
-                .list(part="snippet,statistics,contentDetails", id=video_id)
-                .execute()
+            service = self._get_service()
+            result = await asyncio.to_thread(
+                service.videos().list(part="snippet,statistics", id=video_id).execute
             )
-
-            if response.get("items"):
-                return response["items"][0]
+            items = result.get("items", [])
+            if items:
+                return items[0]
             return {}
-
         except Exception as e:
             logger.error(f"YouTube get video error: {e}")
             return {}
 
-    async def update_video(
-        self,
-        video_id: str,
-        title: str = None,
-        description: str = None,
-        tags: list = None,
-    ) -> dict:
+    async def update_video(self, video_id: str, updates: dict) -> bool:
         try:
-            snippet = {}
-            if title:
-                snippet["title"] = title
-            if description:
-                snippet["description"] = description
-            if tags:
-                snippet["tags"] = tags
+            service = self._get_service()
+            video = await self.get_video(video_id)
+            if not video:
+                return False
 
-            body = {
-                "id": video_id,
-                "snippet": snippet,
-            }
+            snippet = video.get("snippet", {})
+            if "title" in updates:
+                snippet["title"] = updates["title"]
+            if "description" in updates:
+                snippet["description"] = updates["description"]
+            if "tags" in updates:
+                snippet["tags"] = updates["tags"]
+            if "categoryId" in updates:
+                snippet["categoryId"] = updates["categoryId"]
 
-            response = (
-                self._service.videos().update(part="snippet", body=body).execute()
+            body = {"id": video_id, "snippet": snippet}
+            await asyncio.to_thread(
+                service.videos().update(part="snippet", body=body).execute
             )
-
-            return response
-
+            return True
         except Exception as e:
             logger.error(f"YouTube update error: {e}")
-            return {}
+            return False
 
     async def delete_video(self, video_id: str) -> bool:
         try:
-            self._service.videos().delete(id=video_id).execute()
+            service = self._get_service()
+            await asyncio.to_thread(service.videos().delete(id=video_id).execute)
             return True
         except Exception as e:
             logger.error(f"YouTube delete error: {e}")
             return False
 
-    async def list_videos(self, mine: bool = True) -> list:
+    async def set_thumbnail(self, video_id: str, image_path: str) -> bool:
         try:
-            response = (
-                self._service.mine()
-                .list(part="snippet,contentDetails,statistics", mine=True)
-                .execute()
+            service = self._get_service()
+            await asyncio.to_thread(
+                service.thumbnails()
+                .set(videoId=video_id, media_body=image_path)
+                .execute
             )
-
-            return response.get("items", [])
-        except Exception as e:
-            logger.error(f"YouTube list error: {e}")
-            return []
-
-    async def get_categories(self) -> list:
-        try:
-            response = (
-                self._service.videoCategories()
-                .list(part="snippet", regionCode="US")
-                .execute()
-            )
-
-            return [
-                {"id": c["id"], "title": c["snippet"]["title"]}
-                for c in response.get("items", [])
-            ]
-        except Exception as e:
-            logger.error(f"YouTube categories error: {e}")
-            return []
-
-    async def set_thumbnail(self, video_id: str, thumbnail_path: str) -> dict:
-        try:
-            from googleapiclient.http import MediaFileUpload
-
-            media = MediaFileUpload(thumbnail_path)
-
-            result = (
-                self._service.thumbnails()
-                .set(videoId=video_id, media_body=media)
-                .execute()
-            )
-
-            return result
+            return True
         except Exception as e:
             logger.error(f"YouTube thumbnail error: {e}")
-            return {}
-
-    async def get_my_channel(self) -> dict:
-        try:
-            response = (
-                self._service.channels()
-                .list(part="snippet,contentDetails,statistics", mine=True)
-                .execute()
-            )
-
-            if response.get("items"):
-                return response["items"][0]
-            return {}
-        except Exception as e:
-            logger.error(f"YouTube channel error: {e}")
-            return {}
+            return False

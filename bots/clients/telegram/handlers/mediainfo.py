@@ -74,7 +74,7 @@ class MediaInfoHandler(BotHandler):
                 if file_size > 50000000:
                     await client.edit_message(
                         context.chat_id,
-                        msg.message_id,
+                        msg.id,
                         "File too large for media info",
                     )
                     return ""
@@ -88,7 +88,7 @@ class MediaInfoHandler(BotHandler):
             if not file_path or not os.path.exists(file_path):
                 await client.edit_message(
                     context.chat_id,
-                    msg.message_id,
+                    msg.id,
                     "Failed to download file",
                 )
                 return ""
@@ -108,7 +108,7 @@ class MediaInfoHandler(BotHandler):
             if not output:
                 await client.edit_message(
                     context.chat_id,
-                    msg.message_id,
+                    msg.id,
                     "MediaInfo not available. Install mediainfo CLI.",
                 )
                 return ""
@@ -120,7 +120,7 @@ class MediaInfoHandler(BotHandler):
 
             await client.edit_message(
                 context.chat_id,
-                msg.message_id,
+                msg.id,
                 info_text,
             )
 
@@ -130,7 +130,7 @@ class MediaInfoHandler(BotHandler):
             logger.error(f"MediaInfo error: {e}")
             await client.edit_message(
                 context.chat_id,
-                msg.message_id,
+                msg.id,
                 f"Error: {str(e)}",
             )
             return ""

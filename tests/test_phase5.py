@@ -133,6 +133,7 @@ async def test_pipeline_execution():
     from core.pipeline import create_pipeline, get_pipeline
 
     pipeline = create_pipeline(
+        "integration_pipeline_id",
         name="Integration Pipeline",
         stages=[
             {"plugin": "direct", "action": "download"},
@@ -155,6 +156,7 @@ async def test_pipeline_execution():
     print(f"  [PASS] Task queued")
 
     pipeline2 = create_pipeline(
+        "multi_stage_pipeline_id",
         name="Multi-stage Pipeline",
         stages=[
             {"plugin": "direct", "action": "download"},

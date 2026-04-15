@@ -65,7 +65,7 @@ class MetadataProcessor(ProcessorPlugin):
         elif ext in [".mp3", ".ogg", ".m4a", ".wav", ".flac"]:
             info = await self._get_audio_metadata(file_path)
             metadata.update(info)
-        elif ext in [".jpg", ".jpeg", ".png", ".gif"]:
+        elif ext in [".jpg", ".jpeg", ".png", ".gif", ".webp"]:
             info = await self._get_image_metadata(file_path)
             metadata.update(info)
 
@@ -73,8 +73,6 @@ class MetadataProcessor(ProcessorPlugin):
 
     async def _get_video_metadata(self, file_path: str) -> dict:
         try:
-            import subprocess
-
             cmd = [
                 "ffprobe",
                 "-v",
@@ -85,10 +83,14 @@ class MetadataProcessor(ProcessorPlugin):
                 "-show_streams",
                 file_path,
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
 
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
+            process = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            stdout, _ = await process.communicate()
+
+            if process.returncode == 0:
+                data = json.loads(stdout.decode())
                 video_stream = next(
                     (
                         s
@@ -123,8 +125,6 @@ class MetadataProcessor(ProcessorPlugin):
 
     async def _get_audio_metadata(self, file_path: str) -> dict:
         try:
-            import subprocess
-
             cmd = [
                 "ffprobe",
                 "-v",
@@ -135,10 +135,13 @@ class MetadataProcessor(ProcessorPlugin):
                 "-show_streams",
                 file_path,
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            process = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            stdout, _ = await process.communicate()
 
-            if result.returncode == 0:
-                data = json.loads(result.stdout)
+            if process.returncode == 0:
+                data = json.loads(stdout.decode())
                 audio_stream = next(
                     (
                         s
@@ -164,7 +167,7 @@ class MetadataProcessor(ProcessorPlugin):
         return {"type": "audio"}
 
     async def _get_image_metadata(self, file_path: str) -> dict:
-        try:
+        def _extract():
             from PIL import Image
 
             with Image.open(file_path) as img:
@@ -175,17 +178,23 @@ class MetadataProcessor(ProcessorPlugin):
                     "format": img.format,
                     "mode": img.mode,
                 }
+
+        try:
+            return await asyncio.to_thread(_extract)
         except Exception as e:
             logger.error(f"Image metadata error: {e}")
 
         return {"type": "image"}
 
     async def write_metadata(self, file_path: str, metadata: dict) -> bool:
-        try:
+        def _write():
             json_path = file_path + ".json"
             with open(json_path, "w") as f:
                 json.dump(metadata, f, indent=2)
             return True
+
+        try:
+            return await asyncio.to_thread(_write)
         except Exception as e:
             logger.error(f"Write metadata error: {e}")
             return False

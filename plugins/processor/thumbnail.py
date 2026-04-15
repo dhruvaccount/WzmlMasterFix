@@ -45,8 +45,6 @@ class ThumbnailProcessor(ProcessorPlugin):
     async def _generate_thumbnail(
         self, source: str, output: str, time: str, width: int, height: int
     ) -> dict:
-        import subprocess
-
         cmd = [
             "ffmpeg",
             "-y",
@@ -61,22 +59,26 @@ class ThumbnailProcessor(ProcessorPlugin):
             output,
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        process = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        _, stderr = await process.communicate()
 
-        if result.returncode != 0:
+        if process.returncode != 0:
             cmd = ["ffmpeg", "-y", "-ss", time, "-i", source, "-vframes", "1", output]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            process = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            _, stderr = await process.communicate()
 
-        if result.returncode == 0:
+        if process.returncode == 0:
             return {"path": output, "source": source}
         else:
-            raise Exception(result.stderr)
+            raise Exception(stderr.decode())
 
     async def generate_multiple(
         self, source: str, output_dir: str, count: int = 5
     ) -> list:
-        import subprocess
-
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
@@ -91,11 +93,14 @@ class ThumbnailProcessor(ProcessorPlugin):
             "default=noprint_wrappers=1:nokey=1",
             source,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        process = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        stdout, _ = await process.communicate()
 
-        if result.returncode == 0:
+        if process.returncode == 0:
             try:
-                total_duration = float(result.stdout.strip())
+                total_duration = float(stdout.decode().strip())
                 step = total_duration / count
 
                 for i in range(count):

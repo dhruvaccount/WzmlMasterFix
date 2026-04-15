@@ -57,7 +57,7 @@ class NZBSearchHandler(BotHandler):
             if not HYDRA_IP or not HYDRA_API_KEY:
                 await client.edit_message(
                     context.chat_id,
-                    msg.message_id,
+                    msg.id,
                     "NZBHydra not configured. Set HYDRA_IP and HYDRA_API_KEY.",
                 )
                 return []
@@ -83,7 +83,7 @@ class NZBSearchHandler(BotHandler):
                     if response.status != 200:
                         await client.edit_message(
                             context.chat_id,
-                            msg.message_id,
+                            msg.id,
                             f"Search failed: Status {response.status}",
                         )
                         return []
@@ -95,7 +95,7 @@ class NZBSearchHandler(BotHandler):
                     if not items:
                         await client.edit_message(
                             context.chat_id,
-                            msg.message_id,
+                            msg.id,
                             f"No results for: {query}",
                         )
                         return []
@@ -152,7 +152,7 @@ class NZBSearchHandler(BotHandler):
 
                     await client.edit_message(
                         context.chat_id,
-                        msg.message_id,
+                        msg.id,
                         result_text,
                         reply_markup,
                     )
@@ -163,7 +163,7 @@ class NZBSearchHandler(BotHandler):
             logger.error(f"NZB search error: {e}")
             await client.edit_message(
                 context.chat_id,
-                msg.message_id,
+                msg.id,
                 f"Error: {str(e)}",
             )
             return []

@@ -162,10 +162,19 @@ def arg_parser(text: str) -> dict:
     args = text.split()
     result = {
         "link": "",
-        "-s": False,
-        "-d": False,
-        "-m": False,
-        "-p": False,
+        "-d": "",  # destination
+        "-i": 0,  # bulk links
+        "-s": False,  # select
+        "-b": False,  # batch
+        "-doc": False,  # document
+        "-med": False,  # media
+        "-z": False,  # zip
+        "-e": False,  # extract
+        "-f": False,  # force
+        "-ss": False,  # stop seeding
+        "-m": "",  # multi name
+        "-n": "",  # subfolder name
+        "-up": "",  # upload destination
         "list": [],
     }
 
@@ -177,11 +186,20 @@ def arg_parser(text: str) -> dict:
 
     while i < len(args):
         arg = args[i]
-        if arg.startswith("-"):
-            result[arg] = True
-            if i + 1 < len(args) and not args[i + 1].startswith("-"):
-                result[arg] = args[i + 1]
-                i += 1
+        if arg in result:
+            if isinstance(result[arg], bool):
+                result[arg] = True
+            else:
+                if i + 1 < len(args) and not args[i + 1].startswith("-"):
+                    result[arg] = (
+                        int(args[i + 1])
+                        if isinstance(result[arg], int)
+                        else args[i + 1]
+                    )
+                    i += 1
+        elif arg.startswith("-") and arg not in result:
+            # Handle unknown flags generically if needed, or ignore
+            pass
         else:
             if not result["link"]:
                 result["link"] = arg

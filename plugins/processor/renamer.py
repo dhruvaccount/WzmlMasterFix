@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import re
+import shutil
 from typing import Any, Optional
 
 from plugins.base import ProcessorPlugin, PluginContext, PluginResult
@@ -55,7 +56,7 @@ class RenamerProcessor(ProcessorPlugin):
             new_path = os.path.join(dir_path, new_name + ext)
 
             if new_path != source:
-                os.rename(source, new_path)
+                await asyncio.to_thread(shutil.move, source, new_path)
 
             return PluginResult(
                 success=True,
@@ -85,7 +86,7 @@ class RenamerProcessor(ProcessorPlugin):
         base_name = os.path.basename(source)
         new_path = os.path.join(dir_path, prefix + base_name)
 
-        os.rename(source, new_path)
+        await asyncio.to_thread(shutil.move, source, new_path)
         return new_path
 
     async def add_suffix(self, source: str, suffix: str) -> str:
@@ -93,7 +94,7 @@ class RenamerProcessor(ProcessorPlugin):
         name, ext = os.path.splitext(os.path.basename(source))
         new_path = os.path.join(dir_path, name + suffix + ext)
 
-        os.rename(source, new_path)
+        await asyncio.to_thread(shutil.move, source, new_path)
         return new_path
 
     async def remove_pattern(self, source: str, pattern: str) -> str:
@@ -101,5 +102,5 @@ class RenamerProcessor(ProcessorPlugin):
         dir_path = os.path.dirname(source)
         new_path = os.path.join(dir_path, new_name)
 
-        os.rename(source, new_path)
+        await asyncio.to_thread(shutil.move, source, new_path)
         return new_path

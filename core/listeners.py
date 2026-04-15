@@ -323,6 +323,121 @@ class TaskListenerManager(TaskListener):
             "nzb": NZBListener(),
             "direct": DirectListener(),
         }
+        self._map_events()
+
+    def _map_events(self):
+        for name, listener in self._listeners.items():
+            listener.register_handler("download_start", self._on_download_start)
+            listener.register_handler("download_progress", self._on_download_progress)
+            listener.register_handler("download_complete", self._on_download_complete)
+            listener.register_handler("upload_start", self._on_upload_start)
+            listener.register_handler("upload_progress", self._on_upload_progress)
+            listener.register_handler("upload_complete", self._on_upload_complete)
+
+            # Map specific plugin events
+            listener.register_handler("torrent_added", self._on_download_start)
+            listener.register_handler("torrent_progress", self._on_download_progress)
+            listener.register_handler("torrent_complete", self._on_download_complete)
+
+            listener.register_handler("package_added", self._on_download_start)
+            listener.register_handler("package_progress", self._on_download_progress)
+            listener.register_handler("package_complete", self._on_download_complete)
+
+            listener.register_handler("job_added", self._on_download_start)
+            listener.register_handler("job_progress", self._on_download_progress)
+            listener.register_handler("job_complete", self._on_download_complete)
+
+    async def _on_download_start(self, task_id: str, info: dict = None, **kwargs):
+        from core.task import update_task_progress
+
+        try:
+            await update_task_progress(
+                task_id, stage="Downloading", plugin="listener", progress=0.0
+            )
+        except Exception:
+            pass
+
+    async def _on_download_progress(
+        self,
+        task_id: str,
+        progress: float,
+        speed: float = 0.0,
+        eta: int = 0,
+        downloaded: int = 0,
+        total: int = 0,
+        **kwargs,
+    ):
+        from core.task import update_task_progress
+
+        try:
+            await update_task_progress(
+                task_id,
+                stage="Downloading",
+                plugin="listener",
+                progress=float(progress),
+                speed=float(speed),
+                eta=int(eta),
+                downloaded=int(downloaded),
+                total=int(total),
+            )
+        except Exception:
+            pass
+
+    async def _on_download_complete(self, task_id: str, info: dict = None, **kwargs):
+        from core.task import update_task_progress
+
+        try:
+            await update_task_progress(
+                task_id, stage="Downloaded", plugin="listener", progress=100.0
+            )
+        except Exception:
+            pass
+
+    async def _on_upload_start(self, task_id: str, info: dict = None, **kwargs):
+        from core.task import update_task_progress
+
+        try:
+            await update_task_progress(
+                task_id, stage="Uploading", plugin="listener", progress=0.0
+            )
+        except Exception:
+            pass
+
+    async def _on_upload_progress(
+        self,
+        task_id: str,
+        progress: float,
+        speed: float = 0.0,
+        eta: int = 0,
+        uploaded: int = 0,
+        total: int = 0,
+        **kwargs,
+    ):
+        from core.task import update_task_progress
+
+        try:
+            await update_task_progress(
+                task_id,
+                stage="Uploading",
+                plugin="listener",
+                progress=float(progress),
+                speed=float(speed),
+                eta=int(eta),
+                uploaded=int(uploaded),
+                total=int(total),
+            )
+        except Exception:
+            pass
+
+    async def _on_upload_complete(self, task_id: str, info: dict = None, **kwargs):
+        from core.task import update_task_progress
+
+        try:
+            await update_task_progress(
+                task_id, stage="Uploaded", plugin="listener", progress=100.0
+            )
+        except Exception:
+            pass
 
     async def start_all(self):
         for name, listener in self._listeners.items():

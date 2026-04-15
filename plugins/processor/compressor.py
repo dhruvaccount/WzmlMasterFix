@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import time
 from typing import Any, Optional
 
@@ -16,6 +17,8 @@ class CompressorProcessor(ProcessorPlugin):
     def __init__(self):
         self._method = "zip"
         self._level = 6
+        self._active_processes = {}
+        self._7z_progress_regex = re.compile(r"^\s*(\d+)%\s*-")
 
     async def initialize(self, method: str = "zip", level: int = 6) -> bool:
         self._method = method
@@ -39,43 +42,16 @@ class CompressorProcessor(ProcessorPlugin):
 
             from core.task import update_task_progress
 
-            start_time = time.time()
-            last_update = start_time
+            await update_task_progress(
+                task_id=context.task_id,
+                stage="Compressing",
+                plugin=self.name,
+                progress=0.0,
+            )
 
-            async def progress_callback(current, total):
-                nonlocal last_update
-                now = time.time()
-                if now - last_update > 1.0:
-                    speed = current / (now - start_time) if now > start_time else 0
-                    eta = int((total - current) / speed) if speed > 0 and total else 0
-                    pct = (current / total) * 100 if total else 0.0
-
-                    await update_task_progress(
-                        task_id=context.task_id,
-                        stage="Compressing",
-                        plugin=self.name,
-                        progress=pct,
-                        speed=speed,
-                        eta=eta,
-                        downloaded=current,
-                        total=total,
-                    )
-                    last_update = now
-
-            if method == "zip":
-                result = await asyncio.to_thread(
-                    self._compress_zip, source, output_path, level, password
-                )
-            elif method == "tar":
-                result = await asyncio.to_thread(
-                    self._compress_tar, source, output_path
-                )
-            elif method == "tar.gz" or method == "tgz":
-                result = await asyncio.to_thread(
-                    self._compress_targz, source, output_path
-                )
-            else:
-                return PluginResult(success=False, error=f"Unknown format: {method}")
+            result = await self._compress_cli(
+                context, source, output_path, method, level, password
+            )
 
             return PluginResult(
                 success=True,
@@ -84,64 +60,135 @@ class CompressorProcessor(ProcessorPlugin):
             )
 
         except Exception as e:
+            if context.task_id in self._active_processes:
+                try:
+                    self._active_processes[context.task_id].terminate()
+                except:
+                    pass
+                del self._active_processes[context.task_id]
+
             logger.error(f"Compression error: {e}")
             return PluginResult(success=False, error=str(e))
 
-    def _compress_zip(
-        self, source: str, output: str, level: int, password: str = None
+    async def _compress_cli(
+        self,
+        context: PluginContext,
+        source: str,
+        output_path: str,
+        method: str,
+        level: int,
+        password: str = None,
     ) -> dict:
-        compression = zipfile.ZIP_DEFLATED
+        from core.task import update_task_progress, _task_store
 
-        with zipfile.ZipFile(output, "w", compression) as zf:
-            if hasattr(zf, "compression_level"):  # New in 3.7
-                zf.compression_level = level
+        fmt = method.lower()
+        if fmt in ["tar.gz", "tgz"]:
+            return await self._compress_targz(context, source, output_path)
 
-            if os.path.isdir(source):
-                for root, dirs, files in os.walk(source):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        arcname = os.path.relpath(file_path, source)
-                        zf.write(file_path, arcname)
-            else:
-                zf.write(source, os.path.basename(source))
+        cmd = ["7z", "a", output_path, source, "-bsp1", "-y"]
 
-        return {
-            "format": "zip",
-            "size": os.path.getsize(output),
-        }
+        if fmt == "zip":
+            cmd.extend(["-tzip", f"-mx={level}"])
+        elif fmt == "tar":
+            cmd.extend(["-ttar"])
+        elif fmt == "7z":
+            cmd.extend(["-t7z", f"-mx={level}"])
+        else:
+            # Fallback assuming zip or supported format
+            cmd.extend(["-tzip", f"-mx={level}"])
 
-    def _compress_tar(self, source: str, output: str) -> dict:
-        with tarfile.open(output, "w") as tf:
-            if os.path.isdir(source):
-                for root, dirs, files in os.walk(source):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        arcname = os.path.relpath(file_path, source)
-                        tf.add(file_path, arcname=arcname)
-            else:
-                tf.add(source, arcname=os.path.basename(source))
+        if password and fmt in ["zip", "7z"]:
+            cmd.append(f"-p{password}")
 
-        return {"format": "tar", "size": os.path.getsize(output)}
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        self._active_processes[context.task_id] = process
 
-    def _compress_targz(self, source: str, output: str) -> dict:
+        last_update = 0
+
+        while True:
+            t = _task_store.get(context.task_id)
+            if t and t.status.value == "cancelled":
+                process.terminate()
+                raise Exception("Task cancelled by user")
+
+            line = await process.stdout.readline()
+            if not line:
+                break
+
+            line_str = line.decode().strip()
+            match = self._7z_progress_regex.search(line_str)
+            if match:
+                now = time.time()
+                if now - last_update >= 1.0:
+                    pct = float(match.group(1))
+
+                    asyncio.create_task(
+                        update_task_progress(
+                            task_id=context.task_id,
+                            stage=f"Compressing ({fmt})",
+                            plugin=self.name,
+                            progress=pct,
+                        )
+                    )
+                    last_update = now
+
+        stdout, stderr = await process.communicate()
+        if context.task_id in self._active_processes:
+            del self._active_processes[context.task_id]
+
+        if process.returncode == 0:
+            return {"format": fmt, "size": os.path.getsize(output_path)}
+        else:
+            raise Exception(f"7z failed: {stderr.decode()}")
+
+    async def _compress_targz(
+        self, context: PluginContext, source: str, output: str
+    ) -> dict:
+        import tarfile
         import gzip
+        from core.task import update_task_progress, _task_store
 
-        output_tar = output.replace(".tar.gz", ".tar").replace(".tgz", ".tar")
+        def _extract():
+            output_tar = output.replace(".tar.gz", ".tar").replace(".tgz", ".tar")
 
-        with tarfile.open(output_tar, "w") as tf:
-            if os.path.isdir(source):
-                for root, dirs, files in os.walk(source):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        arcname = os.path.relpath(file_path, source)
-                        tf.add(file_path, arcname=arcname)
-            else:
-                tf.add(source, arcname=os.path.basename(source))
+            with tarfile.open(output_tar, "w") as tf:
+                if os.path.isdir(source):
+                    for root, dirs, files in os.walk(source):
+                        for file in files:
+                            t = _task_store.get(context.task_id)
+                            if t and t.status.value == "cancelled":
+                                raise Exception("Task cancelled by user")
+                            file_path = os.path.join(root, file)
+                            arcname = os.path.relpath(file_path, source)
+                            tf.add(file_path, arcname=arcname)
+                else:
+                    tf.add(source, arcname=os.path.basename(source))
 
-        with open(output_tar, "rb") as f_in:
-            with gzip.open(output, "wb", compresslevel=9) as f_out:
-                f_out.writelines(f_in)
+            with open(output_tar, "rb") as f_in:
+                with gzip.open(output, "wb", compresslevel=9) as f_out:
+                    while True:
+                        t = _task_store.get(context.task_id)
+                        if t and t.status.value == "cancelled":
+                            raise Exception("Task cancelled by user")
+                        chunk = f_in.read(1024 * 1024 * 5)
+                        if not chunk:
+                            break
+                        f_out.write(chunk)
 
-        os.remove(output_tar)
+            os.remove(output_tar)
+            return {"format": "tar.gz", "size": os.path.getsize(output)}
 
-        return {"format": "tar.gz", "size": os.path.getsize(output)}
+        asyncio.create_task(
+            update_task_progress(
+                task_id=context.task_id,
+                stage="Compressing (tar.gz)",
+                plugin=self.name,
+                progress=50.0,
+            )
+        )
+
+        return await asyncio.to_thread(_extract)

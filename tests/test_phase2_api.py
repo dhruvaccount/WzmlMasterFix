@@ -136,6 +136,7 @@ async def test_pipeline_operations():
 
     # Create custom pipeline
     custom = create_pipeline(
+        "test_custom_pipeline_id",
         name="Test Custom Pipeline",
         stages=[
             {"plugin": "direct", "action": "download"},

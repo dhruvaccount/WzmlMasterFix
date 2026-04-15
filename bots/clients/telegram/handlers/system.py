@@ -34,7 +34,7 @@ class PingHandler(BotHandler):
         uptime_str = str(uptime).split(".")[0]
 
         text = f"Pong!\n\nLatency: {latency:.2f} ms\nUptime: {uptime_str}"
-        await client.edit_message(context.chat_id, msg.message_id, text)
+        await client.edit_message(context.chat_id, msg.id, text)
 
         return latency
 
@@ -179,7 +179,7 @@ class ExecHandler(BotHandler):
         output = f"<pre>{output}</pre>"
 
         try:
-            await client.delete_message(context.chat_id, msg.message_id)
+            await client.delete_message(context.chat_id, msg.id)
         except:
             pass
 

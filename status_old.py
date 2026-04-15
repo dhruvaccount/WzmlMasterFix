@@ -48,8 +48,6 @@ def get_progress_bar_string(pct: float) -> str:
 
 
 class StatusHandler(BotHandler):
-    TASKS_PER_PAGE = 4
-
     async def handle(
         self,
         context: CommandContext,
@@ -68,53 +66,31 @@ class StatusHandler(BotHandler):
             elif target_id.isdigit():
                 user_filter = int(target_id)
 
-        msg, reply_markup = await self.get_status_message(
-            user_filter=user_filter, page=1
-        )
-
-        await client.send_message(
-            context.chat_id,
-            msg,
-            reply_markup=reply_markup,
-            parse_mode=enums.ParseMode.HTML,
-        )
-        return "Status sent"
-
-    async def get_status_message(self, user_filter: int = None, page: int = 1):
         tasks = await get_tasks(user_id=user_filter)
         active_tasks = [t for t in tasks if t.is_active]
 
         if not active_tasks:
-            return "No active tasks!", None
-
-        total_tasks = len(active_tasks)
-        total_pages = (total_tasks + self.TASKS_PER_PAGE - 1) // self.TASKS_PER_PAGE
-        page = max(1, min(page, total_pages))
-
-        start_idx = (page - 1) * self.TASKS_PER_PAGE
-        end_idx = start_idx + self.TASKS_PER_PAGE
-        page_tasks = active_tasks[start_idx:end_idx]
+            await client.send_message(context.chat_id, "No active tasks!")
+            return "No tasks"
 
         stats = await get_queue_stats()
 
-        msg = f"<b>Active Tasks ({total_tasks})</b>\n\n"
-        for i, task in enumerate(page_tasks, start_idx + 1):
+        msg = "<b>Active Tasks</b>\n\n"
+        for i, task in enumerate(active_tasks[:10], 1):  # Limit to 10 for now
             msg += self._format_task(i, task)
 
         msg += self._format_bot_stats(stats)
 
         buttons = ButtonMaker()
-        if total_pages > 1:
-            prev_page = total_pages if page == 1 else page - 1
-            next_page = 1 if page == total_pages else page + 1
-            buttons.data_button("<<", f"status {prev_page}")
-            buttons.data_button(f"{page}/{total_pages}", "status_refresh")
-            buttons.data_button(">>", f"status {next_page}")
+        buttons.data_button("🔄 Refresh", "status_refresh", position="header")
 
-        buttons.data_button("🔄 Refresh", f"status {page}")
-        buttons.data_button("Stop All", "canall")
-
-        return msg, buttons.build_menu(3 if total_pages > 1 else 2)
+        await client.send_message(
+            context.chat_id,
+            msg,
+            reply_markup=buttons.build_menu(2),
+            parse_mode=enums.ParseMode.HTML,
+        )
+        return "Status sent"
 
     def _format_task(self, index: int, task: Task) -> str:
         name = (
@@ -130,36 +106,28 @@ class StatusHandler(BotHandler):
         prog = task.progress
         pct = prog.progress if prog else 0.0
 
-        stage_icon = "🔄"
-        if prog.stage == "downloading":
-            stage_icon = "⏬"
-        elif prog.stage == "uploading":
-            stage_icon = "⏫"
-        elif prog.stage == "extracting":
-            stage_icon = "🗜️"
-
-        msg += f"{stage_icon} {get_progress_bar_string(pct)} <i>{pct:.1f}%</i>\n"
+        msg += f"├ {get_progress_bar_string(pct)} <i>{pct:.1f}%</i>\n"
 
         if prog:
             if prog.total > 0:
                 down_str = get_readable_file_size(prog.downloaded)
                 total_str = get_readable_file_size(prog.total)
-                msg += f"📦 <b>Processed:</b> <i>{down_str} of {total_str}</i>\n"
+                msg += f"├ <b>Processed:</b> <i>{down_str} of {total_str}</i>\n"
 
-            msg += f"🚦 <b>Status:</b> <b>{task.status.title()}</b>"
+            msg += f"├ <b>Status:</b> <b>{task.status.title()}</b>"
             if prog.stage:
                 msg += f" - {prog.stage.title()}"
             msg += "\n"
 
             if prog.speed > 0:
                 speed_str = get_readable_file_size(prog.speed) + "/s"
-                msg += f"⚡ <b>Speed:</b> <i>{speed_str}</i>\n"
+                msg += f"├ <b>Speed:</b> <i>{speed_str}</i>\n"
 
             if prog.eta > 0:
-                msg += f"⏳ <b>ETA:</b> <i>{get_readable_time(prog.eta)}</i>\n"
+                msg += f"├ <b>ETA:</b> <i>{get_readable_time(prog.eta)}</i>\n"
 
-        msg += f"🛠 <b>Engine:</b> <i>{task.config.pipeline_id}</i>\n"
-        msg += f"🛑 <b>Cancel:</b> <i>/cancel {task.id}</i>\n\n"
+        msg += f"├ <b>Engine:</b> <i>{task.config.pipeline_id}</i>\n"
+        msg += f"└ <b>Cancel:</b> <i>/cancel {task.id}</i>\n\n"
 
         return msg
 

@@ -308,6 +308,16 @@ def _create_builtin_pipelines() -> None:
             "qBit  GDrive",
             [
                 {"plugin": "downloader.qbit", "action": "download"},
+                {
+                    "plugin": "processor.extractor",
+                    "action": "extract",
+                    "on_error": "continue",
+                },
+                {
+                    "plugin": "processor.renamer",
+                    "action": "rename",
+                    "on_error": "continue",
+                },
                 {"plugin": "uploader.gdrive", "action": "upload"},
             ],
         ),
@@ -316,6 +326,16 @@ def _create_builtin_pipelines() -> None:
             "qBit  Telegram",
             [
                 {"plugin": "downloader.qbit", "action": "download"},
+                {
+                    "plugin": "processor.extractor",
+                    "action": "extract",
+                    "on_error": "continue",
+                },
+                {
+                    "plugin": "processor.renamer",
+                    "action": "rename",
+                    "on_error": "continue",
+                },
                 {"plugin": "uploader.telegram", "action": "upload"},
             ],
         ),
@@ -325,6 +345,16 @@ def _create_builtin_pipelines() -> None:
             "JD  GDrive",
             [
                 {"plugin": "downloader.jd", "action": "download"},
+                {
+                    "plugin": "processor.extractor",
+                    "action": "extract",
+                    "on_error": "continue",
+                },
+                {
+                    "plugin": "processor.renamer",
+                    "action": "rename",
+                    "on_error": "continue",
+                },
                 {"plugin": "uploader.gdrive", "action": "upload"},
             ],
         ),
@@ -333,6 +363,16 @@ def _create_builtin_pipelines() -> None:
             "JD  Telegram",
             [
                 {"plugin": "downloader.jd", "action": "download"},
+                {
+                    "plugin": "processor.extractor",
+                    "action": "extract",
+                    "on_error": "continue",
+                },
+                {
+                    "plugin": "processor.renamer",
+                    "action": "rename",
+                    "on_error": "continue",
+                },
                 {"plugin": "uploader.telegram", "action": "upload"},
             ],
         ),
@@ -342,6 +382,16 @@ def _create_builtin_pipelines() -> None:
             "NZB  GDrive",
             [
                 {"plugin": "downloader.nzb", "action": "download"},
+                {
+                    "plugin": "processor.extractor",
+                    "action": "extract",
+                    "on_error": "continue",
+                },
+                {
+                    "plugin": "processor.renamer",
+                    "action": "rename",
+                    "on_error": "continue",
+                },
                 {"plugin": "uploader.gdrive", "action": "upload"},
             ],
         ),
@@ -350,6 +400,16 @@ def _create_builtin_pipelines() -> None:
             "NZB  Telegram",
             [
                 {"plugin": "downloader.nzb", "action": "download"},
+                {
+                    "plugin": "processor.extractor",
+                    "action": "extract",
+                    "on_error": "continue",
+                },
+                {
+                    "plugin": "processor.renamer",
+                    "action": "rename",
+                    "on_error": "continue",
+                },
                 {"plugin": "uploader.telegram", "action": "upload"},
             ],
         ),
@@ -359,6 +419,11 @@ def _create_builtin_pipelines() -> None:
             "YT-DLP  GDrive",
             [
                 {"plugin": "downloader.yt_dlp", "action": "download"},
+                {
+                    "plugin": "processor.ffmpeg",
+                    "action": "transcode",
+                    "on_error": "continue",
+                },
                 {"plugin": "uploader.gdrive", "action": "upload"},
             ],
         ),
@@ -367,6 +432,11 @@ def _create_builtin_pipelines() -> None:
             "YT-DLP  Telegram",
             [
                 {"plugin": "downloader.yt_dlp", "action": "download"},
+                {
+                    "plugin": "processor.ffmpeg",
+                    "action": "transcode",
+                    "on_error": "continue",
+                },
                 {"plugin": "uploader.telegram", "action": "upload"},
             ],
         ),
@@ -376,6 +446,16 @@ def _create_builtin_pipelines() -> None:
             "Mega  GDrive",
             [
                 {"plugin": "downloader.mega", "action": "download"},
+                {
+                    "plugin": "processor.extractor",
+                    "action": "extract",
+                    "on_error": "continue",
+                },
+                {
+                    "plugin": "processor.renamer",
+                    "action": "rename",
+                    "on_error": "continue",
+                },
                 {"plugin": "uploader.gdrive", "action": "upload"},
             ],
         ),
@@ -384,6 +464,16 @@ def _create_builtin_pipelines() -> None:
             "Mega  Telegram",
             [
                 {"plugin": "downloader.mega", "action": "download"},
+                {
+                    "plugin": "processor.extractor",
+                    "action": "extract",
+                    "on_error": "continue",
+                },
+                {
+                    "plugin": "processor.renamer",
+                    "action": "rename",
+                    "on_error": "continue",
+                },
                 {"plugin": "uploader.telegram", "action": "upload"},
             ],
         ),

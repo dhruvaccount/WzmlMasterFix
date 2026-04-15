@@ -2,16 +2,10 @@ import asyncio
 import logging
 import os
 import time
+import math
 from typing import Any, Optional
 
-try:
-    import pyrogram
-    from pyrogram import Client, types
-except ImportError:
-    raise ImportError("pyrogram required: pip install pyrotgfork")
-
 from plugins.base import UploaderPlugin, PluginContext, PluginResult
-from core.exceptions import PluginExecutionError
 
 logger = logging.getLogger("wzml.telegram_uploader")
 
@@ -21,9 +15,9 @@ class TelegramUploader(UploaderPlugin):
     plugin_type = "uploader"
 
     def __init__(self):
-        self._bot: Optional[Client] = None
+        self._bot = None
 
-    async def initialize(self, bot_token: str = None) -> bool:
+    async def initialize(self) -> bool:
         try:
             from bots.clients.telegram.helpers.message_utils import get_telegram_client
 
@@ -31,31 +25,11 @@ class TelegramUploader(UploaderPlugin):
             global_client = get_telegram_client()
             if global_client:
                 self._bot = global_client
-                me = await self._bot.get_me()
-                logger.info(f"Telegram uploader using global client: @{me.username}")
+                logger.info("Telegram uploader using global Pyrogram client")
                 return True
 
-            from config import get_config
-
-            cfg = get_config()
-            token = bot_token or cfg.telegram.BOT_TOKEN
-
-            if token:
-                self._bot = Client(
-                    name="wzml_uploader",
-                    api_id=cfg.telegram.API,
-                    api_hash=cfg.telegram.HASH,
-                    bot_token=token,
-                )
-                await self._bot.start()
-                me = await self._bot.get_me()
-                logger.info(
-                    f"Telegram uploader initialized local client: @{me.username}"
-                )
-                return True
-            else:
-                logger.warning("No bot token provided")
-                return False
+            logger.error("No global Pyrogram client found for TelegramUploader")
+            return False
         except Exception as e:
             logger.error(f"Telegram init error: {e}")
             return False
@@ -73,76 +47,132 @@ class TelegramUploader(UploaderPlugin):
             return PluginResult(success=False, error="File not found")
 
         try:
-            from core.task import update_task_progress
+            from core.task import update_task_progress, _task_store
 
             file_name = os.path.basename(file_path)
+            file_size = os.path.getsize(file_path)
             file_ext = os.path.splitext(file_path)[1].lower()
-            start_time = time.time()
-            last_update = start_time
 
-            async def progress_callback(current, total):
-                nonlocal last_update
-                now = time.time()
-                if now - last_update > 1.0:
-                    speed = current / (now - start_time) if now > start_time else 0
-                    eta = int((total - current) / speed) if speed > 0 and total else 0
-                    pct = (current / total) * 100 if total else 0.0
+            # Max Telegram file size limit for bots (usually 2GB, sometimes 4GB for premium/user bots)
+            # Assuming standard 2GB for bot or slightly less to be safe
+            LIMIT_SIZE = 2 * 1024 * 1024 * 1024 - (10 * 1024 * 1024)  # 1.99 GB
 
-                    await update_task_progress(
-                        task_id=context.task_id,
-                        stage="Uploading",
-                        plugin=self.name,
-                        progress=pct,
-                        speed=speed,
-                        eta=eta,
-                        uploaded=current,
-                        total=total,
-                    )
-                    last_update = now
-
-            if file_ext in [".jpg", ".jpeg", ".png", ".gif"]:
-                msg = await self._bot.send_photo(
-                    chat_id=chat_id,
-                    photo=file_path,
-                    caption=caption,
-                    progress=progress_callback,
+            if file_size > LIMIT_SIZE:
+                logger.info(
+                    f"File {file_name} is larger than Telegram limit, splitting..."
                 )
-            elif file_ext in [".mp4", ".mkv", ".avi", ".mov"]:
-                msg = await self._bot.send_video(
-                    chat_id=chat_id,
-                    video=file_path,
-                    caption=caption,
-                    progress=progress_callback,
-                )
-            elif file_ext in [".mp3", ".ogg", ".m4a", ".wav"]:
-                msg = await self._bot.send_audio(
-                    chat_id=chat_id,
-                    audio=file_path,
-                    caption=caption,
-                    progress=progress_callback,
-                )
-            elif file_ext in [".pdf", ".doc", ".docx", ".txt"]:
-                msg = await self._bot.send_document(
-                    chat_id=chat_id,
-                    document=file_path,
-                    caption=caption,
-                    progress=progress_callback,
-                )
+                parts = await self._split_file(file_path, LIMIT_SIZE)
+                if not parts:
+                    return PluginResult(success=False, error="Failed to split file")
             else:
-                msg = await self._bot.send_document(
-                    chat_id=chat_id,
-                    document=file_path,
-                    caption=caption,
-                    progress=progress_callback,
+                parts = [file_path]
+
+            uploaded_messages = []
+
+            for i, part_path in enumerate(parts):
+                part_name = os.path.basename(part_path)
+                part_size = os.path.getsize(part_path)
+                part_caption = caption
+                if len(parts) > 1:
+                    part_caption = f"{caption}\n\nPart {i + 1} of {len(parts)}"
+
+                start_time = time.time()
+                last_update = start_time
+
+                async def progress_callback(current, total):
+                    nonlocal last_update
+                    # Check task cancellation
+                    t = _task_store.get(context.task_id)
+                    if t and t.status.value == "cancelled":
+                        raise Exception("Task cancelled by user")
+
+                    now = time.time()
+                    if now - last_update > 1.0:
+                        speed = current / (now - start_time) if now > start_time else 0
+                        eta = (
+                            int((total - current) / speed) if speed > 0 and total else 0
+                        )
+                        pct = (current / total) * 100 if total else 0.0
+
+                        asyncio.create_task(
+                            update_task_progress(
+                                task_id=context.task_id,
+                                stage=f"Uploading Part {i + 1}/{len(parts)}"
+                                if len(parts) > 1
+                                else "Uploading",
+                                plugin=self.name,
+                                progress=pct,
+                                speed=speed,
+                                eta=eta,
+                                uploaded=current,
+                                total=total,
+                            )
+                        )
+                        last_update = now
+
+                # We use the global pyrogram client directly
+                # If the bot is actually the raw client:
+                client = self._bot
+
+                logger.info(f"Uploading to Telegram: {part_name}")
+                if file_ext in [".jpg", ".jpeg", ".png", ".gif"]:
+                    msg = await client.send_photo(
+                        chat_id=chat_id,
+                        photo=part_path,
+                        caption=part_caption,
+                        progress=progress_callback,
+                    )
+                elif file_ext in [".mp4", ".mkv", ".avi", ".mov", ".webm"]:
+                    msg = await client.send_video(
+                        chat_id=chat_id,
+                        video=part_path,
+                        caption=part_caption,
+                        progress=progress_callback,
+                        supports_streaming=True,
+                    )
+                elif file_ext in [".mp3", ".ogg", ".m4a", ".wav", ".flac"]:
+                    msg = await client.send_audio(
+                        chat_id=chat_id,
+                        audio=part_path,
+                        caption=part_caption,
+                        progress=progress_callback,
+                    )
+                else:
+                    msg = await client.send_document(
+                        chat_id=chat_id,
+                        document=part_path,
+                        caption=part_caption,
+                        progress=progress_callback,
+                    )
+
+                uploaded_messages.append(
+                    {
+                        "message_id": getattr(
+                            msg, "id", getattr(msg, "message_id", None)
+                        ),
+                        "file_name": part_name,
+                    }
                 )
 
+                # Cleanup split part if it's not the original file
+                if part_path != file_path and os.path.exists(part_path):
+                    try:
+                        os.remove(part_path)
+                    except:
+                        pass
+
+            # Return success with info about the first or all parts
             return PluginResult(
                 success=True,
-                output_path=str(msg.id),
+                output_path=str(uploaded_messages[0]["message_id"])
+                if uploaded_messages
+                else "",
                 metadata={
-                    "message_id": msg.id,
-                    "chat_id": msg.chat.id,
+                    "messages": uploaded_messages,
+                    "chat_id": chat_id,
                     "file_name": file_name,
+                    "is_split": len(parts) > 1,
+                    "total_parts": len(parts),
                 },
             )
 
@@ -150,91 +180,32 @@ class TelegramUploader(UploaderPlugin):
             logger.error(f"Telegram upload error: {e}")
             return PluginResult(success=False, error=str(e))
 
-    async def upload_with_progress(
-        self, file_path: str, chat_id: int, caption: str = ""
-    ) -> Optional[dict]:
+    async def _split_file(self, file_path: str, chunk_size: int) -> list:
+        # Splits a file into parts using chunk size
         try:
-            msg = await self._bot.send_document(
-                chat_id=chat_id,
-                document=file_path,
-                caption=caption,
-            )
-            return {
-                "message_id": msg.id,
-                "chat_id": msg.chat.id,
-            }
-        except Exception as e:
-            logger.error(f"Telegram progress upload error: {e}")
-            return None
+            file_name = os.path.basename(file_path)
+            dir_name = os.path.dirname(file_path)
+            file_size = os.path.getsize(file_path)
+            num_parts = math.ceil(file_size / chunk_size)
 
-    async def send_message(
-        self, chat_id: int, text: str, reply_markup: Any = None
-    ) -> Optional[dict]:
-        try:
-            msg = await self._bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                reply_markup=reply_markup,
-            )
-            return {"message_id": msg.id, "chat_id": msg.chat.id}
-        except Exception as e:
-            logger.error(f"Telegram send message error: {e}")
-            return None
+            parts = []
 
-    async def send_media_group(self, chat_id: int, media: list) -> Optional[list]:
-        try:
-            media_group = []
-            for m in media:
-                media_group.append(m["path"])
+            # Using asyncio to not block the event loop
+            def do_split():
+                with open(file_path, "rb") as f:
+                    for i in range(num_parts):
+                        part_path = os.path.join(dir_name, f"{file_name}.{i + 1:03d}")
+                        parts.append(part_path)
+                        with open(part_path, "wb") as part_f:
+                            chunk = f.read(chunk_size)
+                            if chunk:
+                                part_f.write(chunk)
+                return parts
 
-            messages = await self._bot.send_media_group(
-                chat_id=chat_id,
-                media=media_group,
-            )
-            return [{"message_id": m.id, "chat_id": m.chat.id} for m in messages]
+            return await asyncio.to_thread(do_split)
         except Exception as e:
-            logger.error(f"Telegram media group error: {e}")
-            return None
-
-    async def edit_message_text(
-        self, chat_id: int, message_id: int, text: str, reply_markup: Any = None
-    ) -> bool:
-        try:
-            await self._bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=text,
-                reply_markup=reply_markup,
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Telegram edit error: {e}")
-            return False
-
-    async def delete_message(self, chat_id: int, message_id: int) -> bool:
-        try:
-            await self._bot.delete_messages(
-                chat_id=chat_id,
-                message_ids=[message_id],
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Telegram delete error: {e}")
-            return False
-
-    async def forward_message(
-        self, from_chat_id: int, to_chat_id: int, message_id: int
-    ) -> Optional[dict]:
-        try:
-            msg = await self._bot.forward_messages(
-                chat_id=to_chat_id,
-                from_chat_id=from_chat_id,
-                message_ids=[message_id],
-            )
-            return {"message_id": msg[0].id, "chat_id": msg[0].chat.id}
-        except Exception as e:
-            logger.error(f"Telegram forward error: {e}")
-            return None
+            logger.error(f"Error splitting file: {e}")
+            return []
 
     async def get_chat(self, chat_id: int) -> Optional[dict]:
         try:
@@ -249,19 +220,6 @@ class TelegramUploader(UploaderPlugin):
             logger.error(f"Telegram get chat error: {e}")
             return None
 
-    async def get_me(self) -> Optional[dict]:
-        try:
-            me = await self._bot.get_me()
-            return {
-                "id": me.id,
-                "username": me.username,
-                "first_name": me.first_name,
-            }
-        except Exception as e:
-            logger.error(f"Telegram get me error: {e}")
-            return None
-
     async def close(self):
-        if self._bot:
-            await self._bot.stop()
-            self._bot = None
+        # We don't close the global client
+        pass

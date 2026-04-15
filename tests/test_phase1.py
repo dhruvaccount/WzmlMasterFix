@@ -101,6 +101,7 @@ async def test_dynamic_pipelines():
 
     # Test 3: Create custom pipeline (simple name)
     custom = create_pipeline(
+        "custom_yt_extract",
         name="YT Extract Zip GD",
         stages=[
             {"plugin": "yt_dlp", "action": "download"},

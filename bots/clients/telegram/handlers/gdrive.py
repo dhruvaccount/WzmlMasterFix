@@ -43,7 +43,7 @@ class GDriveCountHandler(BotHandler):
             if not gdrive:
                 await client.edit_message(
                     context.chat_id,
-                    msg.message_id,
+                    msg.id,
                     "GDrive plugin not initialized",
                 )
                 return {}
@@ -54,7 +54,7 @@ class GDriveCountHandler(BotHandler):
             if not file:
                 await client.edit_message(
                     context.chat_id,
-                    msg.message_id,
+                    msg.id,
                     "File not found",
                 )
                 return {}
@@ -70,7 +70,7 @@ class GDriveCountHandler(BotHandler):
             }
 
             text = f"Name: {name}\nSize: {result['size']}\nType: {mime_type}"
-            await client.edit_message(context.chat_id, msg.message_id, text)
+            await client.edit_message(context.chat_id, msg.id, text)
 
             return result
 
@@ -78,7 +78,7 @@ class GDriveCountHandler(BotHandler):
             logger.error(f"GDrive count error: {e}")
             await client.edit_message(
                 context.chat_id,
-                msg.message_id,
+                msg.id,
                 f"Error: {str(e)}",
             )
             return {}
@@ -112,7 +112,7 @@ class GDriveDeleteHandler(BotHandler):
             if not gdrive:
                 await client.edit_message(
                     context.chat_id,
-                    msg.message_id,
+                    msg.id,
                     "GDrive plugin not initialized",
                 )
                 return False
@@ -123,13 +123,13 @@ class GDriveDeleteHandler(BotHandler):
             if success:
                 await client.edit_message(
                     context.chat_id,
-                    msg.message_id,
+                    msg.id,
                     "File deleted successfully",
                 )
             else:
                 await client.edit_message(
                     context.chat_id,
-                    msg.message_id,
+                    msg.id,
                     "Failed to delete file",
                 )
 
@@ -139,7 +139,7 @@ class GDriveDeleteHandler(BotHandler):
             logger.error(f"GDrive delete error: {e}")
             await client.edit_message(
                 context.chat_id,
-                msg.message_id,
+                msg.id,
                 f"Error: {str(e)}",
             )
             return False
@@ -176,7 +176,7 @@ class GDriveListHandler(BotHandler):
             if not gdrive:
                 await client.edit_message(
                     context.chat_id,
-                    msg.message_id,
+                    msg.id,
                     "GDrive plugin not initialized",
                 )
                 return []
@@ -186,7 +186,7 @@ class GDriveListHandler(BotHandler):
             if not results:
                 await client.edit_message(
                     context.chat_id,
-                    msg.message_id,
+                    msg.id,
                     f"No results found for: {query}",
                 )
                 return []
@@ -205,7 +205,7 @@ class GDriveListHandler(BotHandler):
 
             await client.edit_message(
                 context.chat_id,
-                msg.message_id,
+                msg.id,
                 text,
                 reply_markup,
             )
@@ -216,7 +216,7 @@ class GDriveListHandler(BotHandler):
             logger.error(f"GDrive list error: {e}")
             await client.edit_message(
                 context.chat_id,
-                msg.message_id,
+                msg.id,
                 f"Error: {str(e)}",
             )
             return []
