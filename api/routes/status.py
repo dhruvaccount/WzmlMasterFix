@@ -1,7 +1,24 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 router = APIRouter()
 
+@router.websocket("/ws")
+async def websocket_status(websocket: WebSocket):
+    from core.events import event_bus
+    import asyncio
+    
+    await websocket.accept()
+    queue = asyncio.Queue()
+    event_bus.subscribe(queue)
+    try:
+        while True:
+            # wait for events to be pushed into the queue
+            message = await queue.get()
+            await websocket.send_json(message)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        event_bus.unsubscribe(queue)
 
 @router.get("/task/{task_id}")
 async def get_task_status(task_id: str):

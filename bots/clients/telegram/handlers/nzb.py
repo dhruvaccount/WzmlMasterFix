@@ -9,7 +9,9 @@ import xml.etree.ElementTree as ET
 from bots.clients.telegram.helpers.message_utils import arg_parser
 from core.status_utils import get_readable_file_size
 from bots.clients.telegram.helpers.button_utils import ButtonMaker
-from bots.clients.telegram.handlers import BotHandler, CommandContext
+from pyrogram import Client, types
+from bots.clients.telegram.handlers import BotHandler
+from bots.clients.telegram.helpers.message_utils import send_message
 
 HYDRA_IP = ""
 HYDRA_API_KEY = ""
@@ -34,29 +36,29 @@ class NZBSearchHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
         query: str = None,
     ) -> List[dict]:
-        args = arg_parser(context.text)
+        args = arg_parser(message.text)
         query = args.get("link", "") or query
 
         if not query:
-            await client.send_message(
-                context.chat_id,
-                "Send Search Query!\n\n/nzbsearch movie name",
+            await send_message(
+            message,
+            "Send Search Query!\n\n/nzbsearch movie name",
             )
             return []
 
-        msg = await client.send_message(
-            context.chat_id,
+        msg = await send_message(
+            message,
             f"Searching NZB for: {query}",
         )
 
         try:
             if not HYDRA_IP or not HYDRA_API_KEY:
                 await client.edit_message(
-                    context.chat_id,
+                    message.chat.id,
                     msg.id,
                     "NZBHydra not configured. Set HYDRA_IP and HYDRA_API_KEY.",
                 )
@@ -82,7 +84,7 @@ class NZBSearchHandler(BotHandler):
                 ) as response:
                     if response.status != 200:
                         await client.edit_message(
-                            context.chat_id,
+                            message.chat.id,
                             msg.id,
                             f"Search failed: Status {response.status}",
                         )
@@ -94,7 +96,7 @@ class NZBSearchHandler(BotHandler):
 
                     if not items:
                         await client.edit_message(
-                            context.chat_id,
+                            message.chat.id,
                             msg.id,
                             f"No results for: {query}",
                         )
@@ -151,7 +153,7 @@ class NZBSearchHandler(BotHandler):
                         result_text = result_text[:3500] + "\n... (truncated)"
 
                     await client.edit_message(
-                        context.chat_id,
+                        message.chat.id,
                         msg.id,
                         result_text,
                         reply_markup,
@@ -162,7 +164,7 @@ class NZBSearchHandler(BotHandler):
         except Exception as e:
             logger.error(f"NZB search error: {e}")
             await client.edit_message(
-                context.chat_id,
+                message.chat.id,
                 msg.id,
                 f"Error: {str(e)}",
             )

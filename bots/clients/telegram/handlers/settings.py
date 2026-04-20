@@ -5,7 +5,9 @@ from typing import Any
 
 from bots.clients.telegram.helpers.message_utils import arg_parser
 from bots.clients.telegram.helpers.button_utils import ButtonMaker
-from bots.clients.telegram.handlers import BotHandler, CommandContext
+from pyrogram import Client, types
+from bots.clients.telegram.handlers import BotHandler
+from bots.clients.telegram.helpers.message_utils import send_message
 
 SUDO_USERS = []
 
@@ -28,11 +30,11 @@ class UserSettingsHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
         action: str = "menu",
     ) -> str:
-        args = arg_parser(context.text)
+        args = arg_parser(message.text)
         option = args.get("link", "")
 
         if action == "menu":
@@ -53,21 +55,27 @@ class UserSettingsHandler(BotHandler):
             buttons.data_button("6", "uset advanced")
             reply_markup = buttons.build_menu(2)
 
-            await client.send_message(context.chat_id, text, reply_markup)
+            await send_message(
+            message,
+            text, reply_markup)
 
         elif action == "get":
             text = "Use /usetting menu"
-            await client.send_message(context.chat_id, text)
+            await send_message(
+            message,
+            text)
 
         elif action == "set":
-            await client.send_message(
-                context.chat_id,
-                "Send setting key=value\n\nExample: THUMBNAIL=true",
+            await send_message(
+            message,
+            "Send setting key=value\n\nExample: THUMBNAIL=true",
             )
 
         else:
             text = "Use /usetting menu"
-            await client.send_message(context.chat_id, text)
+            await send_message(
+            message,
+            text)
 
         return text
 
@@ -77,8 +85,8 @@ class BotSettingsHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
         action: str = "menu",
     ) -> str:
         if action == "menu":
@@ -97,16 +105,22 @@ class BotSettingsHandler(BotHandler):
             buttons.data_button("5", "bset buttons")
             reply_markup = buttons.build_menu(2)
 
-            await client.send_message(context.chat_id, text, reply_markup)
+            await send_message(
+            message,
+            text, reply_markup)
 
         elif action == "sudo":
             sudo_list = ", ".join(str(s) for s in SUDO_USERS)
             text = f"Sudo Users:\n{sudo_list or 'None'}"
-            await client.send_message(context.chat_id, text)
+            await send_message(
+            message,
+            text)
 
         else:
             text = "Use /bsetting menu"
-            await client.send_message(context.chat_id, text)
+            await send_message(
+            message,
+            text)
 
         return text
 
@@ -116,8 +130,8 @@ class ServicesHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
         action: str = "status",
     ) -> str:
         services = ["aria2", "qbittorrent", "rclone", "ffmpeg", "sabnzbd"]
@@ -133,19 +147,27 @@ class ServicesHandler(BotHandler):
             buttons.data_button("Restart All", "service restart")
             reply_markup = buttons.build_menu(1)
 
-            await client.send_message(context.chat_id, text, reply_markup)
+            await send_message(
+            message,
+            text, reply_markup)
 
         elif action == "start":
             text = "Starting services..."
-            await client.send_message(context.chat_id, text)
+            await send_message(
+            message,
+            text)
 
         elif action == "stop":
             text = "Stopping services..."
-            await client.send_message(context.chat_id, text)
+            await send_message(
+            message,
+            text)
 
         elif action == "restart":
             text = "Restarting services..."
-            await client.send_message(context.chat_id, text)
+            await send_message(
+            message,
+            text)
 
         return text
 
@@ -155,21 +177,21 @@ class IMDBHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
     ) -> dict:
-        args = arg_parser(context.text)
+        args = arg_parser(message.text)
         query = args.get("link", "")
 
         if not query:
-            await client.send_message(
-                context.chat_id,
-                "Send Movie Name along with /imdb Command!\n\n/imdb Inception",
+            await send_message(
+            message,
+            "Send Movie Name along with /imdb Command!\n\n/imdb Inception",
             )
             return {}
 
-        await client.send_message(
-            context.chat_id,
+        await send_message(
+            message,
             f"Searching: {query}",
         )
 
@@ -189,22 +211,26 @@ class IMDBHandler(BotHandler):
 
                 if result.get("poster"):
                     await client.send_photo(
-                        context.chat_id,
+                        message.chat.id,
                         result["poster"],
                         text,
                     )
                 else:
-                    await client.send_message(context.chat_id, text)
+                    await send_message(
+            message,
+            text)
 
                 return result
             else:
-                await client.send_message(context.chat_id, "No results found!")
+                await send_message(
+            message,
+            "No results found!")
 
         except Exception as e:
             logger.error(f"IMDB error: {e}")
-            await client.send_message(
-                context.chat_id,
-                f"Error: {str(e)}",
+            await send_message(
+            message,
+            f"Error: {str(e)}",
             )
 
         return {}
@@ -237,11 +263,11 @@ class HelpHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
         command: str = None,
     ) -> str:
-        args = arg_parser(context.text)
+        args = arg_parser(message.text)
         command = args.get("link", "")
 
         if command:
@@ -263,7 +289,9 @@ class HelpHandler(BotHandler):
             text += "/ping - Ping bot\n"
             text += "/help - Help menu"
 
-        await client.send_message(context.chat_id, text)
+        await send_message(
+            message,
+            text)
         return text
 
 

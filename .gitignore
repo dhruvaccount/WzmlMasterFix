@@ -70,3 +70,10 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+
+# AI Assistants
+AGENTS.md
+.github/copilot-instructions.md
+.cursor/
+.cursorrules
+.github/prompts/**

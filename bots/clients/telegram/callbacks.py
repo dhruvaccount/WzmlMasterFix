@@ -46,9 +46,10 @@ async def status_pages(client: Client, callback: types.CallbackQuery):
             return
 
         import pyrogram
+        from bots.clients.telegram.helpers.message_utils import edit_message
 
-        await callback.message.edit_text(
-            msg, reply_markup=reply_markup, parse_mode=pyrogram.enums.ParseMode.HTML
+        await edit_message(
+            callback.message, msg, reply_markup, parse_mode=pyrogram.enums.ParseMode.HTML
         )
         await callback.answer()
     except Exception as e:
@@ -72,9 +73,10 @@ async def status_refresh(client: Client, callback: types.CallbackQuery):
             return
 
         import pyrogram
+        from bots.clients.telegram.helpers.message_utils import edit_message
 
-        await callback.message.edit_text(
-            msg, reply_markup=reply_markup, parse_mode=pyrogram.enums.ParseMode.HTML
+        await edit_message(
+            callback.message, msg, reply_markup, parse_mode=pyrogram.enums.ParseMode.HTML
         )
         await callback.answer()
     except Exception as e:
@@ -155,23 +157,21 @@ async def edit_user_settings(client: Client, callback: types.CallbackQuery):
 async def cancel_all_update(client: Client, callback: types.CallbackQuery):
     """Handle cancel all confirmation"""
     try:
-        from core.task import get_tasks, TaskStatus
-        from core.queue import get_queue_manager
+        from bots.api import api_client
         import pyrogram
 
         user_id = callback.from_user.id
-        tasks = await get_tasks(user_id=user_id)
-        active_tasks = [t for t in tasks if t.is_active]
+        result = await api_client.get_active_tasks(user_id=user_id)
+        active_tasks = result.get("data", [])
 
         if not active_tasks:
             await callback.answer("No active tasks found!", show_alert=True)
             return
 
         count = 0
-        manager = get_queue_manager()
         for task in active_tasks:
             try:
-                await manager.cancel(task.id)
+                await api_client.cancel_task_v2(task["id"])
                 count += 1
             except Exception:
                 pass
@@ -184,8 +184,9 @@ async def cancel_all_update(client: Client, callback: types.CallbackQuery):
         handler = StatusHandler()
         msg, reply_markup = await handler.get_status_message(user_filter=None, page=1)
         if msg:
-            await callback.message.edit_text(
-                msg, reply_markup=reply_markup, parse_mode=pyrogram.enums.ParseMode.HTML
+            from bots.clients.telegram.helpers.message_utils import edit_message
+            await edit_message(
+                callback.message, msg, reply_markup, parse_mode=pyrogram.enums.ParseMode.HTML
             )
         else:
             await callback.message.delete()
@@ -206,14 +207,12 @@ async def cancel_multi(client: Client, callback: types.CallbackQuery):
             await callback.answer("Task ID not provided!", show_alert=True)
             return
 
-        from core.task import cancel_task
-        from core.queue import get_queue_manager
+        from bots.api import api_client
 
         try:
-            task = await cancel_task(task_id)
-            if task:
-                await get_queue_manager().cancel(task.id)
-                await callback.answer(f"Task cancelled: {task.id[:8]}", show_alert=True)
+            res = await api_client.cancel_task_v2(task_id)
+            if "error" not in res:
+                await callback.answer(f"Task cancelled: {task_id[:8]}", show_alert=True)
             else:
                 await callback.answer(
                     "Task not found or already completed.", show_alert=True

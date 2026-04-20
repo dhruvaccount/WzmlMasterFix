@@ -7,7 +7,9 @@ from bots.clients.telegram.helpers.message_utils import arg_parser, is_gdrive_li
 from core.status_utils import get_readable_file_size
 from bots.clients.telegram.helpers.button_utils import ButtonMaker
 from core.plugin_loader import get_plugin
-from bots.clients.telegram.handlers import BotHandler, CommandContext
+from pyrogram import Client, types
+from bots.clients.telegram.handlers import BotHandler
+from bots.clients.telegram.helpers.message_utils import send_message
 
 logger = logging.getLogger("wzml.bot.handlers.gdrive")
 
@@ -17,24 +19,24 @@ class GDriveCountHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
     ) -> dict:
-        args = arg_parser(context.text)
+        args = arg_parser(message.text)
         link = args.get("link", "")
 
         if not link and context.reply_to_message:
             link = context.reply_to_message.text.split(maxsplit=1)[0].strip()
 
         if not is_gdrive_link(link):
-            await client.send_message(
-                context.chat_id,
-                "Send Gdrive link along with command or by replying to the link by command",
+            await send_message(
+            message,
+            "Send Gdrive link along with command or by replying to the link by command",
             )
             return {}
 
-        msg = await client.send_message(
-            context.chat_id,
+        msg = await send_message(
+            message,
             f"Counting: {link[:100]}",
         )
 
@@ -42,7 +44,7 @@ class GDriveCountHandler(BotHandler):
             gdrive = get_plugin("gdrive")
             if not gdrive:
                 await client.edit_message(
-                    context.chat_id,
+                    message.chat.id,
                     msg.id,
                     "GDrive plugin not initialized",
                 )
@@ -53,7 +55,7 @@ class GDriveCountHandler(BotHandler):
 
             if not file:
                 await client.edit_message(
-                    context.chat_id,
+                    message.chat.id,
                     msg.id,
                     "File not found",
                 )
@@ -70,14 +72,14 @@ class GDriveCountHandler(BotHandler):
             }
 
             text = f"Name: {name}\nSize: {result['size']}\nType: {mime_type}"
-            await client.edit_message(context.chat_id, msg.id, text)
+            await client.edit_message(message.chat.id, msg.id, text)
 
             return result
 
         except Exception as e:
             logger.error(f"GDrive count error: {e}")
             await client.edit_message(
-                context.chat_id,
+                message.chat.id,
                 msg.id,
                 f"Error: {str(e)}",
             )
@@ -89,29 +91,31 @@ class GDriveDeleteHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
     ) -> bool:
-        args = arg_parser(context.text)
+        args = arg_parser(message.text)
         link = args.get("link", "")
 
         if not link and context.reply_to_message:
             link = context.reply_to_message.text.split(maxsplit=1)[0].strip()
 
         if not is_gdrive_link(link):
-            await client.send_message(
-                context.chat_id,
-                "Send Gdrive link along with command or by replying to the link by command",
+            await send_message(
+            message,
+            "Send Gdrive link along with command or by replying to the link by command",
             )
             return False
 
-        msg = await client.send_message(context.chat_id, "Deleting...")
+        msg = await send_message(
+            message,
+            "Deleting...")
 
         try:
             gdrive = get_plugin("gdrive")
             if not gdrive:
                 await client.edit_message(
-                    context.chat_id,
+                    message.chat.id,
                     msg.id,
                     "GDrive plugin not initialized",
                 )
@@ -122,13 +126,13 @@ class GDriveDeleteHandler(BotHandler):
 
             if success:
                 await client.edit_message(
-                    context.chat_id,
+                    message.chat.id,
                     msg.id,
                     "File deleted successfully",
                 )
             else:
                 await client.edit_message(
-                    context.chat_id,
+                    message.chat.id,
                     msg.id,
                     "Failed to delete file",
                 )
@@ -138,7 +142,7 @@ class GDriveDeleteHandler(BotHandler):
         except Exception as e:
             logger.error(f"GDrive delete error: {e}")
             await client.edit_message(
-                context.chat_id,
+                message.chat.id,
                 msg.id,
                 f"Error: {str(e)}",
             )
@@ -150,24 +154,24 @@ class GDriveListHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
     ) -> List[dict]:
-        args = arg_parser(context.text)
+        args = arg_parser(message.text)
         query = args.get("link", "")
 
         if not query and context.reply_to_message:
             query = context.reply_to_message.text.split(maxsplit=1)[1].strip()
 
         if not query:
-            await client.send_message(
-                context.chat_id,
-                "Send a search query along with list command",
+            await send_message(
+            message,
+            "Send a search query along with list command",
             )
             return []
 
-        msg = await client.send_message(
-            context.chat_id,
+        msg = await send_message(
+            message,
             f"Searching GDrive for: {query}",
         )
 
@@ -175,7 +179,7 @@ class GDriveListHandler(BotHandler):
             gdrive = get_plugin("gdrive")
             if not gdrive:
                 await client.edit_message(
-                    context.chat_id,
+                    message.chat.id,
                     msg.id,
                     "GDrive plugin not initialized",
                 )
@@ -185,7 +189,7 @@ class GDriveListHandler(BotHandler):
 
             if not results:
                 await client.edit_message(
-                    context.chat_id,
+                    message.chat.id,
                     msg.id,
                     f"No results found for: {query}",
                 )
@@ -204,7 +208,7 @@ class GDriveListHandler(BotHandler):
             reply_markup = buttons.build_menu(2) if results else None
 
             await client.edit_message(
-                context.chat_id,
+                message.chat.id,
                 msg.id,
                 text,
                 reply_markup,
@@ -215,7 +219,7 @@ class GDriveListHandler(BotHandler):
         except Exception as e:
             logger.error(f"GDrive list error: {e}")
             await client.edit_message(
-                context.chat_id,
+                message.chat.id,
                 msg.id,
                 f"Error: {str(e)}",
             )

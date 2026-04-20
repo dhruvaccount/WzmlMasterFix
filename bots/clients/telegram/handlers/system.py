@@ -10,7 +10,9 @@ from typing import Any
 from core.task import get_tasks, TaskStatus
 from core.queue import get_queue_manager
 from bots.clients.telegram.helpers.message_utils import arg_parser
-from bots.clients.telegram.handlers import BotHandler, CommandContext
+from pyrogram import Client, types
+from bots.clients.telegram.handlers import BotHandler
+from bots.clients.telegram.helpers.message_utils import send_message
 
 logger = logging.getLogger("wzml.bot.handlers.system")
 
@@ -23,18 +25,20 @@ class PingHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
     ) -> float:
         start = time.time()
-        msg = await client.send_message(context.chat_id, "Pong!")
+        msg = await send_message(
+            message,
+            "Pong!")
         latency = (time.time() - start) * 1000
 
         uptime = datetime.now() - self._start_time
         uptime_str = str(uptime).split(".")[0]
 
         text = f"Pong!\n\nLatency: {latency:.2f} ms\nUptime: {uptime_str}"
-        await client.edit_message(context.chat_id, msg.id, text)
+        await client.edit_message(message.chat.id, msg.id, text)
 
         return latency
 
@@ -44,8 +48,8 @@ class StatsHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
     ) -> dict:
         queue_manager = get_queue_manager()
         queue_stats = await queue_manager.get_stats()
@@ -76,7 +80,9 @@ class StatsHandler(BotHandler):
         text += f"Queued: {queue_stats.pending}\n"
         text += f"Running: {queue_stats.running}"
 
-        await client.send_message(context.chat_id, text)
+        await send_message(
+            message,
+            text)
 
         return stats
 
@@ -86,22 +92,26 @@ class LogHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
     ) -> str:
-        args = arg_parser(context.text)
+        args = arg_parser(message.text)
         lines = int(args.get("-n", 50))
 
         log_dir = "logs"
 
         if not os.path.exists(log_dir):
-            await client.send_message(context.chat_id, "No logs found!")
+            await send_message(
+            message,
+            "No logs found!")
             return ""
 
         log_files = [f for f in os.listdir(log_dir) if f.endswith(".log")]
 
         if not log_files:
-            await client.send_message(context.chat_id, "No logs found!")
+            await send_message(
+            message,
+            "No logs found!")
             return ""
 
         latest_log = os.path.join(log_dir, sorted(log_files)[-1])
@@ -115,7 +125,9 @@ class LogHandler(BotHandler):
             log_text = log_text[-3500:]
 
         log_text = f"<pre>{log_text}</pre>"
-        await client.send_message(context.chat_id, log_text)
+        await send_message(
+            message,
+            log_text)
 
         return log_text
 
@@ -125,18 +137,24 @@ class RestartHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
         mode: str = "bot",
     ) -> str:
         if mode == "bot":
-            await client.send_message(context.chat_id, "Restarting Bot...")
+            await send_message(
+            message,
+            "Restarting Bot...")
             return "Bot restart initiated"
         elif mode == "services":
-            await client.send_message(context.chat_id, "Restarting Services...")
+            await send_message(
+            message,
+            "Restarting Services...")
             return "Services restart initiated"
         elif mode == "all":
-            await client.send_message(context.chat_id, "Restarting All...")
+            await send_message(
+            message,
+            "Restarting All...")
             return "Full restart initiated"
 
 
@@ -145,21 +163,23 @@ class ExecHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
         is_async: bool = False,
     ) -> str:
-        args = arg_parser(context.text)
+        args = arg_parser(message.text)
         command = args.get("link", "")
 
         if not command:
-            await client.send_message(
-                context.chat_id,
-                "Send Shell Command along with /exec Command!",
+            await send_message(
+            message,
+            "Send Shell Command along with /exec Command!",
             )
             return ""
 
-        msg = await client.send_message(context.chat_id, "Executing...")
+        msg = await send_message(
+            message,
+            "Executing...")
 
         try:
             result = subprocess.run(
@@ -179,11 +199,13 @@ class ExecHandler(BotHandler):
         output = f"<pre>{output}</pre>"
 
         try:
-            await client.delete_message(context.chat_id, msg.id)
+            await client.delete_message(message.chat.id, msg.id)
         except:
             pass
 
-        await client.send_message(context.chat_id, output)
+        await send_message(
+            message,
+            output)
 
         return output
 
@@ -193,19 +215,23 @@ class ShellHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
     ) -> str:
         import asyncio
 
-        args = arg_parser(context.text)
+        args = arg_parser(message.text)
         cmd = args.get("link", "")
 
         if not cmd:
-            await client.send_message(context.chat_id, "Send Shell Command!")
+            await send_message(
+            message,
+            "Send Shell Command!")
             return ""
 
-        await client.send_message(context.chat_id, f"Executing: {cmd}")
+        await send_message(
+            message,
+            f"Executing: {cmd}")
 
         try:
             process = await asyncio.create_subprocess_shell(
@@ -222,7 +248,9 @@ class ShellHandler(BotHandler):
             result = result[:3500] + "\n... (truncated)"
 
         result = f"<pre>{result}</pre>"
-        await client.send_message(context.chat_id, result)
+        await send_message(
+            message,
+            result)
 
         return result
 
@@ -232,17 +260,17 @@ class BroadcastHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
         message: str = None,
     ) -> int:
-        args = arg_parser(context.text)
+        args = arg_parser(message.text)
         message = args.get("link", "") or message
 
         if not message:
-            await client.send_message(
-                context.chat_id,
-                "Send message to broadcast!",
+            await send_message(
+            message,
+            "Send message to broadcast!",
             )
             return 0
 
@@ -260,8 +288,8 @@ class BroadcastHandler(BotHandler):
             except Exception as e:
                 logger.error(f"Broadcast to {user_id} failed: {e}")
 
-        await client.send_message(
-            context.chat_id,
+        await send_message(
+            message,
             f"Broadcasted to {count} Users",
         )
 

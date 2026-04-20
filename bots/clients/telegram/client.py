@@ -1,6 +1,9 @@
 """Telegram client using split handlers"""
 
 import logging
+import asyncio
+import json
+import websockets
 from typing import Any, Callable, Dict, Optional
 
 try:
@@ -9,11 +12,17 @@ try:
 except ImportError:
     raise ImportError("pyrogram required: pip install pyrotgfork")
 
+from config import get_config
 from bots.base import ClientAdapter
-from bots.clients.telegram.handlers import BotHandler, CommandContext
+from bots.clients.telegram.handlers import BotHandler
 
 logger = logging.getLogger("wzml.telegram.client")
 
+
+_status_handler_instance = None
+
+def get_status_handler():
+    return _status_handler_instance
 
 class TelegramClient(ClientAdapter):
     """Telegram client adapter using split handlers"""
@@ -55,6 +64,7 @@ class TelegramClient(ClientAdapter):
         await self._bot.start()
 
         from bots.clients.telegram.helpers.message_utils import set_telegram_client
+        from bots.clients.telegram.callbacks import register_callbacks
 
         set_telegram_client(self._bot)
 
@@ -63,16 +73,44 @@ class TelegramClient(ClientAdapter):
 
         self._register_handlers()
         await self._register_pyrogram_handlers()
+        await register_callbacks(self._bot)
 
         self._running = True
         logger.info(f"Telegram client initialized with {len(self._handlers)} handlers")
+        
+        import asyncio
+        self._ws_task = asyncio.create_task(self.listen_to_ws())
 
         return True
+
+    async def listen_to_ws(self):
+        cfg = get_config()
+        host = cfg.limits.API_HOST if cfg.limits.API_HOST != "0.0.0.0" else "127.0.0.1"
+        uri = f"ws://{host}:{cfg.limits.API_PORT}/api/status/ws"
+        while self._running:
+            try:
+                async with websockets.connect(uri) as ws:
+                    logger.info("Connected to core API websocket EventBus")
+                    async for message in ws:
+                        event = json.loads(message)
+                        await self._dispatch_ws_event(event)
+            except Exception as e:
+                logger.error(f"WS disconnected: {e}")
+                await asyncio.sleep(3) # reconnect backoff
+
+    async def _dispatch_ws_event(self, event):
+        # Update matching status messages directly from RAM/cache mapping
+        from bots.clients.telegram.client import get_status_handler
+        status_handler = get_status_handler()
+        if status_handler:
+            await status_handler.handle_ws_event(self._bot, event)
 
     async def stop(self) -> bool:
         if self._bot:
             await self._bot.stop()
         self._running = False
+        if hasattr(self, "_ws_task"):
+            self._ws_task.cancel()
         logger.info("Telegram client stopped")
         return True
 
@@ -118,6 +156,10 @@ class TelegramClient(ClientAdapter):
         cancel = CancelHandler()
         cancel_all = CancelAllHandler()
         status = StatusHandler()
+        
+        global _status_handler_instance
+        _status_handler_instance = status
+        
         search = SearchHandler()
         rss = RSSHandler()
         gdrive_count = GDriveCountHandler()
@@ -190,32 +232,18 @@ class TelegramClient(ClientAdapter):
             command = message.command[0].lower() if message.command else ""
             logger.info(f"Command: {command}")
 
-            from config import get_config
+            from bots.clients.telegram.helpers.filters import CustomFilters
 
-            cfg = get_config()
             user_id = message.from_user.id if message.from_user else 0
-            owner_id = cfg.telegram.OWNER_ID
-
-            logger.info(f"User: {user_id}, Owner: {owner_id}")
-
-            sudo_users = cfg.telegram.SUDO_USERS or []
-            if owner_id and user_id != owner_id and user_id not in sudo_users:
-                logger.warning(f"Unauthorized user {user_id} (owner: {owner_id})")
+            
+            if not await CustomFilters.is_authorized(user_id):
+                logger.warning(f"Unauthorized user {user_id}")
                 await message.reply("Unauthorized")
                 return
 
             if command in self._handlers:
-                from bots.clients.telegram.handlers import CommandContext
-
-                context = CommandContext(
-                    chat_id=message.chat.id,
-                    user_id=message.from_user.id if message.from_user else 0,
-                    message_id=message.id,
-                    text=message.text or "",
-                    reply_to_message=message.reply_to_message,
-                )
                 try:
-                    await self._handlers[command](context, self)
+                    await self._handlers[command](self._bot, message)
                     logger.info(f"Handled command: {command}")
                 except Exception as e:
                     logger.error(f"Handler error for {command}: {e}")

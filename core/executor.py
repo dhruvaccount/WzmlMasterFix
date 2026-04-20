@@ -12,6 +12,7 @@ from core.exceptions import (
 from core.pipeline import Pipeline, PipelineStage, get_pipeline, ErrorPolicy
 from core.registry import get_registry
 from core.task import Task, TaskStatus, update_task_progress
+from core.events import event_bus
 
 
 logger = logging.getLogger("wzml.executor")
@@ -136,12 +137,13 @@ class Executor:
         try:
             result = await action_method(plugin_context, stage.config.__dict__)
 
-            await update_task_progress(
+            t = await update_task_progress(
                 task.id,
                 stage=stage.name or f"stage_{stage_index}",
                 plugin=plugin_name,
                 progress=100.0,
             )
+            await event_bus.publish("task_progress", t.to_dict())
 
             return ExecutionResult(
                 success=True,

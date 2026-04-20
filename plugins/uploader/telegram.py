@@ -110,35 +110,37 @@ class TelegramUploader(UploaderPlugin):
                         )
                         last_update = now
 
-                # We use the global pyrogram client directly
-                # If the bot is actually the raw client:
-                client = self._bot
+                from bots.clients.telegram.helpers.message_utils import send_photo, send_video, send_audio, send_document
+
+                flags = context.metadata.get("flags", {})
+                force_document = "-d" in flags or "-doc" in flags or "-document" in flags
+                force_media = "-m" in flags or "-med" in flags or "-media" in flags
 
                 logger.info(f"Uploading to Telegram: {part_name}")
-                if file_ext in [".jpg", ".jpeg", ".png", ".gif"]:
-                    msg = await client.send_photo(
+                if not force_document and (force_media or file_ext in [".jpg", ".jpeg", ".png", ".gif"]):
+                    msg = await send_photo(
                         chat_id=chat_id,
                         photo=part_path,
                         caption=part_caption,
                         progress=progress_callback,
                     )
-                elif file_ext in [".mp4", ".mkv", ".avi", ".mov", ".webm"]:
-                    msg = await client.send_video(
+                elif not force_document and (force_media or file_ext in [".mp4", ".mkv", ".avi", ".mov", ".webm"]):
+                    msg = await send_video(
                         chat_id=chat_id,
                         video=part_path,
                         caption=part_caption,
                         progress=progress_callback,
                         supports_streaming=True,
                     )
-                elif file_ext in [".mp3", ".ogg", ".m4a", ".wav", ".flac"]:
-                    msg = await client.send_audio(
+                elif not force_document and (force_media or file_ext in [".mp3", ".ogg", ".m4a", ".wav", ".flac"]):
+                    msg = await send_audio(
                         chat_id=chat_id,
                         audio=part_path,
                         caption=part_caption,
                         progress=progress_callback,
                     )
                 else:
-                    msg = await client.send_document(
+                    msg = await send_document(
                         chat_id=chat_id,
                         document=part_path,
                         caption=part_caption,

@@ -5,11 +5,11 @@ from typing import Optional, Any
 from dataclasses import dataclass
 from pyrogram import enums
 
-from core.task import Task, TaskStatus, create_task, get_tasks, cancel_task
-from core.queue import enqueue_task, get_queue_manager
-from bots.clients.telegram.helpers.message_utils import arg_parser
+from pyrogram import Client, types
+from bots.clients.telegram.helpers.message_utils import arg_parser, send_message
 from bots.clients.telegram.helpers.button_utils import ButtonMaker
-from bots.clients.telegram.handlers import BotHandler, CommandContext
+from bots.clients.telegram.handlers import BotHandler
+from bots.api import api_client
 
 logger = logging.getLogger("wzml.bot.handlers.mirror")
 
@@ -55,86 +55,71 @@ CLONE_USAGE = """<b>Clone Usage</b>
 /clone <gdrive_link> - Clone Google Drive folder
 """
 
-STATUS_USAGE = """<b>Status Usage</b>
-
-/status - Show all active tasks
-/status me - Show your tasks
-/status <user_id> - Show specific user's tasks
-"""
-
-
 @dataclass
 class MirrorResult:
-    task: Optional[Task] = None
+    task: Optional[Any] = None
     message: str = ""
-
 
 class MirrorHandler(BotHandler):
     """Handler for mirror, leech, qb, jd, nzb commands"""
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
         is_leech: bool = False,
         is_qbit: bool = False,
         is_jd: bool = False,
         is_nzb: bool = False,
     ) -> MirrorResult:
-        args = arg_parser(context.text)
+        args = arg_parser(message.text)
         link = args.get("link", "").strip()
 
         if not link:
-            await client.send_message(
-                context.chat_id, MIRROR_USAGE, parse_mode=enums.ParseMode.HTML
-            )
+            await send_message(message, MIRROR_USAGE, parse_mode=enums.ParseMode.HTML)
             return MirrorResult()
 
-        if is_qbit:
-            pipeline_id = "qb_leech" if is_leech else "qb_mirror"
-        elif is_jd:
-            pipeline_id = "jd_leech" if is_leech else "jd_mirror"
-        elif is_nzb:
-            pipeline_id = "nzb_leech" if is_leech else "nzb_mirror"
-        elif is_leech:
-            pipeline_id = "telegram"
-        else:
-            pipeline_id = "gdrive"
-
         metadata = {
-            "is_leech": is_leech,
-            "is_qbit": is_qbit,
             "is_jd": is_jd,
             "is_nzb": is_nzb,
             "flags": args,
-            "chat_id": context.chat_id,
-            "user_id": context.user_id,
+            "chat_id": message.chat.id,
+            "user_id": message.from_user.id,
+            "ui_data": {
+                "mention": message.from_user.mention(style='html'),
+                "user_id": message.from_user.id,
+                "message_link": message.link,
+                "out_mode": "document" if args.get("-doc") else "media"
+            }
         }
 
-        task = await create_task(
+        result = await api_client.create_mirror(
             source=link,
-            pipeline_id=pipeline_id,
-            user_id=context.user_id,
+            user_id=message.from_user.id,
             destination=args.get("d", ""),
-            metadata=metadata,
+            is_leech=is_leech,
+            is_qbit=is_qbit,
+            metadata=metadata
         )
 
-        await enqueue_task(task)
+        if "error" in result:
+            await send_message(message, f"<b>Error:</b> {result['error']}", parse_mode=enums.ParseMode.HTML)
+            return MirrorResult()
+
+        task_data = result.get("data", {})
+        task_id = task_data.get("id", "Unknown")
 
         buttons = ButtonMaker()
-        buttons.data_button("Cancel", f"cancel {task.id[:20]}")
+        buttons.data_button("Cancel", f"cancel {task_id[:20]}")
         reply_markup = buttons.build_menu(1)
 
         msg = f"<b>Task Queued</b>\n\n"
-        msg += f"ID: <code>{task.id[:20]}</code>\n"
+        msg += f"ID: <code>{task_id[:20]}</code>\n"
         msg += f"Mode: {'Leech' if is_leech else 'Mirror'}\n"
         msg += f"Source: {link[:100]}"
 
-        await client.send_message(
-            context.chat_id, msg, reply_markup, parse_mode=enums.ParseMode.HTML
-        )
-
-        return MirrorResult(task=task, message=msg)
+        await send_message(message, msg, reply_markup, parse_mode=enums.ParseMode.HTML)
+        return MirrorResult(task=task_data, message=msg)
 
 
 class YtdlpHandler(BotHandler):
@@ -142,51 +127,42 @@ class YtdlpHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
         is_leech: bool = False,
     ) -> MirrorResult:
-        args = arg_parser(context.text)
+        args = arg_parser(message.text)
         link = args.get("link", "").strip()
 
         if not link:
-            await client.send_message(
-                context.chat_id, YTDLP_USAGE, parse_mode=enums.ParseMode.HTML
-            )
+            await send_message(message, YTDLP_USAGE, parse_mode=enums.ParseMode.HTML)
             return MirrorResult()
 
-        pipeline_id = "yt_telegram" if is_leech else "yt_gdrive"
         quality = args.get("q", "bestvideo+bestaudio/best")
 
-        metadata = {
-            "quality": quality,
-            "is_leech": is_leech,
-            "chat_id": context.chat_id,
-            "user_id": context.user_id,
-        }
-
-        task = await create_task(
-            source=link,
-            pipeline_id=pipeline_id,
-            user_id=context.user_id,
-            metadata=metadata,
+        result = await api_client.create_ytdlp(
+            url=link,
+            user_id=message.from_user.id,
+            quality=quality
         )
 
-        await enqueue_task(task)
+        if "error" in result:
+            await send_message(message, f"<b>Error:</b> {result['error']}", parse_mode=enums.ParseMode.HTML)
+            return MirrorResult()
+
+        task_data = result.get("data", {})
+        task_id = task_data.get("id", "Unknown")
 
         buttons = ButtonMaker()
-        buttons.data_button("Cancel", f"cancel {task.id[:20]}")
+        buttons.data_button("Cancel", f"cancel {task_id[:20]}")
         reply_markup = buttons.build_menu(1)
 
         msg = f"<b>YouTube Download Started</b>\n\n"
-        msg += f"ID: <code>{task.id[:20]}</code>\n"
+        msg += f"ID: <code>{task_id[:20]}</code>\n"
         msg += f"Quality: {quality}"
 
-        await client.send_message(
-            context.chat_id, msg, reply_markup, parse_mode=enums.ParseMode.HTML
-        )
-
-        return MirrorResult(task=task, message=msg)
+        await send_message(message, msg, reply_markup, parse_mode=enums.ParseMode.HTML)
+        return MirrorResult(task=task_data, message=msg)
 
 
 class CloneHandler(BotHandler):
@@ -194,53 +170,46 @@ class CloneHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
     ) -> MirrorResult:
-        args = arg_parser(context.text)
+        args = arg_parser(message.text)
         link = args.get("link", "").strip()
 
         if not link:
-            await client.send_message(
-                context.chat_id, CLONE_USAGE, parse_mode=enums.ParseMode.HTML
-            )
+            await send_message(message, CLONE_USAGE, parse_mode=enums.ParseMode.HTML)
             return MirrorResult()
 
         if "drive.google.com" not in link and "docs.google.com" not in link:
-            await client.send_message(
-                context.chat_id,
+            await send_message(
+                message,
                 "<b>Invalid GDrive Link!</b>\n\nSend a valid Google Drive link.",
                 parse_mode=enums.ParseMode.HTML,
             )
             return MirrorResult()
 
-        metadata = {
-            "chat_id": context.chat_id,
-            "user_id": context.user_id,
-        }
-
-        task = await create_task(
-            source=link,
-            pipeline_id="gdrive_clone",
-            user_id=context.user_id,
-            metadata=metadata,
+        result = await api_client.create_clone(
+            source_id=link,
+            user_id=message.from_user.id,
         )
 
-        await enqueue_task(task)
+        if "error" in result:
+            await send_message(message, f"<b>Error:</b> {result['error']}", parse_mode=enums.ParseMode.HTML)
+            return MirrorResult()
+
+        task_data = result.get("data", {})
+        task_id = task_data.get("id", "Unknown")
 
         buttons = ButtonMaker()
-        buttons.data_button("Cancel", f"cancel {task.id[:20]}")
+        buttons.data_button("Cancel", f"cancel {task_id[:20]}")
         reply_markup = buttons.build_menu(1)
 
         msg = f"<b>Clone Started</b>\n\n"
-        msg += f"ID: <code>{task.id[:20]}</code>\n"
+        msg += f"ID: <code>{task_id[:20]}</code>\n"
         msg += f"Source: {link[:100]}"
 
-        await client.send_message(
-            context.chat_id, msg, reply_markup, parse_mode=enums.ParseMode.HTML
-        )
-
-        return MirrorResult(task=task, message=msg)
+        await send_message(message, msg, reply_markup, parse_mode=enums.ParseMode.HTML)
+        return MirrorResult(task=task_data, message=msg)
 
 
 class CancelHandler(BotHandler):
@@ -248,50 +217,48 @@ class CancelHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
-    ) -> Optional[Task]:
-        args = arg_parser(context.text)
+        client: Client,
+        message: types.Message,
+    ) -> Optional[dict]:
+        args = arg_parser(message.text)
         task_id = args.get("link", "").strip()
+        user_id = message.from_user.id
 
         if task_id:
             if task_id.isdigit():
-                tasks = await get_tasks(
-                    user_id=int(task_id), status=TaskStatus.RUNNING, limit=1
-                )
+                # user requested cancel for another user id's tasks
+                result = await api_client.get_user_tasks(int(task_id), limit=1)
+                tasks = result.get("data", [])
             else:
-                try:
-                    task = await cancel_task(task_id)
-                    if task:
-                        await client.send_message(
-                            context.chat_id,
-                            f"<b>Task Cancelled</b>\n\nID: <code>{task.id[:20]}</code>",
-                            parse_mode=enums.ParseMode.HTML,
-                        )
-                        return task
-                except Exception:
-                    pass
-
-                tasks = await get_tasks(
-                    user_id=context.user_id, status=TaskStatus.RUNNING, limit=1
-                )
+                res = await api_client.cancel_task_v2(task_id)
+                if "error" not in res:
+                    task = res.get("data", {})
+                    await send_message(
+                        message,
+                        f"<b>Task Cancelled</b>\n\nID: <code>{task.get('id', '')[:20]}</code>",
+                        parse_mode=enums.ParseMode.HTML,
+                    )
+                    return task
+                
+                # fallback: get user tasks
+                result = await api_client.get_user_tasks(user_id, limit=1)
+                tasks = result.get("data", [])
         else:
-            tasks = await get_tasks(
-                user_id=context.user_id, status=TaskStatus.RUNNING, limit=1
-            )
+            result = await api_client.get_user_tasks(user_id, limit=1)
+            tasks = result.get("data", [])
 
         if tasks:
             task = tasks[0]
-            await get_queue_manager().cancel(task.id)
-            await client.send_message(
-                context.chat_id,
-                f"<b>Task Cancelled</b>\n\nID: <code>{task.id[:20]}</code>",
+            await api_client.cancel_task_v2(task["id"])
+            await send_message(
+                message,
+                f"<b>Task Cancelled</b>\n\nID: <code>{task.get('id', '')[:20]}</code>",
                 parse_mode=enums.ParseMode.HTML,
             )
             return task
 
-        await client.send_message(
-            context.chat_id,
+        await send_message(
+            message,
             "<b>No Running Task Found!</b>",
             parse_mode=enums.ParseMode.HTML,
         )
@@ -303,20 +270,20 @@ class CancelAllHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
     ) -> int:
-        tasks = await get_tasks(
-            user_id=context.user_id, status=TaskStatus.RUNNING, limit=50
-        )
+        result = await api_client.get_user_tasks(message.from_user.id, limit=50)
+        tasks = result.get("data", [])
 
         count = 0
         for task in tasks:
-            await get_queue_manager().cancel(task.id)
-            count += 1
+            if task.get("status") in ["queued", "running", "paused"]:
+                await api_client.cancel_task_v2(task["id"])
+                count += 1
 
-        await client.send_message(
-            context.chat_id,
+        await send_message(
+            message,
             f"<b>{count} Tasks Cancelled!</b>",
             parse_mode=enums.ParseMode.HTML,
         )

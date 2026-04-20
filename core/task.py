@@ -3,6 +3,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
+from core.events import event_bus
 from core.exceptions import (
     TaskNotFoundError,
     TaskNotPendingError,
@@ -127,24 +128,32 @@ class Task:
             raise TaskNotPendingError(self.id, self.status, [TaskStatus.PENDING])
         self.status = TaskStatus.QUEUED
         self.queued_at = datetime.now()
+        import asyncio
+        asyncio.create_task(event_bus.publish("task_queued", self.to_dict()))
 
     def start(self) -> None:
         if self.status != TaskStatus.QUEUED:
             raise TaskNotPendingError(self.id, self.status, [TaskStatus.QUEUED])
         self.status = TaskStatus.RUNNING
         self.started_at = datetime.now()
+        import asyncio
+        asyncio.create_task(event_bus.publish("task_started", self.to_dict()))
 
     def complete(self) -> None:
         self.status = TaskStatus.COMPLETED
         self.completed_at = datetime.now()
         self.progress.stage = "completed"
         self.progress.progress = 100.0
+        import asyncio
+        asyncio.create_task(event_bus.publish("task_completed", self.to_dict()))
 
     def fail(self, error: str) -> None:
         self.status = TaskStatus.FAILED
         self.error = error
         self.completed_at = datetime.now()
         self.progress.stage = "failed"
+        import asyncio
+        asyncio.create_task(event_bus.publish("task_failed", self.to_dict()))
 
     def cancel(self) -> None:
         if not self.can_cancel:
@@ -294,4 +303,8 @@ async def update_task_progress(
     task.progress.downloaded = downloaded
     task.progress.uploaded = uploaded
     task.progress.total = total
+    
+    import asyncio
+    asyncio.create_task(event_bus.publish("task_progress", task.to_dict()))
+    
     return task

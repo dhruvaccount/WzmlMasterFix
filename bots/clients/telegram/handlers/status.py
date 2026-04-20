@@ -6,10 +6,11 @@ import psutil
 from typing import Optional, Any
 from pyrogram import enums
 
-from core.task import get_tasks, TaskStatus, Task
-from core.queue import get_queue_stats
-from bots.clients.telegram.handlers import BotHandler, CommandContext
+from pyrogram import Client, types
+from bots.clients.telegram.handlers import BotHandler
+from bots.clients.telegram.helpers.message_utils import send_message
 from bots.clients.telegram.helpers.button_utils import ButtonMaker
+from bots.api import api_client
 from config.telegram import TelegramConfig
 
 logger = logging.getLogger("wzml.bot.handlers.status")
@@ -42,29 +43,79 @@ def get_readable_time(seconds: float) -> str:
 def get_progress_bar_string(pct: float) -> str:
     p = min(max(pct, 0), 100)
     cFull = int(p // 8)
-    p_str = "■" * cFull
-    p_str += "□" * (12 - cFull)
+    p_str = "⬢" * cFull
+    p_str += "⬡" * (12 - cFull)
     return f"[{p_str}]"
 
 
 class StatusHandler(BotHandler):
     TASKS_PER_PAGE = 4
+    
+    def __init__(self):
+        super().__init__()
+        self._active_status_messages = {}
+
+    async def handle_ws_event(self, client: Client, event: dict):
+        if not hasattr(self, "_active_status_messages") or not self._active_status_messages:
+            return
+
+        import time
+        now = time.time()
+        
+        # throttle UI updates to at most once per 2.5 seconds roughly
+        if not hasattr(self, "_last_ws_update"):
+            self._last_ws_update = 0
+            
+        if now - self._last_ws_update < 2.5:
+            return
+            
+        self._last_ws_update = now
+        
+        for msg_id, data in list(self._active_status_messages.items()):
+            chat_id = data["chat_id"]
+            user_filter = data["user_filter"]
+            page = data["page"]
+            msg_obj = data["message_obj"]
+            
+            try:
+                text, reply_markup = await self.get_status_message(user_filter=user_filter, page=page)
+                
+                # Check if it actually changed to avoid MessageNotModified exceptions
+                if text != data.get("last_text"):
+                    from bots.clients.telegram.helpers.message_utils import edit_message
+                    await edit_message(
+                        message=chat_id,
+                        message_id=msg_id,
+                        text=text,
+                        buttons=reply_markup,
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    self._active_status_messages[msg_id] = {
+                        **data,
+                        "last_text": text
+                    }
+            except Exception as e:
+                # if message is deleted by user or bot, pop it
+                err_str = str(e).lower()
+                if "invalid" in err_str or "deleted" in err_str or "not found" in err_str:
+                    logger.debug(f"Removing dead status tracking for msg {msg_id}: {e}")
+                    self._active_status_messages.pop(msg_id, None)
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
         task_id: str = None,
     ) -> Optional[str]:
         from bots.clients.telegram.helpers.message_utils import arg_parser
 
-        args = arg_parser(context.text)
+        args = arg_parser(message.text)
         target_id = args.get("link", "")
 
         user_filter = None
         if target_id:
             if target_id == "me":
-                user_filter = context.user_id
+                user_filter = message.from_user.id
             elif target_id.isdigit():
                 user_filter = int(target_id)
 
@@ -72,17 +123,27 @@ class StatusHandler(BotHandler):
             user_filter=user_filter, page=1
         )
 
-        await client.send_message(
-            context.chat_id,
+        sent = await send_message(
+            message,
             msg,
-            reply_markup=reply_markup,
+            reply_markup,
             parse_mode=enums.ParseMode.HTML,
         )
+        if sent:
+            # Storing the message allows the WS event listener to patch it over time automatically
+            self._active_status_messages[sent.id] = {
+                "chat_id": sent.chat.id,
+                "message_obj": sent,
+                "user_filter": user_filter,
+                "page": 1,
+                "last_text": msg
+            }
+
         return "Status sent"
 
     async def get_status_message(self, user_filter: int = None, page: int = 1):
-        tasks = await get_tasks(user_id=user_filter)
-        active_tasks = [t for t in tasks if t.is_active]
+        res = await api_client.get_active_tasks(user_id=user_filter)
+        active_tasks = res.get("data", [])
 
         if not active_tasks:
             return "No active tasks!", None
@@ -95,13 +156,13 @@ class StatusHandler(BotHandler):
         end_idx = start_idx + self.TASKS_PER_PAGE
         page_tasks = active_tasks[start_idx:end_idx]
 
-        stats = await get_queue_stats()
+        stats_res = await api_client.get_queue_stats()
 
         msg = f"<b>Active Tasks ({total_tasks})</b>\n\n"
         for i, task in enumerate(page_tasks, start_idx + 1):
             msg += self._format_task(i, task)
 
-        msg += self._format_bot_stats(stats)
+        msg += self._format_bot_stats(stats_res)
 
         buttons = ButtonMaker()
         if total_pages > 1:
@@ -116,55 +177,54 @@ class StatusHandler(BotHandler):
 
         return msg, buttons.build_menu(3 if total_pages > 1 else 2)
 
-    def _format_task(self, index: int, task: Task) -> str:
+    def _format_task(self, index: int, task: dict) -> str:
+        config = task.get("config", {})
+        source = config.get("source", "")
         name = (
-            task.config.destination
-            or task.config.source.split("/")[-1]
-            or task.config.source
+            config.get("destination")
+            or source.split("/")[-1]
+            or source
         )
         if len(name) > 50:
             name = name[:47] + "..."
 
         msg = f"<b>{index}.</b> <b><i>{name}</i></b>\n"
+        
+        meta = config.get("metadata", {}).get("ui_data", {})
+        if meta and meta.get("mention"):
+            msg += f"<b>Task By {meta['mention']}</b> ( #ID{meta['user_id']} ) <i>[<a href='{meta['message_link']}'>Link</a>]</i>\n"
 
-        prog = task.progress
-        pct = prog.progress if prog else 0.0
-
-        stage_icon = "🔄"
-        if prog.stage == "downloading":
-            stage_icon = "⏬"
-        elif prog.stage == "uploading":
-            stage_icon = "⏫"
-        elif prog.stage == "extracting":
-            stage_icon = "🗜️"
-
-        msg += f"{stage_icon} {get_progress_bar_string(pct)} <i>{pct:.1f}%</i>\n"
+        prog = task.get("progress", {})
+        pct = prog.get("progress", 0.0)
+        
+        msg += f"┟ {get_progress_bar_string(pct)} <i>{pct:.1f}%</i>\n"
 
         if prog:
-            if prog.total > 0:
-                down_str = get_readable_file_size(prog.downloaded)
-                total_str = get_readable_file_size(prog.total)
-                msg += f"📦 <b>Processed:</b> <i>{down_str} of {total_str}</i>\n"
+            total = prog.get("total", 0)
+            down = prog.get("downloaded", 0)
+            if total > 0:
+                down_str = get_readable_file_size(down)
+                total_str = get_readable_file_size(total)
+                msg += f"┠ <b>Processed</b> → <i>{down_str} of {total_str}</i>\n"
 
-            msg += f"🚦 <b>Status:</b> <b>{task.status.title()}</b>"
-            if prog.stage:
-                msg += f" - {prog.stage.title()}"
-            msg += "\n"
+            msg += f"┠ <b>Status</b> → <b>{str(task.get('status', '')).title()}</b>\n"
 
-            if prog.speed > 0:
-                speed_str = get_readable_file_size(prog.speed) + "/s"
-                msg += f"⚡ <b>Speed:</b> <i>{speed_str}</i>\n"
+            speed = prog.get("speed", 0)
+            if speed > 0:
+                speed_str = get_readable_file_size(speed) + "/s"
+                msg += f"┠ <b>Speed</b> → <i>{speed_str}</i>\n"
 
-            if prog.eta > 0:
-                msg += f"⏳ <b>ETA:</b> <i>{get_readable_time(prog.eta)}</i>\n"
+            eta = prog.get("eta", 0)
+            if eta > 0:
+                msg += f"┠ <b>Time</b> → <i>{get_readable_time(eta)}</i>\n"
 
-        msg += f"🛠 <b>Engine:</b> <i>{task.config.pipeline_id}</i>\n"
-        msg += f"🛑 <b>Cancel:</b> <i>/cancel {task.id}</i>\n\n"
+        msg += f"┠ <b>Engine</b> → <i>{config.get('pipeline_id', 'unknown')}</i>\n"
+        msg += f"┖ <b>Stop</b> → <i>/cancel {task.get('id', '')}</i>\n\n"
 
         return msg
 
-    def _format_bot_stats(self, q_stats) -> str:
-        msg = "<b><u>Bot Stats</u></b>\n"
+    def _format_bot_stats(self, q_stats: dict) -> str:
+        msg = "⌬ <b><u>Bot Stats</u></b>\n"
 
         cpu = psutil.cpu_percent()
         ram = psutil.virtual_memory().percent
@@ -173,10 +233,8 @@ class StatusHandler(BotHandler):
         free_disk = get_readable_file_size(disk_usage.free)
         uptime = get_readable_time(time.time() - bot_start_time)
 
-        msg += f"├ <b>CPU:</b> {cpu}% | <b>RAM:</b> {ram}%\n"
-        msg += f"├ <b>Free Disk:</b> {free_disk} ({100 - disk:.1f}%)\n"
-        msg += f"├ <b>Uptime:</b> {uptime}\n"
-        msg += f"└ <b>Queue:</b> {q_stats.running}R | {q_stats.queued}Q | {q_stats.pending}P\n"
+        msg += f"┟ <b>CPU</b> → {cpu}% | <b>F</b> → {free_disk} [{100 - disk:.1f}%]\n"
+        msg += f"┖ <b>RAM</b> → {ram}% | <b>UP</b> → {uptime}\n"
 
         return msg
 

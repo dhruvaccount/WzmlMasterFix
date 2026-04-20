@@ -8,7 +8,9 @@ from typing import Any
 
 from bots.clients.telegram.helpers.message_utils import arg_parser
 from core.status_utils import get_readable_file_size
-from bots.clients.telegram.handlers import BotHandler, CommandContext
+from pyrogram import Client, types
+from bots.clients.telegram.handlers import BotHandler
+from bots.clients.telegram.helpers.message_utils import send_message
 
 logger = logging.getLogger("wzml.bot.handlers.mediainfo")
 
@@ -18,8 +20,8 @@ class MediaInfoHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
     ) -> str:
         media = None
 
@@ -30,7 +32,7 @@ class MediaInfoHandler(BotHandler):
         elif context.audio:
             media = context.audio
 
-        args = arg_parser(context.text)
+        args = arg_parser(message.text)
         link = args.get("link", "")
 
         if not media and not link and not context.reply_to_message:
@@ -40,11 +42,13 @@ class MediaInfoHandler(BotHandler):
                 "By reply/sending download link:\n"
                 "/mediainfo [link]"
             )
-            await client.send_message(context.chat_id, help_msg)
+            await send_message(
+            message,
+            help_msg)
             return ""
 
-        msg = await client.send_message(
-            context.chat_id,
+        msg = await send_message(
+            message,
             "Generating MediaInfo...",
         )
 
@@ -73,7 +77,7 @@ class MediaInfoHandler(BotHandler):
 
                 if file_size > 50000000:
                     await client.edit_message(
-                        context.chat_id,
+                        message.chat.id,
                         msg.id,
                         "File too large for media info",
                     )
@@ -87,7 +91,7 @@ class MediaInfoHandler(BotHandler):
 
             if not file_path or not os.path.exists(file_path):
                 await client.edit_message(
-                    context.chat_id,
+                    message.chat.id,
                     msg.id,
                     "Failed to download file",
                 )
@@ -107,7 +111,7 @@ class MediaInfoHandler(BotHandler):
 
             if not output:
                 await client.edit_message(
-                    context.chat_id,
+                    message.chat.id,
                     msg.id,
                     "MediaInfo not available. Install mediainfo CLI.",
                 )
@@ -119,7 +123,7 @@ class MediaInfoHandler(BotHandler):
                 info_text = info_text[:3500] + "\n... (truncated)"
 
             await client.edit_message(
-                context.chat_id,
+                message.chat.id,
                 msg.id,
                 info_text,
             )
@@ -129,7 +133,7 @@ class MediaInfoHandler(BotHandler):
         except Exception as e:
             logger.error(f"MediaInfo error: {e}")
             await client.edit_message(
-                context.chat_id,
+                message.chat.id,
                 msg.id,
                 f"Error: {str(e)}",
             )

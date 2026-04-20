@@ -5,7 +5,9 @@ from typing import Any, List
 
 from core.helpers.bypass import bypass_link
 from bots.clients.telegram.helpers.button_utils import ButtonMaker
-from bots.clients.telegram.handlers import BotHandler, CommandContext
+from pyrogram import Client, types
+from bots.clients.telegram.handlers import BotHandler
+from bots.clients.telegram.helpers.message_utils import send_message
 
 logger = logging.getLogger("wzml.bot.handlers.search")
 
@@ -15,21 +17,21 @@ class SearchHandler(BotHandler):
 
     async def handle(
         self,
-        context: CommandContext,
-        client: Any,
+        client: Client,
+        message: types.Message,
     ) -> List[dict]:
-        args = self._parse_args(context.text)
+        args = self._parse_args(message.text)
         query = args.get("link", "")
 
         if not query:
-            await client.send_message(
-                context.chat_id,
-                "Send Name along with /search Command!",
+            await send_message(
+            message,
+            "Send Name along with /search Command!",
             )
             return []
 
-        await client.send_message(
-            context.chat_id,
+        await send_message(
+            message,
             f"Searching for: {query}",
         )
 
@@ -43,7 +45,9 @@ class SearchHandler(BotHandler):
         self._search_results = results
 
         if not results:
-            await client.send_message(context.chat_id, "No Results Found!")
+            await send_message(
+            message,
+            "No Results Found!")
             return []
 
         result_text = f"Search Results for: {query}\n\n"
@@ -60,7 +64,9 @@ class SearchHandler(BotHandler):
             buttons.data_button(f"{i}", f"select {i}")
         reply_markup = buttons.build_menu(2)
 
-        await client.send_message(context.chat_id, result_text, reply_markup)
+        await send_message(
+            message,
+            result_text, reply_markup)
 
         return results
 
