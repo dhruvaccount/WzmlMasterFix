@@ -174,7 +174,7 @@ class TelegramUploader:
         cap_file_ = file_ = pre_file_
 
         if self._lprefix:
-            cap_file_ = self._lprefix.replace(r"\s", " ") + file_
+            cap_file_ = self._lprefix.replace(r"\s", " ").rstrip() + " " + file_
             self._lprefix = re_sub(r"<.*?>", "", self._lprefix).replace(r"\s", " ").rstrip()
             if not file_.startswith(self._lprefix):
                 file_ = f"{self._lprefix} {file_}"
