@@ -79,7 +79,6 @@ class MergeVideos:
             await f.write("\n".join(video_files))
 
         outfile = f"{ospath.join(path, name)}.mkv"
-        LOGGER.info(f"Merging {len(video_files)} videos -> {name}")
 
         cmd = [
             BinConfig.FFMPEG_NAME,
