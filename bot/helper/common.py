@@ -299,6 +299,8 @@ class TaskConfig:
             )
         if not self.merge_video:
             self.merge_video = bool(self.user_dict.get("MERGE_VIDEO", False))
+
+        if not self.is_leech:
             default_upload = (
                 self.user_dict.get("DEFAULT_UPLOAD", "") or Config.DEFAULT_UPLOAD
             )
