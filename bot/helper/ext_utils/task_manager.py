@@ -81,9 +81,7 @@ async def check_running_tasks(listener, state="dl"):
             up_count = len(non_queued_up)
             t_count = dl_count if state == "dl" else up_count
             is_over_limit = (
-                all_limit
-                and dl_count + up_count >= all_limit
-                and (not state_limit or t_count >= state_limit)
+                all_limit and dl_count + up_count >= all_limit
             ) or (state_limit and t_count >= state_limit)
             if is_over_limit:
                 event = Event()
