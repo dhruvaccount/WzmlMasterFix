@@ -63,6 +63,7 @@ from ..mirror_leech_utils.upload_utils.telegram_uploader import TelegramUploader
 from ..mirror_leech_utils.youtube_utils.youtube_upload import YouTubeUpload
 from ..telegram_helper.button_build import ButtonMaker
 from ..telegram_helper.message_utils import (
+    delete_links,
     delete_message,
     delete_status,
     send_message,
@@ -577,6 +578,7 @@ class TaskListener(TaskConfig):
                 non_queued_up.remove(self.mid)
 
         await start_from_queued()
+        await delete_links(self.message)
 
     async def on_download_error(self, error, button=None, is_limit=False):
         async with task_dict_lock:
@@ -634,6 +636,7 @@ class TaskListener(TaskConfig):
             await clean_download(self.up_dir)
         if self.thumb and await aiopath.exists(self.thumb):
             await remove(self.thumb)
+        await delete_links(self.message)
 
     async def on_upload_error(self, error):
         async with task_dict_lock:
@@ -672,3 +675,4 @@ class TaskListener(TaskConfig):
             await clean_download(self.up_dir)
         if self.thumb and await aiopath.exists(self.thumb):
             await remove(self.thumb)
+        await delete_links(self.message)

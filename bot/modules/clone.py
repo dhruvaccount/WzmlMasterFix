@@ -70,10 +70,10 @@ class Clone(TaskListener):
 
         check_msg, check_button = await pre_task_check(self.message)
         if check_msg:
-            await delete_links(self.message)
             await auto_delete_message(
                 await send_message(self.message, check_msg, check_button)
             )
+            await delete_links(self.message)
             return
 
         args = {
@@ -136,7 +136,6 @@ class Clone(TaskListener):
             return
 
         self._set_mode_engine()
-        await delete_links(self.message)
 
         await self._proceed_to_clone(sync)
 

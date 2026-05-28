@@ -90,10 +90,10 @@ class Mirror(TaskListener):
 
         check_msg, check_button = await pre_task_check(self.message)
         if check_msg:
-            await delete_links(self.message)
             await auto_delete_message(
                 await send_message(self.message, check_msg, check_button)
             )
+            await delete_links(self.message)
             return
 
         args = {
@@ -409,8 +409,6 @@ class Mirror(TaskListener):
                     await self.remove_from_same_dir()
                     await delete_links(self.message)
                     return
-
-        await delete_links(self.message)
 
         if file_ is not None:
             await TelegramDownloadHelper(self).add_download(
