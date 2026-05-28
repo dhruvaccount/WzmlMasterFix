@@ -320,6 +320,7 @@ class TelegramUploader:
 
     async def _send_cached(self, chat_id, reply_to_message_id=None):
         msg, kw = self._sent_msg, {"chat_id": chat_id, "disable_notification": True}
+
         if reply_to_message_id is not None:
             kw["reply_to_message_id"] = reply_to_message_id
         cap = msg.caption or ""
@@ -339,7 +340,9 @@ class TelegramUploader:
             return await TgClient.bot.send_sticker(sticker=msg.sticker.file_id, **kw)
         if msg.document:
             return await TgClient.bot.send_document(document=msg.document.file_id, caption=cap, **kw)
+
         LOGGER.warning(f"No supported media in message {msg.message_id} to resend")
+
 
     async def _copy_media(self):
         try:
