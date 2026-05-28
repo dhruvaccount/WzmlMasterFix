@@ -318,8 +318,10 @@ class TelegramUploader:
                 self._msgs_dict[m.link] = m.caption
         self._sent_msg = msgs_list[-1]
 
-    async def _send_cached(self, chat_id):
+    async def _send_cached(self, chat_id, reply_to_message_id=None):
         msg, kw = self._sent_msg, {"chat_id": chat_id, "disable_notification": True}
+        if reply_to_message_id is not None:
+            kw["reply_to_message_id"] = reply_to_message_id
         cap = msg.caption or ""
         if msg.photo:
             return await TgClient.bot.send_photo(photo=msg.photo.file_id, caption=cap, **kw)
@@ -335,15 +337,19 @@ class TelegramUploader:
             return await TgClient.bot.send_video_note(video_note=msg.video_note.file_id, **kw)
         if msg.sticker:
             return await TgClient.bot.send_sticker(sticker=msg.sticker.file_id, **kw)
-        doc = msg.document
-        return await TgClient.bot.send_document(
-            document=doc.file_id if doc else msg.message_id, caption=cap, **kw
-        )
+        if msg.document:
+            return await TgClient.bot.send_document(document=msg.document.file_id, caption=cap, **kw)
+        LOGGER.warning(f"No supported media in message {msg.message_id} to resend")
 
     async def _copy_media(self):
         try:
             if self._bot_pm:
-                await self._send_cached(self._listener.user_id)
+                await self._send_cached(
+                    self._listener.user_id,
+                    reply_to_message_id=(
+                        self._listener.pm_msg.id if self._listener.pm_msg else None
+                    ),
+                )
         except Exception as err:
             if not self._listener.is_cancelled:
                 LOGGER.error(f"Failed To Send in BotPM:\n{str(err)}")
@@ -616,7 +622,6 @@ class TelegramUploader:
                                 leech_dest, _ = str(leech_dest).split("|", 1)
                             if leech_dest.lstrip("-").isdigit():
                                 leech_dest = int(leech_dest)
-                        await self._send_cached(leech_dest)
                         await self._send_cached(leech_dest)
                     except Exception as e:
                         if not self._listener.is_cancelled:
