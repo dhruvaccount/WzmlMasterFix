@@ -64,19 +64,21 @@ async def update_aria2_options():
 
 
 async def update_nzb_options():
-    if Config.USENET_SERVERS:
-        LOGGER.info("Get SABnzbd options from server")
-        deadline = time() + 10
-        while time() < deadline:
-            try:
-                no = (await sabnzbd_client.get_config())["config"]["misc"]
-                nzb_options.update(no)
-                return True
-            except Exception as e:
-                LOGGER.warning(f"SABnzbd config fetch failed: {e}")
-                await sleep(0.5)
-        LOGGER.error("Failed to fetch SABnzbd options within 10 seconds")
-        return False
+    try:
+        if Config.USENET_SERVERS:
+            LOGGER.info("Get SABnzbd options from server")
+            deadline = time() + 10
+            while time() < deadline:
+                try:
+                    no = (await sabnzbd_client.get_config())["config"]["misc"]
+                    nzb_options.update(no)
+                    return
+                except Exception:
+                    LOGGER.exception("SABnzbd config fetch failed")
+                    await sleep(0.5)
+            LOGGER.error("Failed to fetch SABnzbd options within 10 seconds")
+    except Exception:
+        LOGGER.exception("update_nzb_options failed")
 
 
 async def load_settings():
