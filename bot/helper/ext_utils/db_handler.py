@@ -2,7 +2,7 @@ from importlib import import_module
 
 from aiofiles import open as aiopen
 from aiofiles.os import path as aiopath
-from pymongo import AsyncMongoClient
+from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo.errors import PyMongoError
 from pymongo.server_api import ServerApi
 
@@ -21,7 +21,7 @@ class DbManager:
         try:
             if self._conn is not None:
                 await self._conn.close()
-            self._conn = AsyncMongoClient(
+            self._conn = AsyncIOMotorClient(
                 Config.DATABASE_URL, server_api=ServerApi("1")
             )
             self.db = self._conn.wzmlx
