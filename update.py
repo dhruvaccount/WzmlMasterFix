@@ -11,10 +11,9 @@ from logging import (
     ERROR,
 )
 from os import path, remove, environ
-from pymongo import AsyncMongoClient
+from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
 from subprocess import run as srun, call as scall
-from asyncio import run as arun
 
 getLogger("pymongo").setLevel(ERROR)
 
@@ -70,35 +69,21 @@ if not BOT_TOKEN:
 
 BOT_ID = BOT_TOKEN.split(":", 1)[0]
 
-
-async def fetch_database_config():
-    """Fetch configuration from MongoDB."""
-    global config_file
-    DATABASE_URL = config_file.get("DATABASE_URL", "").strip()
-    if not DATABASE_URL:
-        return
-
-    conn = None
+if DATABASE_URL := config_file.get("DATABASE_URL", "").strip():
     try:
-        conn = AsyncMongoClient(DATABASE_URL, server_api=ServerApi("1"))
+        conn = MongoClient(DATABASE_URL, server_api=ServerApi("1"))
         db = conn.wzmlx
-        old_config = await db.settings.deployConfig.find_one({"_id": BOT_ID}, {"_id": 0})
-        config_dict = await db.settings.config.find_one({"_id": BOT_ID})
+        old_config = db.settings.deployConfig.find_one({"_id": BOT_ID}, {"_id": 0})
+        config_dict = db.settings.config.find_one({"_id": BOT_ID})
         if (
             old_config is not None and old_config == config_file or old_config is None
         ) and config_dict is not None:
             config_file["UPSTREAM_REPO"] = config_dict["UPSTREAM_REPO"]
             config_file["UPSTREAM_BRANCH"] = config_dict.get("UPSTREAM_BRANCH", "wzv3")
             config_file["UPDATE_PKGS"] = config_dict.get("UPDATE_PKGS", "True")
+        conn.close()
     except Exception as e:
         log_error(f"Database ERROR: {e}")
-    finally:
-        if conn:
-            await conn.close()
-
-
-if DATABASE_URL := config_file.get("DATABASE_URL", "").strip():
-    arun(fetch_database_config())
 
 UPSTREAM_REPO = config_file.get("UPSTREAM_REPO", "").strip()
 UPSTREAM_BRANCH = config_file.get("UPSTREAM_BRANCH", "").strip() or "wzv3"
