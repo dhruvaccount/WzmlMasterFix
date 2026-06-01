@@ -78,12 +78,12 @@ DEFAULT_VALUES = {
 async def get_buttons(key=None, edit_type=None, edit_mode=False):
     buttons = ButtonMaker()
     if key is None:
-        buttons.data_button("Config Variables", "botset var", style=ButtonStyle.PRIMARY)
-        buttons.data_button("Private Files", "botset private open", style=ButtonStyle.PRIMARY)
-        buttons.data_button("Qbit Settings", "botset qbit", style=ButtonStyle.PRIMARY)
-        buttons.data_button("Aria2c Settings", "botset aria", style=ButtonStyle.PRIMARY)
-        buttons.data_button("Sabnzbd Settings", "botset nzb", style=ButtonStyle.PRIMARY)
-        buttons.data_button("JDownloader Sync", "botset syncjd", style=ButtonStyle.PRIMARY)
+        buttons.data_button("Config Variables", "botset var")
+        buttons.data_button("Private Files", "botset private open")
+        buttons.data_button("Qbit Settings", "botset qbit")
+        buttons.data_button("Aria2c Settings", "botset aria")
+        buttons.data_button("Sabnzbd Settings", "botset nzb")
+        buttons.data_button("JDownloader Sync", "botset syncjd")
         buttons.data_button("Close", "botset close", style=ButtonStyle.DANGER)
         msg = "Bot Settings:"
     elif edit_type is not None:
