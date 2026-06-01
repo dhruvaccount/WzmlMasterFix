@@ -11,24 +11,6 @@ from ...ext_utils.status_utils import (
 )
 
 
-def _display_name(raw_name):
-    if not raw_name:
-        return raw_name
-    if "getnzb/api/" in raw_name:
-        try:
-            return f"NZB ID: {raw_name.split('getnzb/api/')[1].split('?')[0]}"
-        except Exception:
-            return raw_name
-    if "/getnzb/" in raw_name and "apikey=" in raw_name:
-        try:
-            parts = raw_name.split("/getnzb/")[1]
-            nzb_id = parts.split("?")[0].split("/")[0]
-            return f"NZB ID: {nzb_id}"
-        except Exception:
-            return raw_name
-    return raw_name
-
-
 async def get_download(nzo_id, old_info=None):
     if old_info is None:
         old_info = defaultdict(lambda: "")
