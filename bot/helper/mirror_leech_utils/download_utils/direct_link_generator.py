@@ -5,10 +5,10 @@ from json import loads
 from lxml.etree import HTML
 from os import path as ospath
 from re import findall, match, search
-from requests import Session, post, get, RequestException
+from requests import Session, post, get
 from requests.adapters import HTTPAdapter
 from time import sleep, time
-from urllib.parse import parse_qs, urlparse, quote
+from urllib.parse import parse_qs, urlparse, quote, unquote
 from urllib3.util.retry import Retry
 from uuid import uuid4
 from base64 import b64decode, b64encode
@@ -362,7 +362,7 @@ def debrid_link(url):
         f"https://debrid-link.com/api/v2/downloader/add?access_token={Config.DEBRID_LINK_API}",
         data={"url": url},
     ).json()
-    if resp["success"] != True:
+    if not resp["success"]:
         raise DirectDownloadLinkException(
             f"ERROR: {resp['error']} & ERROR ID: {resp['error_id']}"
         )
@@ -378,7 +378,7 @@ def debrid_link(url):
             if dl.get("expired", False):
                 continue
             item = {
-                "path": path.join(details["title"]),
+                "path": ospath.join(details["title"]),
                 "filename": dl["name"],
                 "url": dl["downloadUrl"],
             }
@@ -698,7 +698,7 @@ def pixeldrain(url):
         code = url.split("/")[-1].split("?", 1)[0]
         response = get(f"https://{url.split('/')[2]}/api/file/", allow_redirects=True)
         return response.url + code
-    except Exception as e:
+    except Exception:
         raise DirectDownloadLinkException("ERROR: Direct link not found")
         
 
@@ -871,7 +871,7 @@ def terabox(url):
         encoded_url = quote(url)
         final_url = f"https://teradlrobot.cheemsbackup.workers.dev/?url={encoded_url}"
         return final_url
-    except Exception as e:
+    except Exception:
         raise DirectDownloadLinkException("Failed to bypass Terabox URL")
 
 
@@ -2047,7 +2047,7 @@ def swisstransfer(link):
     for file in files:
         file_uuid = file["UUID"]
         file_name = file["fileName"]
-        file_size = file["fileSizeInBytes"]
+        #file_size = file["fileSizeInBytes"]
 
         token = gettoken(password, container_uuid, file_uuid)
         if not token:
