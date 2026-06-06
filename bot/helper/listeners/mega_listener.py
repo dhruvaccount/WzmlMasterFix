@@ -242,7 +242,13 @@ class MegaAppListener(MegaListener):
     def _cache_node_data(self, node):
         try:
             self._name = node.getName()
+        except Exception:
+            pass
+        try:
             self._handle = node.getHandle()
+        except Exception:
+            pass
+        try:
             self._is_folder = node.isFolder()
         except Exception:
             pass
@@ -255,14 +261,12 @@ class MegaAppListener(MegaListener):
         expected = self._async_api._expected_request_source
         return expected is None or source == expected
 
-    def _is_target_transfer(self, transfer, for_finish=False):
+    def _is_target_transfer(self, transfer):
         if self._async_api._download_is_folder:
-            if for_finish:
-                try:
-                    return transfer.isFolderTransfer()
-                except Exception:
-                    return False
-            return True
+            try:
+                return transfer.isFolderTransfer()
+            except Exception:
+                return False
         target_match = False
         if self._target_handle is not None:
             try:
@@ -409,17 +413,7 @@ class MegaAppListener(MegaListener):
                 self._set_transfer_event()
                 return
 
-            if self._async_api._download_is_folder:
-                try:
-                    is_ft = transfer.isFolderTransfer()
-                except Exception:
-                    is_ft = False
-                if not is_ft:
-                    self._total_downloaded_bytes += self._bytes_transferred
-                    self._bytes_transferred = 0
-                    return
-
-            if not self._is_target_transfer(transfer, for_finish=True):
+            if not self._is_target_transfer(transfer):
                 return
             if err_code != MegaError.API_OK:
                 self.error = f"{err_code} {error.toString()}"
