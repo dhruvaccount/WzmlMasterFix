@@ -45,6 +45,7 @@ from ..ext_utils.task_manager import check_running_tasks, start_from_queued
 from ..mirror_leech_utils.uphoster_utils.multi_upload import MultiUphosterUpload
 from ..mirror_leech_utils.gdrive_utils.upload import GoogleDriveUpload
 from ..mirror_leech_utils.rclone_utils.transfer import RcloneTransferHelper
+from ..mirror_leech_utils.upload_utils.mega_upload import add_mega_upload
 from ..mirror_leech_utils.status_utils.uphoster_status import UphosterStatus
 from ..mirror_leech_utils.status_utils.gdrive_status import (
     GoogleDriveStatus,
@@ -376,6 +377,11 @@ class TaskListener(TaskConfig):
                 sync_to_async(drive.upload),
             )
             del drive
+        elif self.up_dest == "mega:":
+            LOGGER.info(f"Mega Upload Name: {self.name}")
+            mega_email = self.user_dict.get("MEGA_EMAIL") or ""
+            mega_password = self.user_dict.get("MEGA_PASSWORD") or ""
+            await add_mega_upload(self, up_path, mega_email, mega_password, gid)
         else:
             LOGGER.info(f"Rclone Upload Name: {self.name}")
             RCTransfer = RcloneTransferHelper(self)
@@ -535,7 +541,7 @@ class TaskListener(TaskConfig):
                             )
                 button = buttons.build_menu(2)
             else:
-                if not multi_link_msg:
+                if not multi_link_msg and rclone_path:
                     msg += f"\n┃\n┠ Path: <code>{rclone_path}</code>"
                 button = None
             msg += f"\n┃\n┖ <b>Task By</b> → {self.tag}\n\n"
