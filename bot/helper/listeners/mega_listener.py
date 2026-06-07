@@ -194,6 +194,9 @@ class AsyncMega:
             parentNode,
             customName,
             mtime,
+            None,
+            False,
+            False,
             cancelToken,
             None,
         )
