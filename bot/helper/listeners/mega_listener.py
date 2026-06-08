@@ -146,19 +146,24 @@ class AsyncMega:
             self._expected_request_source = None
 
     async def create_folder(self, name, parent, source="main"):
+        LOGGER.info(f"create_folder: start name='{name}' source='{source}'")
         self.continue_event.clear()
         self._expected_request_type = MegaRequest.TYPE_CREATE_FOLDER
         self._expected_request_source = source
         mega_api = self.folder_api if source == "folder" else self.api
         ml = getattr(self, "_mega_listener", None)
         if ml:
-            ml._created_folder_handle = None
+            ml._created_folder_node = None
         try:
             await sync_to_async(mega_api.createFolder, name, parent)
+            LOGGER.info(f"create_folder: waiting for TYPE_CREATE_FOLDER callback for '{name}'")
             await wait_for(self.continue_event.wait(), timeout=_REQUEST_TIMEOUT_SECONDS)
-            handle = getattr(ml, "_created_folder_handle", None) if ml else None
-            if handle:
-                return await sync_to_async(mega_api.getNodeByHandle, handle)
+            LOGGER.info(f"create_folder: callback received for '{name}'")
+            node = getattr(ml, "_created_folder_node", None) if ml else None
+            if node:
+                LOGGER.info(f"create_folder: success name='{name}' node_handle={node.getHandle()}")
+                return node
+            LOGGER.warning(f"create_folder: no node for '{name}'")
             return None
         except AsyncTimeoutError:
             LOGGER.error(f"create_folder timed out for '{name}'")
@@ -316,6 +321,7 @@ class MegaAppListener(MegaListener):
         self._is_folder = False
         self._target_handle = None
         self._uploaded_node_handle = None
+        self._created_folder_node = None
         self._export_link = None
         super().__init__()
 
@@ -462,9 +468,14 @@ class MegaAppListener(MegaListener):
                 self._export_done.set()
             elif request_type == MegaRequest.TYPE_CREATE_FOLDER:
                 try:
-                    self._created_folder_handle = request.getNodeHandle()
-                except Exception:
-                    pass
+                    handle = request.getNodeHandle()
+                    LOGGER.info(f"TYPE_CREATE_FOLDER: handle={handle} source={source}")
+                    if handle:
+                        node = api.getNodeByHandle(handle)
+                        LOGGER.info(f"TYPE_CREATE_FOLDER: node={node} name={node.getName() if node else 'None'}")
+                        self._created_folder_node = node
+                except Exception as e:
+                    LOGGER.error(f"TYPE_CREATE_FOLDER: exception: {e}")
 
             if self._is_expected_request(request_type) and self._is_expected_source(source):
                 self._set_request_event()
