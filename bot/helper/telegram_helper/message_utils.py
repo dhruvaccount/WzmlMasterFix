@@ -42,36 +42,36 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
                     else:
                         photo = None
                 if photo is None:
-                    if isinstance(message, (int, str)):
-                        return await TgClient.bot.send_message(
-                            chat_id=message,
+                    if isinstance(message, Message):
+                        return await message.reply(
                             text=text,
+                            quote=True,
                             disable_web_page_preview=True,
                             disable_notification=True,
                             reply_markup=buttons,
+                            **kwargs,
                         )
-                    return await message.reply(
+                    return await TgClient.bot.send_message(
+                        chat_id=message,
                         text=text,
-                        quote=True,
                         disable_web_page_preview=True,
                         disable_notification=True,
                         reply_markup=buttons,
-                        **kwargs,
                     )
-                if isinstance(message, (int, str)):
-                    return await TgClient.bot.send_photo(
-                        chat_id=message,
+                if isinstance(message, Message):
+                    return await message.reply_photo(
                         photo=photo,
+                        reply_to_message_id=message.id,
                         caption=text,
+                        quote=True,
                         reply_markup=buttons,
                         disable_notification=True,
                         **kwargs,
                     )
-                return await message.reply_photo(
+                return await TgClient.bot.send_photo(
+                    chat_id=message,
                     photo=photo,
-                    reply_to_message_id=message.id,
                     caption=text,
-                    quote=True,
                     reply_markup=buttons,
                     disable_notification=True,
                     **kwargs,
@@ -110,21 +110,21 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
             except Exception:
                 LOGGER.error("Error while sending photo", exc_info=True)
                 return
-        if isinstance(message, (int, str)):
-            return await TgClient.bot.send_message(
-                chat_id=message,
+        if isinstance(message, Message):
+            return await message.reply(
                 text=text,
+                quote=True,
                 disable_web_page_preview=True,
                 disable_notification=True,
                 reply_markup=buttons,
+                **kwargs,
             )
-        return await message.reply(
+        return await TgClient.bot.send_message(
+            chat_id=message,
             text=text,
-            quote=True,
             disable_web_page_preview=True,
             disable_notification=True,
             reply_markup=buttons,
-            **kwargs,
         )
     except FloodWait as f:
         LOGGER.warning(str(f))
@@ -138,7 +138,7 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
     except (MessageEmpty, EntityBoundsInvalid):
         return await send_message(message, text, parse_mode=ParseMode.DISABLED)
     except PeerIdInvalid:
-        if isinstance(message, int):
+        if isinstance(message, (int, str)):
             await TgClient.bot.resolve_peer(message)
             return await send_message(message, text, buttons, block, photo)
         raise

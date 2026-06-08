@@ -87,6 +87,23 @@ async def main():
 
 bot_loop.run_until_complete(main())
 
+
+def _handle_asyncio_exception(loop, context):
+    exc = context.get("exception")
+    if exc and isinstance(exc, (KeyError, ValueError)):
+        msg = str(exc)
+        if "unknown constructor" in msg.lower() or "server sent an unknown" in msg.lower():
+            LOGGER.warning(f"Pyrogram schema mismatch detected: {msg}. Restarting user client...")
+            try:
+                bot_loop.create_task(TgClient.reload())
+            except Exception:
+                pass
+            return
+    loop.default_exception_handler(context)
+
+
+bot_loop.set_exception_handler(_handle_asyncio_exception)
+
 from .core.handlers import add_handlers
 from .helper.ext_utils.bot_utils import create_help_buttons
 from .helper.listeners.aria2_listener import add_aria2_callbacks

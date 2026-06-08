@@ -2,6 +2,7 @@ import re
 from asyncio import gather, sleep
 from contextlib import suppress
 from os import path as ospath, walk
+from pyrogram.types import Message
 from re import sub
 from secrets import token_hex
 from shlex import split
@@ -605,10 +606,14 @@ class TaskConfig:
                 chat_id=self.message.chat.id,
                 message_ids=self.message.reply_to_message_id + 1,
             )
+            if not isinstance(nextmsg, Message):
+                nextmsg = self.message
             msgts = " ".join(msg)
             if self.multi > 2:
                 msgts += f"\n• <b>Cancel Multi:</b> <i>/{BotCommands.CancelTaskCommand[1]}_{self.multi_tag}</i>"
             nextmsg = await send_message(nextmsg, msgts)
+        if not isinstance(nextmsg, Message):
+            return
         nextmsg = await self.client.get_messages(
             chat_id=self.message.chat.id, message_ids=nextmsg.id
         )
@@ -655,6 +660,8 @@ class TaskConfig:
                 multi_tags.add(self.multi_tag)
                 msg += f"\n• <b>Cancel Multi:</b> <i>/{BotCommands.CancelTaskCommand[1]}_{self.multi_tag}</i>"
             nextmsg = await send_message(self.message, msg)
+            if not isinstance(nextmsg, Message):
+                return
             nextmsg = await self.client.get_messages(
                 chat_id=self.message.chat.id, message_ids=nextmsg.id
             )
