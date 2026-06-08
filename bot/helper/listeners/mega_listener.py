@@ -88,6 +88,7 @@ class AsyncMega:
             "logout": getattr(MegaRequest, "TYPE_LOGOUT", None),
             "getAccountDetails": getattr(MegaRequest, "TYPE_ACCOUNT_DETAILS", None),
             "exportNode": getattr(MegaRequest, "TYPE_EXPORT", None),
+            "createFolder": getattr(MegaRequest, "TYPE_CREATE_FOLDER", None),
         }
         return request_types.get(name)
 
@@ -139,6 +140,31 @@ class AsyncMega:
             return getattr(ml, "_export_link", None) if ml else None
         except AsyncTimeoutError:
             LOGGER.error("export_node timed out waiting for TYPE_EXPORT callback")
+            return None
+        finally:
+            self._expected_request_type = None
+            self._expected_request_source = None
+
+    async def create_folder(self, name, parent, source="main"):
+        self.continue_event.clear()
+        self._expected_request_type = MegaRequest.TYPE_CREATE_FOLDER
+        self._expected_request_source = source
+        mega_api = self.folder_api if source == "folder" else self.api
+        ml = getattr(self, "_mega_listener", None)
+        if ml:
+            ml._created_folder_handle = None
+        try:
+            await sync_to_async(mega_api.createFolder, name, parent)
+            await wait_for(self.continue_event.wait(), timeout=_REQUEST_TIMEOUT_SECONDS)
+            handle = getattr(ml, "_created_folder_handle", None) if ml else None
+            if handle:
+                return await sync_to_async(mega_api.getNodeByHandle, handle)
+            return None
+        except AsyncTimeoutError:
+            LOGGER.error(f"create_folder timed out for '{name}'")
+            return None
+        except Exception as e:
+            LOGGER.error(f"create_folder failed for '{name}': {e}")
             return None
         finally:
             self._expected_request_type = None
@@ -270,6 +296,7 @@ class MegaAppListener(MegaListener):
         self.is_cancelled = False
         self.error = None
         self.retryable_error = None
+        self._suppress_export = False
         self._bytes_transferred = 0
         self._total_downloaded_bytes = 0
         self._total_folder_size = 0
@@ -433,6 +460,11 @@ class MegaAppListener(MegaListener):
                 except Exception as e:
                     LOGGER.warning(f"TYPE_EXPORT: getLink failed: {e}")
                 self._export_done.set()
+            elif request_type == MegaRequest.TYPE_CREATE_FOLDER:
+                try:
+                    self._created_folder_handle = request.getNodeHandle()
+                except Exception:
+                    pass
 
             if self._is_expected_request(request_type) and self._is_expected_source(source):
                 self._set_request_event()
@@ -514,7 +546,7 @@ class MegaAppListener(MegaListener):
                 if self._upload_mode and self._bytes_transferred == 0 and self._size:
                     self._bytes_transferred = self._size
                     self._last_speed_time = time()
-                if self._upload_mode and transfer.getType() == MegaTransfer.TYPE_UPLOAD:
+                if self._upload_mode and transfer.getType() == MegaTransfer.TYPE_UPLOAD and not self._suppress_export:
                     self._export_done.clear()
                     try:
                         node = None

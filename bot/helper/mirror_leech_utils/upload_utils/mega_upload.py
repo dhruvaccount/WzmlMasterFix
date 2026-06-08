@@ -10,7 +10,6 @@ from mega import MegaApi, MegaCancelToken
 
 from .... import LOGGER, task_dict, task_dict_lock
 from ...ext_utils.bot_utils import sync_to_async
-from ...ext_utils.status_utils import get_readable_file_size
 from ...listeners.mega_listener import AsyncMega, MegaAppListener, _mega_error_format
 from ...mirror_leech_utils.status_utils.mega_status import MegaDownloadStatus
 from ...telegram_helper.message_utils import update_status_message
@@ -47,9 +46,49 @@ def _find_node_by_name(api, parent_node, name):
     return None
 
 
-async def _upload_file(
-    async_api, mega_listener, file_path, parent_node, custom_name
-):
+async def _get_total_size(local_dir):
+    total = 0
+    walk_result = await sync_to_async(lambda: list(os.walk(local_dir)))
+    for root, _, files in walk_result:
+        for f in files:
+            try:
+                total += await aiopath.getsize(os.path.join(root, f))
+            except Exception:
+                pass
+    return total
+
+
+async def _create_mega_folder(async_api, mega_listener, name, parent_node):
+    return await async_api.create_folder(name, parent_node)
+
+
+async def _ensure_folder_structure(async_api, mega_listener, local_dir, parent_node, folder_name=None):
+    root_node = parent_node
+    if folder_name:
+        root_node = await _create_mega_folder(async_api, mega_listener, folder_name, parent_node)
+        if not root_node:
+            return None, {}
+
+    folder_map = {}
+    walk_result = await sync_to_async(lambda: list(os.walk(local_dir)))
+    for root, dirs, _ in walk_result:
+        if root == local_dir:
+            parent = root_node
+        else:
+            parent = folder_map.get(root)
+            if not parent:
+                continue
+
+        for d in dirs:
+            sub_path = os.path.join(root, d)
+            node = await _create_mega_folder(async_api, mega_listener, d, parent)
+            if node:
+                folder_map[sub_path] = node
+
+    return root_node, folder_map
+
+
+async def _upload_file(async_api, mega_listener, file_path, parent_node, custom_name, suppress_export=False):
     cancel_token = _make_cancel_token()
     mega_listener._cancel_token = cancel_token
     mega_listener.error = None
@@ -57,7 +96,7 @@ async def _upload_file(
     mega_listener._bytes_transferred = 0
     mega_listener._total_downloaded_bytes = 0
     mega_listener._caller_manages_completion = True
-    mega_listener._size = await sync_to_async(os.path.getsize, file_path)
+    mega_listener._size = await aiopath.getsize(file_path)
 
     await async_api.startUpload(
         file_path,
@@ -75,17 +114,15 @@ async def _upload_file(
         return False, None
 
     link = None
-    node_handle = getattr(mega_listener, "_uploaded_node_handle", None)
-
-    if node_handle:
-        try:
-            await wait_for(mega_listener._export_done.wait(), timeout=60)
-            link = getattr(mega_listener, "_export_link", None)
-            LOGGER.info(f"MegaUpload: export result link={link}")
-        except AsyncTimeoutError:
-            LOGGER.warning("MegaUpload: export timed out after 60s")
-    else:
-        LOGGER.warning("MegaUpload: no handle from transfer, link will be None")
+    if not suppress_export:
+        node_handle = getattr(mega_listener, "_uploaded_node_handle", None)
+        if node_handle:
+            try:
+                await wait_for(mega_listener._export_done.wait(), timeout=60)
+                link = getattr(mega_listener, "_export_link", None)
+                LOGGER.info(f"MegaUpload: export result link={link}")
+            except AsyncTimeoutError:
+                LOGGER.warning("MegaUpload: export timed out after 60s")
 
     return True, link
 
@@ -144,42 +181,58 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
 
         upload_link = None
         if await aiopath.isdir(path):
-            entries = await sync_to_async(os.listdir, path)
-            for entry in entries:
-                entry_path = os.path.join(path, entry)
-                if await sync_to_async(os.path.isfile, entry_path):
-                    total_files += 1
+            listener.size = await _get_total_size(path)
+            total_files = await sync_to_async(lambda: sum(len(files) for _, _, files in os.walk(path)))
+            dir_name = os.path.basename(path.rstrip("/\\"))
 
-            if total_files == 0:
-                await listener.on_upload_error(
-                    f"MegaUpload: no files to upload in {path}"
-                )
+            mega_root, folder_map = await _ensure_folder_structure(
+                async_api, mega_listener, path, root_node, dir_name
+            )
+            if not mega_root:
+                if not listener.is_cancelled:
+                    await listener.on_upload_error("MegaUpload: failed to create root folder on Mega")
                 return
 
-            for entry in entries:
+            mega_listener._suppress_export = True
+
+            walk_result = await sync_to_async(lambda: list(os.walk(path)))
+            for root, _, files in walk_result:
                 if listener.is_cancelled:
                     return
-                entry_path = os.path.join(path, entry)
-                if await sync_to_async(os.path.isfile, entry_path):
-                    ok, link = await _upload_file(
-                        async_api, mega_listener, entry_path, root_node, entry
+                if root == path:
+                    parent = mega_root
+                else:
+                    parent = folder_map.get(root)
+
+                if parent is None:
+                    continue
+
+                for f in files:
+                    if listener.is_cancelled:
+                        return
+                    file_path = os.path.join(root, f)
+                    ok, _ = await _upload_file(
+                        async_api, mega_listener, file_path, parent, f, suppress_export=True
                     )
                     if ok:
                         uploaded_files += 1
-                        if link:
-                            upload_link = link
                     else:
                         if not listener.is_cancelled:
-                            await listener.on_upload_error(
-                                f"MegaUpload failed for {entry}"
-                            )
+                            await listener.on_upload_error(f"MegaUpload failed for {f}")
                         return
 
             mime_type = "Folder"
+            if uploaded_files > 0 and not listener.is_cancelled:
+                try:
+                    mega_listener._suppress_export = False
+                    upload_link = await async_api.export_node(mega_root)
+                except Exception:
+                    LOGGER.exception("MegaUpload: folder export failed")
 
         else:
             total_files = 1
             file_name = os.path.basename(path)
+            listener.size = await aiopath.getsize(path)
             ok, link = await _upload_file(
                 async_api, mega_listener, path, root_node, file_name
             )
