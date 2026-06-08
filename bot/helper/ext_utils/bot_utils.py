@@ -4,20 +4,25 @@ from asyncio import (
     run_coroutine_threadsafe,
     sleep,
 )
-from hashlib import sha256
-from hmac import new as hmac_new
-from secrets import token_bytes
-from time import time
-from pyrogram.enums import ButtonStyle
 from asyncio.subprocess import PIPE
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial, wraps
+from hashlib import sha256
+from hmac import new as hmac_new
+from os import path as ospath
+from re import compile as re_compile
+from secrets import token_bytes
 
-from httpx import AsyncClient
+from aiofiles import open as aiopen
+from aiofiles.os import mkdir
+from aiofiles.os import path as aiopath
+from httpx import AsyncClient, Limits
+from pyrogram.enums import ButtonStyle
 
-from ... import bot_loop, user_data
+from ... import LOGGER, bot_loop, user_data
 from ...core.config_manager import Config
 from ..telegram_helper.button_build import ButtonMaker
+from .db_handler import database
 from .help_messages import (
     CLONE_HELP_DICT,
     MIRROR_HELP_DICT,
@@ -26,11 +31,10 @@ from .help_messages import (
 from .telegraph_helper import telegraph
 
 _SERVICE_PWD_SALT = b"wzmlx_v3_service_pwd_salt"
-_PIN_TOKEN_SALT = b"wzmlx_v3_pin_token_salt"
-_PIN_TOKEN_TTL = 600
-_PIN_ALLOWED_CHARS = frozenset(
-    "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-)
+_PIN_SALT = b"wzmlx_v3_pin_salt"
+_PIN_LEN = 4
+_PIN_RATE_LIMIT = 5
+_PIN_RATE_WINDOW = 60
 
 _cached_secret_bytes = None
 
@@ -59,45 +63,40 @@ def derive_service_password(bot_id, service):
     return raw[:20] + raw[-4:]
 
 
-def derive_pin_token(gid, bot_id, issued_at=None):
+def _resolve_bot_id():
+    token = getattr(Config, "BOT_TOKEN", "")
+    if not isinstance(token, str) or not token.strip():
+        return "0"
+    token = token.strip()
+    return (token.split(":", 1)[0] or "0").strip()
+
+
+def derive_pin(gid, bot_id):
     if not gid:
         return None
-    issued = int(issued_at if issued_at is not None else time())
-    payload = f"{gid}|{bot_id}|{issued}"
-    secret = _shared_secret()
+    if not bot_id:
+        bot_id = "0"
     sig = hmac_new(
-        _PIN_TOKEN_SALT,
-        payload.encode("utf-8"),
+        _PIN_SALT,
+        f"{gid}|{bot_id}".encode("utf-8"),
         sha256,
-    ).hexdigest()[:24]
-    return f"{issued}.{sig}"
+    ).hexdigest()
+    digits = "".join(c for c in sig if c.isdigit())[:_PIN_LEN]
+    if len(digits) < _PIN_LEN:
+        digits = (digits + sig).ljust(_PIN_LEN, "0")[:_PIN_LEN]
+    return digits
 
 
-def verify_pin_token(gid, token, bot_id):
-    if not gid or not token:
+def verify_pin(gid, pin, bot_id):
+    if not gid or not pin:
         return False
-    try:
-        issued_str, sig = token.split(".", 1)
-        issued = int(issued_str)
-    except (ValueError, AttributeError):
+    if not pin.isdigit() or len(pin) != _PIN_LEN:
         return False
-    if not all(c in _PIN_ALLOWED_CHARS for c in sig):
+    expected = derive_pin(gid, bot_id)
+    if not expected:
         return False
-    if abs(int(time()) - issued) > _PIN_TOKEN_TTL:
-        return False
-    expected = hmac_new(
-        _PIN_TOKEN_SALT,
-        f"{gid}|{bot_id}|{issued}".encode("utf-8"),
-        sha256,
-    ).hexdigest()[:24]
-    return hmac_new(
-        _PIN_TOKEN_SALT,
-        expected.encode("utf-8"),
-        sha256,
-    ).hexdigest() == hmac_new(
-        _PIN_TOKEN_SALT,
-        sig.encode("utf-8"),
-        sha256,
+    return hmac_new(_PIN_SALT, expected.encode(), sha256).hexdigest() == hmac_new(
+        _PIN_SALT, pin.encode(), sha256
     ).hexdigest()
 
 COMMAND_USAGE = {}
@@ -162,8 +161,9 @@ def compare_versions(v1, v2):
 
 def bt_selection_buttons(id_):
     gid = id_[:12] if len(id_) > 25 else id_
-    bot_id = str(getattr(Config, "BOT_TOKEN", "").split(":", 1)[0] or "0")
-    token = derive_pin_token(id_, bot_id)
+    bot_id = _resolve_bot_id()
+    pin = derive_pin(id_, bot_id)
+    LOGGER.info(f"[PIN-DBG] bt_selection_buttons gid={gid} bot_id={bot_id} pin={pin[:2]}**")
     buttons = ButtonMaker()
     if Config.WEB_PINCODE:
         buttons.url_button(
@@ -171,11 +171,11 @@ def bt_selection_buttons(id_):
             f"{Config.BASE_URL}/app/files?gid={id_}",
             style=ButtonStyle.PRIMARY,
         )
-        buttons.data_button("Pincode", f"sel pin {gid} {token}")
+        buttons.data_button("Pincode", f"sel pin {gid} {pin}")
     else:
         buttons.url_button(
             "Select Files",
-            f"{Config.BASE_URL}/app/files?gid={id_}&pin={token}",
+            f"{Config.BASE_URL}/app/files?gid={id_}&pin={pin}",
             style=ButtonStyle.PRIMARY,
         )
     buttons.data_button(
@@ -199,6 +199,12 @@ async def get_telegraph_list(telegraph_content):
     buttons = ButtonMaker()
     buttons.url_button("🔎 VIEW", f"https://telegra.ph/{path[0]}")
     return buttons.build_menu(1)
+
+
+def handleIndex(index, lst):
+    if not lst:
+        return 0
+    return index % len(lst)
 
 
 def arg_parser(items, arg_base):
@@ -379,3 +385,79 @@ def safe_int(value, default=0):
         return int(value)
     except (ValueError, TypeError):
         return default
+
+
+async def download_image_url(url):
+    path = "Images/"
+    if not await aiopath.isdir(path):
+        await mkdir(path)
+    image_name = url.split("/")[-1].split("?")[0]
+    des_dir = ospath.join(path, image_name)
+    try:
+        async with AsyncClient(headers={"User-Agent": "Mozilla/5.0"}, follow_redirects=True) as client:
+            resp = await client.get(url, timeout=15)
+            if resp.status_code == 200:
+                async with aiopen(des_dir, "wb") as f:
+                    await f.write(resp.content)
+                return des_dir
+        LOGGER.error(f"Failed to download image from {url}: status {resp.status_code}")
+    except Exception as e:
+        LOGGER.error(f"Failed to download image from {url}: {e}")
+    return None
+
+
+async def search_images():
+    if not Config.IMG_SEARCH or not Config.USE_IMAGES:
+        return
+
+    query_list = [
+        q.strip().replace(" ", "+")
+        for q in Config.IMG_SEARCH.replace("'", "").replace('"', "").split(",")
+        if q.strip()
+    ]
+    if not query_list:
+        return
+
+    total_pages = max(Config.IMG_PAGE or 1, 1)
+    base_url = "https://www.wallpaperflare.com/search"
+    img_pattern = re_compile(r'data-src="(https://c4\.wallpaperflare\.com/wallpaper[^"]+)"')
+    seen = set(Config.IMAGES)
+    new_images = []
+
+    async def fetch_page(client, query, page):
+        url = f"{base_url}?wallpaper={query}&width=1280&height=720&page={page}"
+        try:
+            resp = await client.get(url, follow_redirects=True, timeout=15)
+            if resp.status_code != 200:
+                return []
+            return [
+                m for m in img_pattern.findall(resp.text) if m not in seen
+            ]
+        except Exception as e:
+            LOGGER.warning(f"IMG_SEARCH fetch failed [{query} p{page}]: {e}")
+            return []
+
+    try:
+        async with AsyncClient(
+            headers={"User-Agent": "Mozilla/5.0"},
+            limits=Limits(max_connections=5),
+        ) as client:
+            for query in query_list:
+                for page in range(1, total_pages + 1):
+                    results = await fetch_page(client, query, page)
+                    for url in results:
+                        if url not in seen:
+                            seen.add(url)
+                            new_images.append(url)
+    except Exception as e:
+        LOGGER.error(f"search_images error: {e}")
+        return
+
+    if new_images:
+        Config.IMAGES.extend(new_images)
+        Config.STATUS_LIMIT = 2
+        LOGGER.info(f"IMG_SEARCH: fetched {len(new_images)} new images (total: {len(Config.IMAGES)})")
+        if Config.DATABASE_URL:
+            await database.update_config(
+                {"IMAGES": Config.IMAGES, "STATUS_LIMIT": Config.STATUS_LIMIT}
+            )

@@ -43,6 +43,28 @@ def add_handlers():
     )
     TgClient.bot.add_handler(
         MessageHandler(
+            add_blacklist,
+            filters=command(BotCommands.BlackListCommand, case_sensitive=True)
+            & CustomFilters.sudo,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
+            remove_blacklist,
+            filters=command(BotCommands.RmBlackListCommand, case_sensitive=True)
+            & CustomFilters.sudo,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
+            black_listed,
+            filters=regex(r"^/")
+            & CustomFilters.authorized
+            & CustomFilters.blacklisted,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
             send_bot_settings,
             filters=command(BotCommands.BotSetCommand, case_sensitive=True)
             & CustomFilters.sudo,
@@ -301,6 +323,23 @@ def add_handlers():
             filters=command(BotCommands.MediaInfoCommand, case_sensitive=True)
             & CustomFilters.authorized,
         )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
+            picture_add,
+            filters=command(BotCommands.AddImageCommand, case_sensitive=True)
+            & CustomFilters.authorized,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
+            pictures,
+            filters=command(BotCommands.ImagesCommand, case_sensitive=True)
+            & CustomFilters.authorized,
+        )
+    )
+    TgClient.bot.add_handler(
+        CallbackQueryHandler(pics_callback, filters=regex("^images"))
     )
 
     TgClient.bot.add_handler(

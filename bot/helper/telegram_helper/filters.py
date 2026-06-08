@@ -1,3 +1,5 @@
+from time import time
+
 from pyrogram.filters import create
 from pyrogram.enums import ChatType
 
@@ -80,3 +82,21 @@ class CustomFilters:
         )
 
     sudo = create(sudo_user)
+
+    async def blacklisted_user(self, _, update):
+        uid = (update.from_user or update.sender_chat).id
+        if uid not in user_data:
+            return False
+        bl = user_data[uid].get("BLACKLIST", False)
+        if not bl:
+            return False
+        if bl is True:
+            return True
+        if isinstance(bl, (int, float)):
+            if bl > time():
+                return True
+            user_data[uid]["BLACKLIST"] = False
+            return False
+        return False
+
+    blacklisted = create(blacklisted_user)

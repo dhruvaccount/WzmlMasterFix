@@ -30,15 +30,27 @@ from aiohttp import ClientSession
 
 getLogger("httpx").setLevel(WARNING)
 getLogger("aiohttp").setLevel(WARNING)
+getLogger("uvicorn").setLevel(WARNING)
+getLogger("uvicorn.access").setLevel(WARNING)
+
+basicConfig(
+    format="[%(asctime)s] [%(levelname)s] - %(message)s",
+    datefmt="%d-%b-%y %I:%M:%S %p",
+    handlers=[FileHandler("log.txt"), StreamHandler()],
+    level=INFO,
+)
+
+LOGGER = getLogger(__name__)
 
 _SAFE_PATH = re_compile(r"^[A-Za-z0-9_./-]+$")
 _SAFE_GID = re_compile(r"^[A-Za-z0-9_-]{1,64}$")
+_SAFE_PIN = re_compile(r"^\d{4}$")
 _SERVICE_PWD_SALT = b"wzmlx_v3_service_pwd_salt"
-_PIN_TOKEN_SALT = b"wzmlx_v3_pin_token_salt"
-_PIN_TOKEN_TTL = 600
-_PIN_ALLOWED_CHARS = frozenset(
-    "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-)
+_PIN_SALT = b"wzmlx_v3_pin_salt"
+_PIN_LEN = 4
+_PIN_RATE_LIMIT = 5
+_PIN_RATE_WINDOW = 60
+_pin_attempts: dict = {}
 
 _cached_secret_bytes = None
 
@@ -55,8 +67,18 @@ def _load_config():
     return bot_token, secret
 
 
+def _resolve_bot_id(token):
+    if not token or not isinstance(token, str):
+        return "0"
+    token = token.strip()
+    if not token:
+        return "0"
+    return (token.split(":", 1)[0] or "0").strip()
+
+
 _BOT_TOKEN, _WEB_SECRET = _load_config()
-_BOT_ID = (_BOT_TOKEN.split(":", 1)[0] or "0").strip()
+_BOT_ID = _resolve_bot_id(_BOT_TOKEN)
+LOGGER.info(f"[PIN-DBG] wserver startup _BOT_ID={_BOT_ID} (token first-12={_BOT_TOKEN[:12]})")
 
 
 def _service_pwd(service):
@@ -79,28 +101,66 @@ def _service_pwd(service):
     return raw[:20] + raw[-4:]
 
 
-def _verify_pin_token(gid, token):
-    if not gid or not token:
-        return False
-    from time import time
-    from hmac import new as hmac_new
+def _derive_pin(gid):
     from hashlib import sha256
-    try:
-        issued_str, sig = token.split(".", 1)
-        issued = int(issued_str)
-    except (ValueError, AttributeError):
+    from hmac import new as hmac_new
+    sig = hmac_new(
+        _PIN_SALT,
+        f"{gid}|{_BOT_ID}".encode("utf-8"),
+        sha256,
+    ).hexdigest()
+    digits = "".join(c for c in sig if c.isdigit())[:_PIN_LEN]
+    if len(digits) < _PIN_LEN:
+        digits = (digits + sig).ljust(_PIN_LEN, "0")[:_PIN_LEN]
+    return digits
+
+
+def _pin_rate_limited(gid):
+    from time import time
+    now = time()
+    cutoff = now - _PIN_RATE_WINDOW
+    attempts = _pin_attempts.get(gid, [])
+    attempts = [t for t in attempts if t > cutoff]
+    if attempts:
+        _pin_attempts[gid] = attempts
+    else:
+        _pin_attempts.pop(gid, None)
+    if len(_pin_attempts) > 10000:
+        stale = [
+            g
+            for g, ts in _pin_attempts.items()
+            if not ts or (ts and ts[-1] < cutoff)
+        ]
+        for g in stale:
+            _pin_attempts.pop(g, None)
+    return len(attempts) >= _PIN_RATE_LIMIT
+
+
+def _record_pin_attempt(gid):
+    from time import time
+    _pin_attempts.setdefault(gid, []).append(time())
+
+
+def _verify_pin(gid, pin):
+    from hashlib import sha256
+    from hmac import new as hmac_new
+    if not gid or not pin:
+        LOGGER.info(f"[PIN-DBG] verify_pin rejected: empty gid or pin (gid={gid!r} pin_len={len(pin) if pin else 0})")
         return False
-    if not sig or not all(c in _PIN_ALLOWED_CHARS for c in sig):
+    if not _SAFE_PIN.match(pin):
+        LOGGER.info(f"[PIN-DBG] verify_pin rejected: bad pin format (pin={pin!r})")
         return False
-    if abs(int(time()) - issued) > _PIN_TOKEN_TTL:
+    expected = _derive_pin(gid)
+    if not expected:
+        LOGGER.info(f"[PIN-DBG] verify_pin rejected: derive_pin returned empty (gid={gid!r})")
         return False
-    if not _WEB_SECRET:
-        return False
-    payload = f"{gid}|{_BOT_ID}|{issued}".encode("utf-8")
-    expected = hmac_new(_PIN_TOKEN_SALT, payload, sha256).hexdigest()[:24]
-    a = hmac_new(_PIN_TOKEN_SALT, expected.encode("utf-8"), sha256).hexdigest()
-    b = hmac_new(_PIN_TOKEN_SALT, sig.encode("utf-8"), sha256).hexdigest()
-    return a == b
+    LOGGER.info(
+        f"[PIN-DBG] verify_pin gid={gid!r} "
+        f"bot_id={_BOT_ID} expected={expected!r} got={pin!r} match={expected == pin}"
+    )
+    return hmac_new(_PIN_SALT, expected.encode(), sha256).hexdigest() == hmac_new(
+        _PIN_SALT, pin.encode(), sha256
+    ).hexdigest()
 
 
 aria2 = None
@@ -130,15 +190,6 @@ app = FastAPI(lifespan=lifespan)
 
 
 templates = Jinja2Templates(directory="web/templates/")
-
-basicConfig(
-    format="[%(asctime)s] [%(levelname)s] - %(message)s",  #  [%(filename)s:%(lineno)d]
-    datefmt="%d-%b-%y %I:%M:%S %p",
-    handlers=[FileHandler("log.txt"), StreamHandler()],
-    level=INFO,
-)
-
-LOGGER = getLogger(__name__)
 
 
 async def re_verify(paused, resumed, hash_id):
@@ -180,7 +231,11 @@ async def re_verify(paused, resumed, hash_id):
 
 @app.get("/app/files", response_class=HTMLResponse)
 async def files(request: Request):
-    return templates.TemplateResponse(request, "page.html")
+    response = templates.TemplateResponse(request, "page.html")
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @app.api_route(
@@ -188,6 +243,11 @@ async def files(request: Request):
 )
 async def handle_torrent(request: Request):
     params = request.query_params
+    LOGGER.info(
+        f"[PIN-DBG] handle_torrent method={request.method} "
+        f"gid={params.get('gid', '')!r} pin={params.get('pin', '')!r} "
+        f"mode={params.get('mode', '')!r} bot_id={_BOT_ID}"
+    )
 
     if not (gid := params.get("gid")):
         return JSONResponse(
@@ -219,15 +279,28 @@ async def handle_torrent(request: Request):
             }
         )
 
-    if not _verify_pin_token(gid, pin):
+    if _pin_rate_limited(gid):
+        return JSONResponse(
+            {
+                "files": [],
+                "engine": "",
+                "error": "Too many attempts",
+                "message": f"Too many PIN attempts. Try again in {_PIN_RATE_WINDOW}s.",
+            },
+            status_code=429,
+        )
+
+    if not _verify_pin(gid, pin):
+        _record_pin_attempt(gid)
         return JSONResponse(
             {
                 "files": [],
                 "engine": "",
                 "error": "Invalid pin",
-                "message": "The PIN you entered is incorrect",
+                "message": "The PIN you entered is incorrect. Try Again!",
             }
         )
+    _pin_attempts.pop(gid, None)
 
     if request.method == "POST":
         if not (mode := params.get("mode")):
@@ -342,7 +415,11 @@ async def set_aria2(gid, selected_files):
 
 @app.get("/", response_class=HTMLResponse)
 async def homepage(request: Request):
-    return templates.TemplateResponse(request, "landing.html")
+    response = templates.TemplateResponse(request, "landing.html")
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 def rewrite_location(location: str, proxy_prefix: str) -> str:
@@ -415,7 +492,13 @@ async def protected_proxy(
         request.method, url, headers, dict(request.query_params), body, f"/{service}"
     )
     if "pass" in request.query_params:
-        response.set_cookie(f"{service}_pass", password, httponly=True, samesite="strict")
+        response.set_cookie(
+            f"{service}_pass",
+            password,
+            httponly=True,
+            samesite="strict",
+            secure=False,
+        )
     return response
 
 

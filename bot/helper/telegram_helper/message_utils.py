@@ -1,8 +1,9 @@
 from asyncio import sleep, gather
+from random import choice
 from re import match as re_match
 from time import time
 
-from pyrogram.types import Message
+from pyrogram.types import Message, InputMediaPhoto
 from pyrogram.enums import ParseMode
 from pyrogram.errors import (
     FloodWait,
@@ -11,6 +12,7 @@ from pyrogram.errors import (
     ReplyMarkupInvalid,
     PhotoInvalidDimensions,
     WebpageCurlFailed,
+    WebpageMediaEmpty,
     MediaEmpty,
     MediaCaptionTooLong,
     EntityBoundsInvalid,
@@ -25,7 +27,7 @@ except ImportError:
 from ... import LOGGER, intervals, status_dict, task_dict_lock
 from ...core.config_manager import Config
 from ...core.tg_client import TgClient
-from ..ext_utils.bot_utils import SetInterval
+from ..ext_utils.bot_utils import SetInterval, download_image_url
 from ..ext_utils.exceptions import TgLinkException
 from ..ext_utils.status_utils import get_readable_message
 
@@ -34,6 +36,28 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
     try:
         if photo:
             try:
+                if photo == "IMAGES":
+                    if Config.USE_IMAGES and Config.IMAGES:
+                        photo = choice(Config.IMAGES)
+                    else:
+                        photo = None
+                if photo is None:
+                    if isinstance(message, int):
+                        return await TgClient.bot.send_message(
+                            chat_id=message,
+                            text=text,
+                            disable_web_page_preview=True,
+                            disable_notification=True,
+                            reply_markup=buttons,
+                        )
+                    return await message.reply(
+                        text=text,
+                        quote=True,
+                        disable_web_page_preview=True,
+                        disable_notification=True,
+                        reply_markup=buttons,
+                        **kwargs,
+                    )
                 if isinstance(message, int):
                     return await TgClient.bot.send_photo(
                         chat_id=message,
@@ -66,8 +90,22 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
                     block,
                     photo,
                 )
-            except (PhotoInvalidDimensions, WebpageCurlFailed, MediaEmpty):
-                LOGGER.error("Invalid photo dimensions or empty media", exc_info=True)
+            except (
+                PhotoInvalidDimensions,
+                WebpageCurlFailed,
+                WebpageMediaEmpty,
+                MediaEmpty,
+            ):
+                try:
+                    des_dir = await download_image_url(photo)
+                    if des_dir:
+                        msg = await send_message(message, text, buttons, block, des_dir)
+                        from aiofiles.os import remove as aioremove
+
+                        await aioremove(des_dir)
+                        return msg
+                except Exception:
+                    LOGGER.error("Failed to send fallback photo", exc_info=True)
                 return
             except Exception:
                 LOGGER.error("Error while sending photo", exc_info=True)
@@ -109,8 +147,39 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
         return str(e)
 
 
-async def edit_message(message, text, buttons=None, block=True):
+async def edit_message(message, text, buttons=None, block=True, photo=None):
     try:
+        if message.media:
+            if photo:
+                if photo == "IMAGES":
+                    if Config.USE_IMAGES and Config.IMAGES:
+                        photo = choice(Config.IMAGES)
+                    else:
+                        photo = None
+                if photo:
+                    try:
+                        return await message.edit_media(
+                            InputMediaPhoto(photo, text), reply_markup=buttons
+                        )
+                    except (
+                        PhotoInvalidDimensions,
+                        WebpageCurlFailed,
+                        WebpageMediaEmpty,
+                        MediaEmpty,
+                    ):
+                        des_dir = await download_image_url(photo)
+                        if des_dir:
+                            msg = await message.edit_media(
+                                InputMediaPhoto(des_dir, text), reply_markup=buttons
+                            )
+                            from aiofiles.os import remove as aioremove
+
+                            await aioremove(des_dir)
+                            return msg
+                        return await message.edit_caption(
+                            caption=text, reply_markup=buttons
+                        )
+            return await message.edit_caption(caption=text, reply_markup=buttons)
         return await message.edit(
             text=text,
             disable_web_page_preview=True,
@@ -120,13 +189,13 @@ async def edit_message(message, text, buttons=None, block=True):
         pass
     except ReplyMarkupInvalid as rmi:
         LOGGER.warning(str(rmi))
-        return await edit_message(message, text, None)
+        return await edit_message(message, text, None, block, photo)
     except FloodWait as f:
         LOGGER.warning(str(f))
         if not block:
             return str(f)
         await sleep(f.value * 1.2)
-        return await edit_message(message, text, buttons)
+        return await edit_message(message, text, buttons, block, photo)
     except Exception as e:
         LOGGER.error(str(e), exc_info=True)
         return str(e)
@@ -315,7 +384,7 @@ async def update_status_message(sid, force=False):
             return
         if text != status_dict[sid]["message"].text:
             message = await edit_message(
-                status_dict[sid]["message"], text, buttons, block=False
+                status_dict[sid]["message"], text, buttons, block=False, photo="IMAGES"
             )
             if isinstance(message, str):
                 if message.startswith("Telegram says: [40"):
@@ -352,7 +421,7 @@ async def send_status_message(msg, user_id=0):
                     del intervals["status"][sid]
                 return
             old_message = status_dict[sid]["message"]
-            message = await send_message(msg, text, buttons, block=False)
+            message = await send_message(msg, text, buttons, block=False, photo="IMAGES")
             if isinstance(message, str):
                 LOGGER.error(
                     f"Status with id: {sid} haven't been sent. Error: {message}"
@@ -365,7 +434,7 @@ async def send_status_message(msg, user_id=0):
             text, buttons = await get_readable_message(sid, is_user)
             if text is None:
                 return
-            message = await send_message(msg, text, buttons, block=False)
+            message = await send_message(msg, text, buttons, block=False, photo="IMAGES")
             if isinstance(message, str):
                 LOGGER.error(
                     f"Status with id: {sid} haven't been sent. Error: {message}"
