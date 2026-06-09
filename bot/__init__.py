@@ -98,7 +98,7 @@ queue_dict_lock = Lock()
 qb_listener_lock = Lock()
 nzb_listener_lock = Lock()
 jd_listener_lock = Lock()
-cpu_eater_lock = Lock()
+ff_lock = Lock()
 same_directory_lock = Lock()
 
 def _sabnzbd_key():
