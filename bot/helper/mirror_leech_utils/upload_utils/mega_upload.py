@@ -1,6 +1,7 @@
 import os
-from asyncio import TimeoutError as AsyncTimeoutError, sleep as asleep, wait_for
+from asyncio import TimeoutError as AsyncTimeoutError, wait_for
 from contextlib import suppress
+from time import sleep
 from mimetypes import guess_type
 from secrets import token_hex
 
@@ -144,7 +145,7 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
 
     async_api = AsyncMega()
     async_api.api = api = MegaApi("", mega_dir, "WZML-X", 4)
-    await asleep(0.1)
+    sleep(0.1)
     mega_listener = MegaAppListener(async_api, listener)
     mega_listener._upload_mode = True
     async_api._mega_listener = mega_listener
