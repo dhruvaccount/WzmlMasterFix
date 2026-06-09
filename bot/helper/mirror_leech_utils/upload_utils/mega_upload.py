@@ -121,7 +121,6 @@ async def _upload_file(async_api, mega_listener, file_path, parent_node, custom_
             try:
                 await wait_for(mega_listener._export_done.wait(), timeout=60)
                 link = getattr(mega_listener, "_export_link", None)
-                LOGGER.info(f"MegaUpload: export result link={link}")
             except AsyncTimeoutError:
                 LOGGER.warning("MegaUpload: export timed out after 60s")
 
@@ -149,16 +148,13 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
     mega_listener._upload_mode = True
     async_api._mega_listener = mega_listener
     api.addListener(mega_listener)
-    LOGGER.info(f"MegaUpload: sdk setup done")
 
     try:
         async with task_dict_lock:
             task_dict[listener.mid] = MegaDownloadStatus(listener, mega_listener, gid, "up")
         await update_status_message(listener.message.chat.id)
 
-        LOGGER.info(f"MegaUpload: login start")
         await async_api.login(mega_email, mega_password)
-        LOGGER.info(f"MegaUpload: login done, err={mega_listener.error}")
         if mega_listener.error:
             await listener.on_upload_error(
                 f"Mega login failed: {_mega_error_format(mega_listener.error)}"
@@ -173,7 +169,6 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
             return
 
         root_node = mega_listener.node
-        LOGGER.info(f"MegaUpload: root_node={root_node is not None}")
         if not root_node:
             await listener.on_upload_error(
                 "Failed to get Mega root node."
@@ -185,23 +180,17 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
         mime_type = "application/octet-stream"
 
         upload_link = None
-        LOGGER.info(f"MegaUpload: checking path isdir={await aiopath.isdir(path)}")
         if await aiopath.isdir(path):
-            LOGGER.info(f"MegaUpload: folder mode")
             total_files = await sync_to_async(lambda: sum(len(files) for _, _, files in os.walk(path)))
-            LOGGER.info(f"MegaUpload: total_files={total_files}")
             if total_files == 0:
                 await listener.on_upload_error("No files to upload in folder")
                 return
             listener.size = await _get_total_size(path)
             dir_name = os.path.basename(path.rstrip("/\\"))
-            LOGGER.info(f"MegaUpload: dir_name={dir_name} total_size={listener.size}")
 
-            LOGGER.info(f"MegaUpload: ensure_folder_structure start")
             mega_root, folder_map = await _ensure_folder_structure(
                 async_api, mega_listener, path, root_node, dir_name
             )
-            LOGGER.info(f"MegaUpload: ensure_folder_structure done root={mega_root is not None} folders={len(folder_map)}")
             if not mega_root:
                 if not listener.is_cancelled:
                     await listener.on_upload_error("Failed to create root folder on Mega")
@@ -210,10 +199,8 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
             mega_listener._suppress_export = True
 
             walk_result = await sync_to_async(lambda: list(os.walk(path)))
-            LOGGER.info(f"MegaUpload: walk len={len(walk_result)}")
             for root, _, files in walk_result:
                 if listener.is_cancelled:
-                    LOGGER.info(f"MegaUpload: cancelled during walk")
                     return
                 if root == path:
                     parent = mega_root
@@ -221,39 +208,31 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
                     parent = folder_map.get(root)
 
                 if parent is None:
-                    LOGGER.info(f"MegaUpload: no parent for {root}, skipping")
                     continue
 
                 for f in files:
                     if listener.is_cancelled:
-                        LOGGER.info(f"MegaUpload: cancelled during upload")
                         return
                     file_path = os.path.join(root, f)
-                    LOGGER.info(f"MegaUpload: uploading {f}")
                     ok, _ = await _upload_file(
                         async_api, mega_listener, file_path, parent, f, suppress_export=True
                     )
                     if ok:
                         uploaded_files += 1
-                        LOGGER.info(f"MegaUpload: uploaded {uploaded_files}/{total_files}")
                     else:
                         if not listener.is_cancelled:
                             await listener.on_upload_error(f"MegaUpload failed for {f}")
                         return
 
             mime_type = "Folder"
-            LOGGER.info(f"MegaUpload: folder upload done, uploaded={uploaded_files}, exporting...")
             if uploaded_files > 0 and not listener.is_cancelled:
                 try:
                     mega_listener._suppress_export = False
-                    LOGGER.info(f"MegaUpload: calling export_node")
                     upload_link = await async_api.export_node(mega_root)
-                    LOGGER.info(f"MegaUpload: export_node result={upload_link}")
                 except Exception:
                     LOGGER.exception("MegaUpload: folder export failed")
 
         else:
-            LOGGER.info(f"MegaUpload: single file mode")
             total_files = 1
             file_name = os.path.basename(path)
             listener.size = await aiopath.getsize(path)
@@ -264,7 +243,6 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
                 uploaded_files = 1
                 upload_link = link
                 mime_type = guess_type(file_name)[0] or "application/octet-stream"
-                LOGGER.info(f"MegaUpload: single file done, link={link}")
             else:
                 if not listener.is_cancelled:
                     await listener.on_upload_error(
@@ -282,14 +260,12 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
 
     except Exception as e:
         LOGGER.error(
-            f"MegaUpload: unexpected error: {e}", exc_info=True
+            f"Unexpected error in add_mega_upload: {e}", exc_info=True
         )
         if not listener.is_cancelled:
             await listener.on_upload_error(f"Internal error: {e}")
     finally:
-        LOGGER.info(f"MegaUpload: cleanup")
         if async_api is not None:
             with suppress(Exception):
                 await async_api.logout()
         await _cleanup_dir(mega_base)
-        LOGGER.info(f"MegaUpload: done")

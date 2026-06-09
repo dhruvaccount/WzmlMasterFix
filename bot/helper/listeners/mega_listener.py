@@ -148,16 +148,12 @@ class AsyncMega:
     async def create_folder(self, name, parent, source="main"):
         mega_api = self.folder_api if source == "folder" else self.api
         ml = getattr(self, "_mega_listener", None)
-        LOGGER.info(f"MegaCb: create_folder name={name} source={source}")
 
         try:
-            LOGGER.info("MegaCb: create_folder getNodeByPath start")
             existing = await sync_to_async(mega_api.getNodeByPath, name, parent)
-            LOGGER.info(f"MegaCb: create_folder getNodeByPath done, existing={existing is not None}")
             if existing:
                 return existing
-        except Exception as e:
-            LOGGER.info(f"MegaCb: create_folder getNodeByPath exception: {e}")
+        except Exception:
             pass
 
         self.continue_event.clear()
@@ -166,11 +162,8 @@ class AsyncMega:
         if ml:
             ml._created_folder_node = None
         try:
-            LOGGER.info(f"MegaCb: create_folder calling createFolder")
             await sync_to_async(mega_api.createFolder, name, parent)
-            LOGGER.info(f"MegaCb: create_folder createFolder returned, waiting callback")
             await wait_for(self.continue_event.wait(), timeout=_REQUEST_TIMEOUT_SECONDS)
-            LOGGER.info(f"MegaCb: create_folder callback received")
             node = getattr(ml, "_created_folder_node", None) if ml else None
             if not node:
                 LOGGER.warning(f"create_folder: no node for '{name}'")
@@ -424,7 +417,6 @@ class MegaAppListener(MegaListener):
         try:
             request_type = request.getType()
             err_code = error.getErrorCode() if error else MegaError.API_OK
-            LOGGER.info(f"MegaCb: onRequestFinish type={request_type} err={err_code} source={source} upload={self._upload_mode}")
             if err_code != MegaError.API_OK:
                 if self.is_cancelled:
                     self._set_request_event()
@@ -485,7 +477,6 @@ class MegaAppListener(MegaListener):
             elif request_type == MegaRequest.TYPE_EXPORT:
                 try:
                     self._export_link = request.getLink()
-                    LOGGER.info(f"TYPE_EXPORT: link={self._export_link}")
                 except Exception:
                     pass
                 self._set_export_done()
@@ -515,7 +506,6 @@ class MegaAppListener(MegaListener):
         try:
             if not self._is_target_transfer(transfer):
                 return
-            LOGGER.info(f"MegaCb: onTransferStart type={transfer.getType()} name={transfer.getFileName()} upload={self._upload_mode}")
             self._current_transfer = transfer
             self._bytes_transferred = 0
             self._set_request_event()
@@ -552,7 +542,6 @@ class MegaAppListener(MegaListener):
     def onTransferFinish(self, api: MegaApi, transfer: MegaTransfer, error):
         try:
             err_code = error.getErrorCode() if error else MegaError.API_OK
-            LOGGER.info(f"MegaCb: onTransferFinish type={transfer.getType()} err={err_code} upload={self._upload_mode} caller={self._caller_manages_completion} suppress={self._suppress_export} cancelled={self.is_cancelled}")
             if self.is_cancelled:
                 self._set_transfer_event()
                 return
@@ -621,7 +610,6 @@ class MegaAppListener(MegaListener):
                 return
             err_code = error.getErrorCode() if error else 0
             err_str = error.toString() if error else "unknown"
-            LOGGER.warning(f"MegaCb: onTransferTemporaryError err={err_code} upload={self._upload_mode}")
             if err_code == MegaError.API_EOVERQUOTA:
                 msg = f"TransferTempError: Over quota: {err_str}"
                 self.error = msg
