@@ -71,6 +71,8 @@ status_dict = {}
 task_dict = {}
 rss_dict = {}
 shortener_dict = {}
+categories_dict = {}
+list_drives_dict = {}
 var_list = [
     "BOT_TOKEN",
     "TELEGRAM_API",

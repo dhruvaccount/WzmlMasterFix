@@ -15,6 +15,7 @@ mediainfo/*
 sabnzbd/*
 list_drives.txt
 shortener.txt
+categories.txt
 cookies.txt
 downloads/*
 .github/instructions/*

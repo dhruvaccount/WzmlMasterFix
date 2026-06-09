@@ -11,9 +11,11 @@ from .. import (
     LOGGER,
     aria2_options,
     auth_chats,
+    categories_dict,
     drives_ids,
     drives_names,
     index_urls,
+    list_drives_dict,
     shortener_dict,
     var_list,
     user_data,
@@ -287,6 +289,14 @@ async def update_variables():
         drives_names.append("Main")
         drives_ids.append(Config.GDRIVE_ID)
         index_urls.append(Config.INDEX_URL)
+        list_drives_dict["Main"] = {
+            "drive_id": Config.GDRIVE_ID,
+            "index_link": Config.INDEX_URL,
+        }
+        categories_dict["Root"] = {
+            "drive_id": Config.GDRIVE_ID,
+            "index_link": Config.INDEX_URL,
+        }
 
     if not Config.IMDB_TEMPLATE:
         Config.IMDB_TEMPLATE = """
@@ -315,6 +325,14 @@ async def update_variables():
                 else:
                     index_urls.append("")
 
+                sep = 2 if temp[-1].startswith("http") else 1
+                tmp = line.strip().rsplit(maxsplit=sep)
+                name = "Main Custom" if tmp[0].casefold() == "Main" else tmp[0]
+                list_drives_dict[name] = {
+                    "drive_id": tmp[1],
+                    "index_link": (tmp[2] if sep == 2 else ""),
+                }
+
     if await aiopath.exists("shortener.txt"):
         async with aiopen("shortener.txt", "r+") as f:
             lines = await f.readlines()
@@ -322,6 +340,18 @@ async def update_variables():
                 temp = line.strip().split()
                 if len(temp) == 2:
                     shortener_dict[temp[0]] = temp[1]
+
+    if await aiopath.exists("categories.txt"):
+        async with aiopen("categories.txt", "r+") as f:
+            lines = await f.readlines()
+            for line in lines:
+                sep = 2 if line.strip().split()[-1].startswith("http") else 1
+                temp = line.strip().rsplit(maxsplit=sep)
+                name = "Root Custom" if temp[0].casefold() == "Root" else temp[0]
+                categories_dict[name] = {
+                    "drive_id": temp[1],
+                    "index_link": (temp[2] if sep == 2 else ""),
+                }
 
 
 async def load_configurations():

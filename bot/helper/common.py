@@ -14,6 +14,7 @@ from pyrogram.enums import ChatAction
 from .. import (
     DOWNLOAD_DIR,
     LOGGER,
+    categories_dict,
     cores,
     cpu_eater_lock,
     excluded_extensions,
@@ -25,7 +26,12 @@ from .. import (
 )
 from ..core.config_manager import Config, BinConfig
 from ..core.tg_client import TgClient
-from .ext_utils.bot_utils import get_size_bytes, new_task, sync_to_async
+from .ext_utils.bot_utils import (
+    fetch_drive_cat,
+    get_size_bytes,
+    new_task,
+    sync_to_async,
+)
 from .ext_utils.bulk_links import extract_bulk_links
 from .ext_utils.files_utils import (
     SevenZ,
@@ -58,6 +64,7 @@ from .mirror_leech_utils.status_utils.sevenz_status import SevenZStatus
 from .telegram_helper.bot_commands import BotCommands
 from .telegram_helper.message_utils import (
     get_tg_link_message,
+    open_category_btns,
     send_message,
     send_status_message,
 )
@@ -91,6 +98,8 @@ class TaskConfig:
         self.tag = ""
         self.name = ""
         self.subname = ""
+        self.category = ""
+        self.index_link = ""
         self.name_swap = ""
         self.thumbnail_layout = ""
         self.folder_name = ""
@@ -268,6 +277,22 @@ class TaskConfig:
         elif "UPLOAD_PATHS" not in self.user_dict and Config.UPLOAD_PATHS:
             if self.up_dest in Config.UPLOAD_PATHS:
                 self.up_dest = Config.UPLOAD_PATHS[self.up_dest]
+
+        if self.category and not self.is_leech and not self.up_dest:
+            dcats = fetch_drive_cat(self.user_id)
+            if self.category in dcats:
+                self.up_dest = dcats[self.category]["drive_id"]
+                self.index_link = dcats[self.category].get("index_link", "")
+            elif self.category in categories_dict:
+                self.up_dest = categories_dict[self.category]["drive_id"]
+                self.index_link = categories_dict[self.category].get("index_link", "")
+            else:
+                drive_id, index_link, is_cancelled = await open_category_btns(self.message)
+                if is_cancelled:
+                    return
+                if drive_id:
+                    self.up_dest = drive_id
+                    self.index_link = index_link or ""
 
         if self.ffmpeg_cmds and not isinstance(self.ffmpeg_cmds, list):
             if self.user_dict.get("FFMPEG_CMDS", None):

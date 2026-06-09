@@ -22,6 +22,7 @@ from pyrogram.handlers import MessageHandler
 from .. import (
     LOGGER,
     aria2_options,
+    categories_dict,
     drives_ids,
     drives_names,
     index_urls,
@@ -352,7 +353,7 @@ async def get_buttons(key=None, edit_type=None, edit_mode=False):
             val = Config.get(k)
             label = k.removeprefix("DISABLE_")
             if not val:
-                buttons.data_button(f"✅ {label}", f"botset toggleonoff {k} on")
+                buttons.data_button(f"✓ {label}", f"botset toggleonoff {k} on")
             else:
                 buttons.data_button(label, f"botset toggleonoff {k} off")
         buttons.data_button("Back", "botset back", position="footer")
@@ -378,6 +379,7 @@ async def get_buttons(key=None, edit_type=None, edit_mode=False):
                     "accounts.zip",
                     "list_drives.txt",
                     "shortener.txt",
+                    "categories.txt",
                     "cookies.txt",
                     ".netrc",
                 ]
@@ -846,6 +848,23 @@ async def update_private_file(_, message, pre_message, key, new_file=False):
                 temp = line.strip().split()
                 if len(temp) == 2:
                     shortener_dict[temp[0]] = temp[1]
+    elif file_name == "categories.txt" and await aiopath.exists("categories.txt"):
+        categories_dict.clear()
+        if Config.GDRIVE_ID:
+            categories_dict["Root"] = {
+                "drive_id": Config.GDRIVE_ID,
+                "index_link": Config.INDEX_URL,
+            }
+        async with aiopen("categories.txt", "r+") as f:
+            lines = await f.readlines()
+            for line in lines:
+                sep = 2 if line.strip().split()[-1].startswith("http") else 1
+                temp = line.strip().rsplit(maxsplit=sep)
+                name = "Root Custom" if temp[0].casefold() == "Root" else temp[0]
+                categories_dict[name] = {
+                    "drive_id": temp[1],
+                    "index_link": (temp[2] if sep == 2 else ""),
+                }
     await update_buttons(pre_message, key)
     await database.update_private_file(file_name)
 
