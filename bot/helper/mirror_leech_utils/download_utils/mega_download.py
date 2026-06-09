@@ -100,31 +100,45 @@ async def add_mega_download(listener, path):
         await makedirs(mega_dir, exist_ok=True)
 
         async_api = AsyncMega()
+        LOGGER.info("Mega: creating main MegaApi")
         async_api.api = api = MegaApi("", mega_dir, "WZML-X", 4)
+        LOGGER.info("Mega: creating main listener")
         mega_listener = MegaAppListener(async_api, listener)
         async_api._mega_listener = mega_listener
+        LOGGER.info("Mega: addListener main")
         api.addListener(mega_listener)
+        LOGGER.info("Mega: addListener main done")
 
         if _is_folder_link(listener.link):
             mega_folder_dir = os.path.join(mega_base, "folder")
             await makedirs(mega_folder_dir, exist_ok=True)
+            LOGGER.info("Mega: creating folder MegaApi")
             async_api.folder_api = MegaApi("", mega_folder_dir, "WZML-X", 4)
+            LOGGER.info("Mega: creating folder listener")
             folder_listener = MegaFolderListener(mega_listener)
             async_api._folder_listener = folder_listener
+            LOGGER.info("Mega: addListener folder")
             async_api.folder_api.addListener(folder_listener)
+            LOGGER.info("Mega: folder api done")
 
         if mega_email and mega_password:
+            LOGGER.info("Mega: login starting")
             await async_api.login(mega_email, mega_password)
+            LOGGER.info("Mega: login done, error=%s", getattr(mega_listener, "error", None))
             if mega_listener.error:
                 await listener.on_download_error(_mega_error_format(mega_listener.error))
                 return
+            LOGGER.info("Mega: fetchNodes starting")
             await async_api.fetchNodes()
+            LOGGER.info("Mega: fetchNodes done, error=%s", getattr(mega_listener, "error", None))
             if mega_listener.error:
                 await listener.on_download_error(_mega_error_format(mega_listener.error))
                 return
 
         if _is_folder_link(listener.link):
+            LOGGER.info("Mega: loginToFolder starting")
             await async_api.loginToFolder(listener.link)
+            LOGGER.info("Mega: loginToFolder done, error=%s", getattr(mega_listener, "error", None))
             if mega_listener.error:
                 await listener.on_download_error(_mega_error_format(mega_listener.error))
                 return
@@ -134,13 +148,18 @@ async def add_mega_download(listener, path):
                     mega_listener._subfolder_target = async_api.folder_api.base64ToHandle(subfolder_handle)
                 except Exception as e:
                     LOGGER.warning(f"Mega subfolder handle conversion failed: {e}")
+            LOGGER.info("Mega: fetchNodes folder starting")
             await async_api.fetchNodes(async_api.folder_api, source="folder")
+            LOGGER.info("Mega: fetchNodes folder done")
             node = mega_listener.node
+            LOGGER.info("Mega: folder node=%s", node)
             if not node:
                 await listener.on_download_error("Failed to get folder root node", is_limit=False)
                 return
         else:
+            LOGGER.info("Mega: getPublicNode starting")
             await async_api.getPublicNode(listener.link)
+            LOGGER.info("Mega: getPublicNode done")
             node = mega_listener.public_node
         if not node:
             await listener.on_download_error("Failed to resolve MEGA link")
@@ -192,6 +211,7 @@ async def add_mega_download(listener, path):
             await makedirs(download_path, exist_ok=True)
 
         for attempt in range(5):
+            LOGGER.info("Mega: download attempt %d/5 starting", attempt + 1)
             cancel_token = _make_cancel_token()
             mega_listener._cancel_token = cancel_token
             mega_listener.error = None
@@ -200,6 +220,7 @@ async def add_mega_download(listener, path):
             mega_listener._total_downloaded_bytes = 0
             mega_listener._caller_manages_completion = False
 
+            LOGGER.info("Mega: startDownload calling ...")
             await async_api.startDownload(
                 node,
                 download_path,
@@ -211,16 +232,23 @@ async def add_mega_download(listener, path):
                 2,
                 False,
             )
+            LOGGER.info("Mega: startDownload returned")
+            LOGGER.info("Mega: wait_for_transfer starting ...")
             await async_api.wait_for_transfer()
+            LOGGER.info("Mega: wait_for_transfer returned")
 
             if listener.is_cancelled or mega_listener.is_cancelled:
+                LOGGER.info("Mega: download cancelled, returning")
                 return
             if not mega_listener.retryable_error:
+                LOGGER.info("Mega: download succeeded (no retryable error)")
                 return
+            LOGGER.warning("Mega: download attempt %d retryable: %s", attempt + 1, mega_listener.retryable_error)
             if attempt >= 4:
                 await listener.on_download_error(_mega_error_format(mega_listener.retryable_error))
                 return
             await _cleanup_dir(download_path)
+            LOGGER.info("Mega: retry sleep %ds before attempt %d", 2 ** attempt, attempt + 2)
             await asleep(2 ** attempt)
 
     except Exception as e:

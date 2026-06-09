@@ -105,6 +105,8 @@ class AsyncMega:
         return self._request_type_for_name(getattr(function, "__name__", ""))
 
     async def run(self, function, *args, expected_type=None, expected_source="main", **kwargs):
+        fn_name = getattr(function, '__name__', 'unknown')
+        LOGGER.info("Mega: run(%s, source=%s) preparing future", fn_name, expected_source)
         future = Future()
         self._request_future = future
         self._expected_request_type = (
@@ -113,13 +115,16 @@ class AsyncMega:
         self._expected_request_source = expected_source
         
         try:
+            LOGGER.info("Mega: run(%s, source=%s) calling sync_to_async", fn_name, expected_source)
             await sync_to_async(function, *args, **kwargs)
+            LOGGER.info("Mega: run(%s, source=%s) sync_to_async returned, waiting on future", fn_name, expected_source)
             try:
                 await wait_for(wrap_future(future), timeout=_REQUEST_TIMEOUT_SECONDS)
+                LOGGER.info("Mega: run(%s, source=%s) future resolved", fn_name, expected_source)
             except AsyncTimeoutError:
                 msg = (
                     f"Mega SDK timed out after {_REQUEST_TIMEOUT_SECONDS}s waiting for "
-                    f"{getattr(function, '__name__', 'request')} ({expected_source})"
+                    f"{fn_name} ({expected_source})"
                 )
                 LOGGER.error(msg)
                 listener = getattr(self, "_mega_listener", None)
@@ -244,6 +249,7 @@ class AsyncMega:
         )
 
     async def startDownload(self, node, localPath, name, listener, startFirst, cancelToken, collisionCheck, collisionResolution, undelete):
+        LOGGER.info("Mega: startDownload creating transfer future")
         self._transfer_future = Future()
 
         ml = getattr(self, "_mega_listener", None)
@@ -271,6 +277,7 @@ class AsyncMega:
         )
 
     async def startUpload(self, localPath, parentNode, customName, cancelToken, mtime=-1):
+        LOGGER.info("Mega: startUpload creating transfer future")
         self._transfer_future = Future()
 
         options = MegaUploadOptions.createInstance()
@@ -434,7 +441,10 @@ class MegaAppListener(MegaListener):
         return target_match
 
     def onRequestStart(self, api, request):
-        pass
+        try:
+            LOGGER.info("Mega: onRequestStart type=%s", request.getType())
+        except Exception:
+            pass
 
     def onRequestUpdate(self, api, request):
         pass
@@ -443,6 +453,7 @@ class MegaAppListener(MegaListener):
         try:
             request_type = request.getType()
             err_code = error.getErrorCode() if error else MegaError.API_OK
+            LOGGER.info("Mega: onRequestFinish type=%s source=%s err=%s", request_type, source, err_code)
             if err_code != MegaError.API_OK:
                 if self.is_cancelled:
                     self._set_request_event()
@@ -530,13 +541,19 @@ class MegaAppListener(MegaListener):
             self._set_transfer_event()
 
     def onRequestTemporaryError(self, api, request, error: MegaError, source="main"):
+        try:
+            LOGGER.warning("Mega: onRequestTemporaryError source=%s err=%s", source, error.toString() if error else "?")
+        except Exception:
+            pass
         if self.is_cancelled:
             self._set_request_event()
 
     def onTransferStart(self, api, transfer):
         try:
             if not self._is_target_transfer(transfer):
+                LOGGER.info("Mega: onTransferStart skipped (not target)")
                 return
+            LOGGER.info("Mega: onTransferStart TARGET name=%s", transfer.getFileName())
             self._current_transfer = transfer
             self._bytes_transferred = 0
             self._set_request_event()
@@ -573,12 +590,16 @@ class MegaAppListener(MegaListener):
     def onTransferFinish(self, api: MegaApi, transfer: MegaTransfer, error):
         try:
             err_code = error.getErrorCode() if error else MegaError.API_OK
+            LOGGER.info("Mega: onTransferFinish err=%s cancelled=%s target_check=...", err_code, self.is_cancelled)
             if self.is_cancelled:
+                LOGGER.info("Mega: onTransferFinish cancelled, signalling transfer event")
                 self._set_transfer_event()
                 return
 
             if not self._is_target_transfer(transfer):
+                LOGGER.info("Mega: onTransferFinish skipped (not target)")
                 return
+            LOGGER.info("Mega: onTransferFinish TARGET err=%s", err_code)
             if err_code != MegaError.API_OK:
                 self.error = f"{err_code} {error.toString()}"
                 if err_code == MegaError.API_EINCOMPLETE:
@@ -641,6 +662,7 @@ class MegaAppListener(MegaListener):
                 return
             err_code = error.getErrorCode() if error else 0
             err_str = error.toString() if error else "unknown"
+            LOGGER.warning("Mega: onTransferTemporaryError err=%s", err_code)
             if err_code == MegaError.API_EOVERQUOTA:
                 msg = f"TransferTempError: Over quota: {err_str}"
                 self.error = msg
@@ -658,6 +680,7 @@ class MegaAppListener(MegaListener):
             )
 
     async def cancel_task(self):
+        LOGGER.info("Mega: cancel_task entered")
         if self.is_cancelled:
             return
         self.is_cancelled = True
