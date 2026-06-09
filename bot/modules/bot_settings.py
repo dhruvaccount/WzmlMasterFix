@@ -458,7 +458,6 @@ async def get_buttons(key=None, edit_type=None, edit_mode=False):
     elif key.startswith("nzbser"):
         servers = Config.USENET_SERVERS if isinstance(Config.USENET_SERVERS, list) else []
         index = int(key.replace("nzbser", ""))
-        LOGGER.info(f"Data: {key}, {index}")
         if not servers or index >= len(servers):
             return await get_buttons("nzbserver")
         for k in list(servers[index].keys())[start : 10 + start]:
@@ -1218,7 +1217,6 @@ async def edit_bot_settings(client, query):
         await query.answer()
         await update_buttons(message, data[2], data[1])
         pfunc = partial(edit_nzb_server, pre_message=message, key=data[2], index=index)
-        LOGGER.info(f"Query Data: {data[1]}")
         rfunc = partial(update_buttons, message, "nzbserver" if data[2] == "newser" else f"nzbser{index}")
         await event_handler(client, query, pfunc, rfunc)
     elif data[1].startswith("nzbsevar") and state == "view":

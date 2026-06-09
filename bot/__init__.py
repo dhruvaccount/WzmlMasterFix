@@ -125,8 +125,11 @@ def _update_sabnzbd_ini(api_key):
             f.seek(0)
             f.truncate()
             f.write(new)
+            LOGGER.info("SABnzbd.ini Updated with derived api_key")
     except FileNotFoundError:
-        pass
+        LOGGER.warning("SABnzbd.ini not found, skipping patch")
+    except Exception as e:
+        LOGGER.error(f"SABnzbd.ini patch failed: {e}")
 
 
 _sabnzbd_api_key = _sabnzbd_key()
