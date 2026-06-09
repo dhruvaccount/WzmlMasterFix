@@ -154,35 +154,49 @@ async def add_mega_download(listener, path):
             return
 
         listener.name = listener.name or mega_listener._name or f"MEGA_Download_{token_hex(5)}"
+        LOGGER.info(f"MegaLeech: name={listener.name} raw_name={mega_listener._name}")
         listener.size = mega_listener._size
+        LOGGER.info(f"MegaLeech: listener.size={listener.size} mega_size={mega_listener._size}")
         if not listener.size and node:
+            LOGGER.info(f"MegaLeech: fetching size via getSize")
             try:
                 the_api = async_api.folder_api if _is_folder_link(listener.link) else api
                 listener.size = await sync_to_async(the_api.getSize, node)
-            except Exception:
+                LOGGER.info(f"MegaLeech: getSize result={listener.size}")
+            except Exception as e:
+                LOGGER.warning(f"MegaLeech: getSize exception: {e}")
                 pass
+        LOGGER.info(f"MegaLeech: gid gen")
         gid = token_hex(5)
 
+        LOGGER.info(f"MegaLeech: stop_duplicate_check")
+        LOGGER.info(f"MegaLeech: stop_dup done")
         msg, button = await stop_duplicate_check(listener)
         if msg:
             await listener.on_download_error(msg, button)
             return
 
+        LOGGER.info(f"MegaLeech: limit_checker")
         if limit_exceeded := await limit_checker(listener):
             await listener.on_download_error(limit_exceeded, is_limit=True)
             return
 
+        LOGGER.info(f"MegaLeech: check_running_tasks")
         added_to_queue, event = await check_running_tasks(listener)
+        LOGGER.info(f"MegaLeech: queue result added={added_to_queue} cancelled={listener.is_cancelled}")
         if added_to_queue:
             async with task_dict_lock:
                 task_dict[listener.mid] = QueueStatus(listener, gid, "dl")
             await listener.on_download_start()
             if listener.multi <= 1:
                 await send_status_message(listener.message)
+            LOGGER.info(f"MegaLeech: waiting in queue")
             await event.wait()
             if listener.is_cancelled:
                 return
+            LOGGER.info(f"MegaLeech: queue released")
 
+        LOGGER.info(f"MegaLeech: registering task_dict")
         async with task_dict_lock:
             task_dict[listener.mid] = MegaDownloadStatus(listener, mega_listener, gid, "dl")
 
@@ -196,6 +210,7 @@ async def add_mega_download(listener, path):
         download_path = path
         if _is_folder_link(listener.link):
             download_path = os.path.join(path, listener.name)
+            LOGGER.info(f"MegaLeech: makedirs {download_path}")
             await makedirs(download_path, exist_ok=True)
 
         LOGGER.info(f"MegaLeech: starting download loop, name={listener.name} size={listener.size}")
