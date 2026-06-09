@@ -99,24 +99,29 @@ async def add_mega_download(listener, path):
         mega_dir = os.path.join(mega_base, "main")
         await makedirs(mega_dir, exist_ok=True)
 
-        LOGGER.info("MegaDiag: creating AsyncMega")
         async_api = AsyncMega()
-        LOGGER.info("MegaDiag: creating MegaApi instance")
         async_api.api = api = MegaApi("", mega_dir, "WZML-X", 4)
-        LOGGER.info("MegaDiag: creating MegaAppListener")
         mega_listener = MegaAppListener(async_api, listener)
         async_api._mega_listener = mega_listener
+        LOGGER.info("MegaDiag: addingListener main")
         api.addListener(mega_listener)
+        LOGGER.info("MegaDiag: addListener done")
 
         if _is_folder_link(listener.link):
+            LOGGER.info("MegaDiag: is folder, setting up folder api")
             mega_folder_dir = os.path.join(mega_base, "folder")
             await makedirs(mega_folder_dir, exist_ok=True)
+            LOGGER.info("MegaDiag: creating folder MegaApi")
             async_api.folder_api = MegaApi("", mega_folder_dir, "WZML-X", 4)
+            LOGGER.info("MegaDiag: creating FolderListener")
             folder_listener = MegaFolderListener(mega_listener)
             async_api._folder_listener = folder_listener
+            LOGGER.info("MegaDiag: addingListener folder")
             async_api.folder_api.addListener(folder_listener)
+            LOGGER.info("MegaDiag: folder api setup done")
 
         if mega_email and mega_password:
+            LOGGER.info("MegaDiag: logging in")
             await async_api.login(mega_email, mega_password)
             if mega_listener.error:
                 await listener.on_download_error(_mega_error_format(mega_listener.error))
