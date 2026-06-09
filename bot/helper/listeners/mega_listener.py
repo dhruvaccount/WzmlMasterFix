@@ -78,8 +78,8 @@ class AsyncMega:
         self.folder_api = None
         self._folder_listener = None
         self.continue_event = Event()
-        self._transfer_event = Event()
-        self._export_done = Event()
+        self._transfer_future = None
+        self._export_future = None
         self._expected_request_type = None
         self._expected_request_source = None
         self._download_is_folder = False
@@ -105,7 +105,8 @@ class AsyncMega:
         return self._request_type_for_name(getattr(function, "__name__", ""))
 
     async def run(self, function, *args, expected_type=None, expected_source="main", **kwargs):
-        self.continue_event.clear()
+        future = Future()
+        self._request_future = future
         self._expected_request_type = (
             self._request_type_for(function) if expected_type is None else expected_type
         )
@@ -114,7 +115,7 @@ class AsyncMega:
         try:
             await sync_to_async(function, *args, **kwargs)
             try:
-                await wait_for(self.continue_event.wait(), timeout=_REQUEST_TIMEOUT_SECONDS)
+                await wait_for(wrap_future(future), timeout=_REQUEST_TIMEOUT_SECONDS)
             except AsyncTimeoutError:
                 msg = (
                     f"Mega SDK timed out after {_REQUEST_TIMEOUT_SECONDS}s waiting for "
@@ -124,17 +125,23 @@ class AsyncMega:
                 listener = getattr(self, "_mega_listener", None)
                 if listener is not None and not listener.error:
                     listener.error = msg
-                self._transfer_event.set()
+                if self._transfer_future is not None and not self._transfer_future.done():
+                    self._transfer_future.set_result(True)
         finally:
+            self._request_future = None
             self._expected_request_type = None
             self._expected_request_source = None
 
     async def wait_for_transfer(self):
+        if self._transfer_future is None:
+            LOGGER.error("Mega wait_for_transfer called without active transfer")
+            return
         try:
-            await wait_for(self._transfer_event.wait(), timeout=43200)
+            await wait_for(wrap_future(self._transfer_future), timeout=43200)
         except AsyncTimeoutError:
             LOGGER.error("Mega transfer timed out after 12h")
-            self._transfer_event.set()
+            if self._transfer_future is not None and not self._transfer_future.done():
+                self._transfer_future.set_result(True)
 
     async def export_node(self, node, expireTime=0, writable=False, megaHosted=False):
         self.continue_event.clear()
@@ -237,7 +244,7 @@ class AsyncMega:
         )
 
     async def startDownload(self, node, localPath, name, listener, startFirst, cancelToken, collisionCheck, collisionResolution, undelete):
-        self._transfer_event.clear()
+        self._transfer_future = Future()
 
         ml = getattr(self, "_mega_listener", None)
         if ml:
@@ -264,7 +271,7 @@ class AsyncMega:
         )
 
     async def startUpload(self, localPath, parentNode, customName, cancelToken, mtime=-1):
-        self._transfer_event.clear()
+        self._transfer_future = Future()
 
         options = MegaUploadOptions.createInstance()
         options.fileName = customName
@@ -309,8 +316,6 @@ class MegaAppListener(MegaListener):
     def __init__(self, async_api: AsyncMega, listener):
         self._async_api = async_api
         self.continue_event = async_api.continue_event
-        self._transfer_event = async_api._transfer_event
-        self._export_done = async_api._export_done
         self.listener = listener
         self.is_cancelled = False
         self.error = None
@@ -354,24 +359,34 @@ class MegaAppListener(MegaListener):
             bot_loop.call_soon_threadsafe(self.continue_event.set)
         except Exception as e:
             LOGGER.error(f"Mega request event signal failed: {e}")
+        try:
+            fut = self._async_api._request_future
+            if fut is not None and not fut.done():
+                fut.set_result(True)
+        except Exception as e:
+            LOGGER.error(f"Mega request future resolve failed: {e}")
 
     def _set_transfer_event(self):
         try:
-            bot_loop.call_soon_threadsafe(self._transfer_event.set)
+            fut = self._async_api._transfer_future
+            if fut is not None and not fut.done():
+                fut.set_result(True)
         except Exception as e:
-            LOGGER.error(f"Mega transfer event signal failed: {e}")
+            LOGGER.error(f"Mega transfer future resolve failed: {e}")
 
     def _set_export_done(self):
         try:
-            bot_loop.call_soon_threadsafe(self._export_done.set)
+            fut = self._async_api._export_future
+            if fut is not None and not fut.done():
+                fut.set_result(True)
         except Exception as e:
-            LOGGER.error(f"Mega export done signal failed: {e}")
+            LOGGER.error(f"Mega export future resolve failed: {e}")
 
     def _clear_export_done(self):
         try:
-            bot_loop.call_soon_threadsafe(self._export_done.clear)
+            self._async_api._export_future = Future()
         except Exception as e:
-            LOGGER.error(f"Mega export done clear failed: {e}")
+            LOGGER.error(f"Mega export future create failed: {e}")
 
     def _cache_node_data(self, node):
         try:

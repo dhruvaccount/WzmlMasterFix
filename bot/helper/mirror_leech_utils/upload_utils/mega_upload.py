@@ -1,5 +1,5 @@
 import os
-from asyncio import TimeoutError as AsyncTimeoutError, wait_for
+from asyncio import TimeoutError as AsyncTimeoutError, wait_for, wrap_future
 from contextlib import suppress
 from time import sleep
 from mimetypes import guess_type
@@ -118,9 +118,9 @@ async def _upload_file(async_api, mega_listener, file_path, parent_node, custom_
     link = None
     if not suppress_export:
         node_handle = getattr(mega_listener, "_uploaded_node_handle", None)
-        if node_handle:
+        if node_handle and async_api._export_future is not None:
             try:
-                await wait_for(mega_listener._export_done.wait(), timeout=60)
+                await wait_for(wrap_future(async_api._export_future), timeout=60)
                 link = getattr(mega_listener, "_export_link", None)
             except AsyncTimeoutError:
                 LOGGER.warning("MegaUpload: export timed out after 60s")
