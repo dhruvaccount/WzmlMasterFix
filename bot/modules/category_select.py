@@ -33,16 +33,16 @@ async def change_category(client, message):
     input_list = text[0].split(" ")
 
     arg_base = {"link": "", "-id": "", "-index": ""}
-    args = arg_parser(input_list[1:], arg_base)
+    arg_parser(input_list[1:], arg_base)
 
-    drive_id = args["-id"]
-    index_link = args["-index"]
+    drive_id = arg_base["-id"]
+    index_link = arg_base["-index"]
 
     if drive_id and is_gdrive_link(drive_id):
-        drive_id = GoogleDriveHelper.getIdFromUrl(drive_id)
+        drive_id = GoogleDriveHelper().get_id_from_url(drive_id)
 
     dl = None
-    if gid := args["link"]:
+    if gid := arg_base["link"]:
         dl = await get_task_by_gid(gid)
         if not dl:
             await send_message(message, f"GID: <code>{gid}</code> Not Found.")
@@ -77,15 +77,16 @@ async def change_category(client, message):
     if listener and not listener.is_leech:
         if not index_link and not drive_id:
             drive_id, index_link, is_cancelled = await open_category_btns(message)
-        if is_cancelled:
-            return
+            if is_cancelled:
+                listener.is_cancelled = True
+                return
         if not index_link and not drive_id:
             return await send_message(message, "Time out")
         msg = "<b>Task has been Updated Successfully!</b>"
         if drive_id:
             if not (
-                folder_name := await sync_to_async(
-                    GoogleDriveHelper().getFolderData, drive_id
+                folder_meta := await sync_to_async(
+                    GoogleDriveHelper().get_file_metadata, drive_id
                 )
             ):
                 return await send_message(
@@ -93,10 +94,10 @@ async def change_category(client, message):
                 )
             if listener.drive_id and listener.drive_id == drive_id:
                 msg += (
-                    f"\n\n<b>Folder name</b> : {folder_name} Already selected"
+                    f"\n\n<b>Folder name</b> : {folder_meta['name']} Already selected"
                 )
             else:
-                msg += f"\n\n<b>Folder name</b> : {folder_name}"
+                msg += f"\n\n<b>Folder name</b> : {folder_meta['name']}"
             listener.drive_id = drive_id
         if index_link:
             listener.index_link = index_link

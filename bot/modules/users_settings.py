@@ -14,7 +14,6 @@ from langcodes import Language
 from pyrogram.filters import create
 from pyrogram.handlers import MessageHandler
 
-from bot.helper.ext_utils.status_utils import get_readable_file_size
 
 from .. import auth_chats, excluded_extensions, sudo_users, user_data
 from ..core.config_manager import Config
@@ -27,6 +26,7 @@ from ..helper.ext_utils.bot_utils import (
 from ..helper.ext_utils.db_handler import database
 from ..helper.ext_utils.mega_utils import get_mega_account_info
 from ..helper.ext_utils.media_utils import create_thumb
+from ..helper.ext_utils.status_utils import get_readable_file_size
 from ..helper.telegram_helper.button_build import ButtonMaker
 from ..helper.telegram_helper.message_utils import (
     delete_message,

@@ -32,28 +32,14 @@ services:
       - ./accounts:/usr/src/app/accounts
       - ./downloads:/usr/src/app/downloads
       - ./sabnzbd:/usr/src/app/sabnzbd
-      - tunnel-url:/tmp/tunnel
     expose:
       - "8080"
 
   tunnel:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
-    command: >-
-      sh -c 'cloudflared tunnel --no-autoupdate --url http://localhost:8080 2>&1 | while IFS= read -r line; do
-        echo "$$line";
-        if echo "$$line" | grep -qo "https://[a-z0-9-]*\.trycloudflare\.com"; then
-          url=$$(echo "$$line" | grep -o "https://[a-z0-9-]*\.trycloudflare\.com");
-          echo "$$url" > /tmp/tunnel/url;
-          echo "[TUNNEL] $$url";
-        fi;
-      done'
-    volumes:
-      - tunnel-url:/tmp/tunnel
+    command: tunnel --no-autoupdate --url http://localhost:8080
     network_mode: "service:app"
-
-volumes:
-  tunnel-url:
 
   # app2:
   #   build: .
@@ -74,17 +60,7 @@ volumes:
   # tunnel2:
   #   image: cloudflare/cloudflared:latest
   #   restart: unless-stopped
-  #   command: >-
-  #     sh -c 'cloudflared tunnel --no-autoupdate --url http://localhost:8080 2>&1 | while IFS= read -r line; do
-  #       echo "$$line";
-  #       if echo "$$line" | grep -qo "https://[a-z0-9-]*\.trycloudflare\.com"; then
-  #         url=$$(echo "$$line" | grep -o "https://[a-z0-9-]*\.trycloudflare\.com");
-  #         echo "$$url" > /tmp/tunnel/url2;
-  #         echo "[TUNNEL2] $$url";
-  #       fi;
-  #     done'
-  #   volumes:
-  #     - tunnel-url:/tmp/tunnel
+  #   command: tunnel --no-autoupdate --url http://localhost:8080
   #   network_mode: "service:app2"
 
   # Named tunnel (persistent URL with your own domain)

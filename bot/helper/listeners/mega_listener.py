@@ -417,6 +417,7 @@ class MegaAppListener(MegaListener):
         try:
             request_type = request.getType()
             err_code = error.getErrorCode() if error else MegaError.API_OK
+            LOGGER.info(f"MegaCb: onRequestFinish type={request_type} err={err_code} source={source} upload={self._upload_mode}")
             if err_code != MegaError.API_OK:
                 if self.is_cancelled:
                     self._set_request_event()
@@ -507,6 +508,7 @@ class MegaAppListener(MegaListener):
         try:
             if not self._is_target_transfer(transfer):
                 return
+            LOGGER.info(f"MegaCb: onTransferStart type={transfer.getType()} name={transfer.getFileName()} upload={self._upload_mode}")
             self._current_transfer = transfer
             self._bytes_transferred = 0
             self._set_request_event()
@@ -543,6 +545,7 @@ class MegaAppListener(MegaListener):
     def onTransferFinish(self, api: MegaApi, transfer: MegaTransfer, error):
         try:
             err_code = error.getErrorCode() if error else MegaError.API_OK
+            LOGGER.info(f"MegaCb: onTransferFinish type={transfer.getType()} err={err_code} upload={self._upload_mode} caller={self._caller_manages_completion} suppress={self._suppress_export} cancelled={self.is_cancelled}")
             if self.is_cancelled:
                 self._set_transfer_event()
                 return
@@ -611,6 +614,7 @@ class MegaAppListener(MegaListener):
                 return
             err_code = error.getErrorCode() if error else 0
             err_str = error.toString() if error else "unknown"
+            LOGGER.warning(f"MegaCb: onTransferTemporaryError err={err_code} upload={self._upload_mode}")
             if err_code == MegaError.API_EOVERQUOTA:
                 msg = f"TransferTempError: Over quota: {err_str}"
                 self.error = msg

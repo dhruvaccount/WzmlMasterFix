@@ -93,6 +93,7 @@ class TaskConfig:
         self.up_dir = ""
         self.link = ""
         self.up_dest = ""
+        self.drive_id = ""
         self.leech_dest = ""
         self.rc_flags = ""
         self.tag = ""
@@ -289,6 +290,7 @@ class TaskConfig:
             else:
                 drive_id, index_link, is_cancelled = await open_category_btns(self.message)
                 if is_cancelled:
+                    self.is_cancelled = True
                     return
                 if drive_id:
                     self.up_dest = drive_id

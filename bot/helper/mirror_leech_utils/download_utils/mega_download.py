@@ -104,6 +104,7 @@ async def add_mega_download(listener, path):
         mega_listener = MegaAppListener(async_api, listener)
         async_api._mega_listener = mega_listener
         api.addListener(mega_listener)
+        LOGGER.info(f"MegaLeech: sdk setup done, is_folder={_is_folder_link(listener.link)}")
 
         if _is_folder_link(listener.link):
             mega_folder_dir = os.path.join(mega_base, "folder")
@@ -112,19 +113,23 @@ async def add_mega_download(listener, path):
             folder_listener = MegaFolderListener(mega_listener)
             async_api._folder_listener = folder_listener
             async_api.folder_api.addListener(folder_listener)
+            LOGGER.info(f"MegaLeech: folder api setup done")
 
         if mega_email and mega_password:
             await async_api.login(mega_email, mega_password)
+            LOGGER.info(f"MegaLeech: login done, err={mega_listener.error}")
             if mega_listener.error:
                 await listener.on_download_error(_mega_error_format(mega_listener.error))
                 return
             await async_api.fetchNodes()
+            LOGGER.info(f"MegaLeech: fetchNodes done, err={mega_listener.error}")
             if mega_listener.error:
                 await listener.on_download_error(_mega_error_format(mega_listener.error))
                 return
 
         if _is_folder_link(listener.link):
             await async_api.loginToFolder(listener.link)
+            LOGGER.info(f"MegaLeech: loginToFolder done, err={mega_listener.error}")
             if mega_listener.error:
                 await listener.on_download_error(_mega_error_format(mega_listener.error))
                 return
@@ -135,6 +140,7 @@ async def add_mega_download(listener, path):
                 except Exception as e:
                     LOGGER.warning(f"Mega subfolder handle conversion failed: {e}")
             await async_api.fetchNodes(async_api.folder_api, source="folder")
+            LOGGER.info(f"MegaLeech: folder fetchNodes done, node={mega_listener.node is not None}")
             node = mega_listener.node
             if not node:
                 await listener.on_download_error("Failed to get folder root node", is_limit=False)
@@ -142,6 +148,7 @@ async def add_mega_download(listener, path):
         else:
             await async_api.getPublicNode(listener.link)
             node = mega_listener.public_node
+            LOGGER.info(f"MegaLeech: getPublicNode done, node={node is not None}")
         if not node:
             await listener.on_download_error("Failed to resolve MEGA link")
             return
@@ -191,6 +198,7 @@ async def add_mega_download(listener, path):
             download_path = os.path.join(path, listener.name)
             await makedirs(download_path, exist_ok=True)
 
+        LOGGER.info(f"MegaLeech: starting download loop, name={listener.name} size={listener.size}")
         for attempt in range(5):
             cancel_token = _make_cancel_token()
             mega_listener._cancel_token = cancel_token
@@ -200,6 +208,7 @@ async def add_mega_download(listener, path):
             mega_listener._total_downloaded_bytes = 0
             mega_listener._caller_manages_completion = False
 
+            LOGGER.info(f"MegaLeech: startDownload attempt={attempt}")
             await async_api.startDownload(
                 node,
                 download_path,
@@ -211,11 +220,15 @@ async def add_mega_download(listener, path):
                 2,
                 False,
             )
+            LOGGER.info(f"MegaLeech: waiting for transfer...")
             await async_api.wait_for_transfer()
+            LOGGER.info(f"MegaLeech: transfer done, cancelled={listener.is_cancelled} retryable={mega_listener.retryable_error} err={mega_listener.error}")
 
             if listener.is_cancelled or mega_listener.is_cancelled:
+                LOGGER.info(f"MegaLeech: cancelled, returning")
                 return
             if not mega_listener.retryable_error:
+                LOGGER.info(f"MegaLeech: no retryable error, completing")
                 return
             if attempt >= 4:
                 await listener.on_download_error(_mega_error_format(mega_listener.retryable_error))
@@ -224,12 +237,14 @@ async def add_mega_download(listener, path):
             await sleep(2 ** attempt)
 
     except Exception as e:
-        LOGGER.error(f"Unexpected error in add_mega_download: {e}", exc_info=True)
+        LOGGER.error(f"MegaLeech: unexpected error: {e}", exc_info=True)
         if not listener.is_cancelled:
             await listener.on_download_error(f"Internal error: {e}")
     finally:
+        LOGGER.info(f"MegaLeech: cleanup")
         await _release_link(listener.link)
         if async_api is not None:
             with suppress(Exception):
                 await async_api.logout()
         await _cleanup_dir(mega_base)
+        LOGGER.info(f"MegaLeech: done")
