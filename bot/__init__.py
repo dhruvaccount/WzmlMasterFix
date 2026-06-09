@@ -111,9 +111,9 @@ def _sabnzbd_key():
 
 
 def _update_sabnzbd_ini(api_key):
-    from re import compile as _re
-    pat_key = _re(r"^api_key\s*=.*$", _re.MULTILINE)
-    pat_pwd = _re(r'^password\s*=.*$', _re.MULTILINE)
+    from re import compile as _re, MULTILINE
+    pat_key = _re(r"^api_key\s*=.*$", MULTILINE)
+    pat_pwd = _re(r'^password\s*=.*$', MULTILINE)
     try:
         with open("sabnzbd/SABnzbd.ini", "r+") as f:
             content = f.read()
