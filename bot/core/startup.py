@@ -367,8 +367,14 @@ async def load_configurations():
 
     PORT = getenv("PORT", "") or "8080"
     if PORT:
+        access_pwd = getenv("WEB_ACCESS_PASSWORD", "") or Config.WEB_ACCESS_PASSWORD
+        if not access_pwd:
+            from secrets import token_bytes
+            access_pwd = token_bytes(32).hex()
+            Config.WEB_ACCESS_PASSWORD = access_pwd
+        env = f"WEB_ACCESS_PASSWORD={access_pwd} "
         await create_subprocess_shell(
-            f"gunicorn -k uvicorn.workers.UvicornWorker -w 1 web.wserver:app --bind 0.0.0.0:{PORT}"
+            f"{env}gunicorn -k uvicorn.workers.UvicornWorker -w 1 web.wserver:app --bind 0.0.0.0:{PORT}"
         )
         await create_subprocess_shell("python3 cron_boot.py")
 

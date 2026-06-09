@@ -1223,8 +1223,14 @@ async def load_config():
     await (await create_subprocess_exec("pkill", "-9", "-f", "gunicorn")).wait()
     if Config.BASE_URL:
         port = getenv("PORT", "") or "8080"
+        access_pwd = getenv("WEB_ACCESS_PASSWORD", "") or Config.WEB_ACCESS_PASSWORD
+        if not access_pwd:
+            from secrets import token_bytes
+            access_pwd = token_bytes(32).hex()
+            Config.WEB_ACCESS_PASSWORD = access_pwd
+        env = f"WEB_ACCESS_PASSWORD={access_pwd} "
         await create_subprocess_shell(
-            f"gunicorn -k uvicorn.workers.UvicornWorker -w 1 web.wserver:app --bind 0.0.0.0:{port}"
+            f"{env}gunicorn -k uvicorn.workers.UvicornWorker -w 1 web.wserver:app --bind 0.0.0.0:{port}"
         )
 
     if Config.DATABASE_URL:
