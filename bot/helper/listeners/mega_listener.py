@@ -327,6 +327,7 @@ class MegaAppListener(MegaListener):
         self._created_folder_node = None
         self._export_link = None
         super().__init__()
+        LOGGER.info("DEBUG: MegaAppListener created")
 
     @property
     def speed(self):
@@ -405,6 +406,7 @@ class MegaAppListener(MegaListener):
         try:
             request_type = request.getType()
             err_code = error.getErrorCode() if error else MegaError.API_OK
+            LOGGER.info(f"DEBUG: onRequestFinish type={request_type} err={err_code} source={source}")
             if err_code != MegaError.API_OK:
                 if self.is_cancelled:
                     self._set_request_event()
@@ -495,6 +497,7 @@ class MegaAppListener(MegaListener):
         try:
             if not self._is_target_transfer(transfer):
                 return
+            LOGGER.info(f"DEBUG: onTransferStart type={transfer.getType()}")
             self._current_transfer = transfer
             self._bytes_transferred = 0
             self._set_request_event()
@@ -531,6 +534,7 @@ class MegaAppListener(MegaListener):
     def onTransferFinish(self, api: MegaApi, transfer: MegaTransfer, error):
         try:
             err_code = error.getErrorCode() if error else MegaError.API_OK
+            LOGGER.info(f"DEBUG: onTransferFinish type={transfer.getType()} err={err_code} upload_mode={self._upload_mode} suppress={self._suppress_export} caller_manages={self._caller_manages_completion}")
             if self.is_cancelled:
                 self._set_transfer_event()
                 return
