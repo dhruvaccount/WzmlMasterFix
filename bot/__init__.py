@@ -119,7 +119,7 @@ def _update_sabnzbd_ini(api_key):
             content = f.read()
             new = content
             new = pat_key.sub(f"api_key = {api_key}", new)
-            new = pat_pwd.sub(f'password = "{api_key}"', new)
+            new = pat_pwd.sub(f"password = {api_key}", new)
             if new == content:
                 return
             f.seek(0)
