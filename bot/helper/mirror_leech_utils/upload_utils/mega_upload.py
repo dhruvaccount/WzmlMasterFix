@@ -142,8 +142,11 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
     mega_dir = os.path.join(mega_base, "main")
     await makedirs(mega_dir, exist_ok=True)
 
+    LOGGER.info("MegaDiag: creating AsyncMega (upload)")
     async_api = AsyncMega()
+    LOGGER.info("MegaDiag: creating MegaApi instance (upload)")
     async_api.api = api = MegaApi("", mega_dir, "WZML-X", 4)
+    LOGGER.info("MegaDiag: creating MegaAppListener (upload)")
     mega_listener = MegaAppListener(async_api, listener)
     mega_listener._upload_mode = True
     async_api._mega_listener = mega_listener

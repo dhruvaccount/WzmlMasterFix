@@ -99,8 +99,11 @@ async def add_mega_download(listener, path):
         mega_dir = os.path.join(mega_base, "main")
         await makedirs(mega_dir, exist_ok=True)
 
+        LOGGER.info("MegaDiag: creating AsyncMega")
         async_api = AsyncMega()
+        LOGGER.info("MegaDiag: creating MegaApi instance")
         async_api.api = api = MegaApi("", mega_dir, "WZML-X", 4)
+        LOGGER.info("MegaDiag: creating MegaAppListener")
         mega_listener = MegaAppListener(async_api, listener)
         async_api._mega_listener = mega_listener
         api.addListener(mega_listener)

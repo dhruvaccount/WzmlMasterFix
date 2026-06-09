@@ -1,5 +1,10 @@
 # ruff: noqa: E402
 
+import faulthandler
+import sys
+
+faulthandler.enable(file=sys.stderr, all_threads=True)
+
 from .core.config_manager import Config
 
 Config.load()
