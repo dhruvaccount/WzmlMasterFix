@@ -148,12 +148,16 @@ class AsyncMega:
     async def create_folder(self, name, parent, source="main"):
         mega_api = self.folder_api if source == "folder" else self.api
         ml = getattr(self, "_mega_listener", None)
+        LOGGER.info(f"MegaCb: create_folder name={name} source={source}")
 
         try:
+            LOGGER.info("MegaCb: create_folder getNodeByPath start")
             existing = await sync_to_async(mega_api.getNodeByPath, name, parent)
+            LOGGER.info(f"MegaCb: create_folder getNodeByPath done, existing={existing is not None}")
             if existing:
                 return existing
-        except Exception:
+        except Exception as e:
+            LOGGER.info(f"MegaCb: create_folder getNodeByPath exception: {e}")
             pass
 
         self.continue_event.clear()
@@ -162,8 +166,11 @@ class AsyncMega:
         if ml:
             ml._created_folder_node = None
         try:
+            LOGGER.info(f"MegaCb: create_folder calling createFolder")
             await sync_to_async(mega_api.createFolder, name, parent)
+            LOGGER.info(f"MegaCb: create_folder createFolder returned, waiting callback")
             await wait_for(self.continue_event.wait(), timeout=_REQUEST_TIMEOUT_SECONDS)
+            LOGGER.info(f"MegaCb: create_folder callback received")
             node = getattr(ml, "_created_folder_node", None) if ml else None
             if not node:
                 LOGGER.warning(f"create_folder: no node for '{name}'")
