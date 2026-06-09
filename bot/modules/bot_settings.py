@@ -442,24 +442,26 @@ async def get_buttons(key=None, edit_type=None, edit_mode=False):
             )
         msg = f"Sabnzbd Options | Page: {int(start / 10)} | State: {state}"
     elif key == "nzbserver":
-        if len(Config.USENET_SERVERS) > 0:
-            for index, k in enumerate(Config.USENET_SERVERS[start : 10 + start]):
+        servers = Config.USENET_SERVERS if isinstance(Config.USENET_SERVERS, list) else []
+        if len(servers) > 0:
+            for index, k in enumerate(servers[start : 10 + start]):
                 buttons.data_button(k["name"], f"botset nzbser{index}")
         buttons.data_button("Add New", "botset nzbsevar newser")
         buttons.data_button("Back", "botset nzb")
         buttons.data_button("Close", "botset close", style=ButtonStyle.DANGER)
-        if len(Config.USENET_SERVERS) > 10:
-            for x in range(0, len(Config.USENET_SERVERS), 10):
+        if len(servers) > 10:
+            for x in range(0, len(servers), 10):
                 buttons.data_button(
                     f"{int(x / 10)}", f"botset start nzbser {x}", position="footer"
                 )
         msg = f"Usenet Servers | Page: {int(start / 10)} | State: {state}"
     elif key.startswith("nzbser"):
+        servers = Config.USENET_SERVERS if isinstance(Config.USENET_SERVERS, list) else []
         index = int(key.replace("nzbser", ""))
         LOGGER.info(f"Data: {key}, {index}")
-        if index >= len(Config.USENET_SERVERS):
+        if not servers or index >= len(servers):
             return await get_buttons("nzbserver")
-        for k in list(Config.USENET_SERVERS[index].keys())[start : 10 + start]:
+        for k in list(servers[index].keys())[start : 10 + start]:
             buttons.data_button(k, f"botset nzbsevar{index} {k}")
         if state == "view":
             buttons.data_button("Edit", f"botset edit {key}")
@@ -468,12 +470,14 @@ async def get_buttons(key=None, edit_type=None, edit_mode=False):
         buttons.data_button("Remove Server", f"botset remser {index}")
         buttons.data_button("Back", "botset nzbserver")
         buttons.data_button("Close", "botset close", style=ButtonStyle.DANGER)
-        if len(Config.USENET_SERVERS[index].keys()) > 10:
-            for x in range(0, len(Config.USENET_SERVERS[index]), 10):
+        if len(servers[index].keys()) > 10:
+            for x in range(0, len(servers[index]), 10):
                 buttons.data_button(
                     f"{int(x / 10)}", f"botset start {key} {x}", position="footer"
                 )
         msg = f"Server Keys | Page: {int(start / 10)} | State: {state}"
+    else:
+        msg = "Unknown option"
 
     return msg, buttons.build_menu(1 if key is None else 2)
 
@@ -576,9 +580,31 @@ async def edit_variable(_, message, pre_message, key):
     elif value.isdigit():
         value = int(value)
     elif value.startswith("[") and value.endswith("]"):
-        value = literal_eval(value)
+        try:
+            value = literal_eval(value)
+        except Exception:
+            await send_message(message, "Invalid list/dict format!")
+            return
     elif value.startswith("{") and value.endswith("}"):
-        value = literal_eval(value)
+        try:
+            value = literal_eval(value)
+        except Exception:
+            await send_message(message, "Invalid dict format!")
+            return
+    if key == "USENET_SERVERS":
+        if not isinstance(value, list):
+            await send_message(message, "USENET_SERVERS must be a list of dicts!")
+            return
+        for s in value:
+            if not isinstance(s, dict):
+                await send_message(message, "Each USENET_SERVERS entry must be a dict!")
+                return
+            missing = [f for f in REQUIRED_SERVER_FIELDS if not s.get(f)]
+            if missing:
+                await send_message(
+                    message, f"Server missing required field(s): {', '.join(missing)}"
+                )
+                return
     if not isinstance(value, (str, int, float, bool, list, dict, type(None))):
         value = str(value)
     Config.set(key, value)
@@ -701,39 +727,81 @@ async def edit_nzb(_, message, pre_message, key):
     await database.update_nzb_config()
 
 
+REQUIRED_SERVER_FIELDS = ["name", "host", "username", "password"]
+
+
 @new_task
 async def edit_nzb_server(_, message, pre_message, key, index=0):
     handler_dict[message.chat.id] = False
-    value = message.text
+    value = message.text.strip()
     if key == "newser":
-        if value.startswith("{") and value.endswith("}"):
-            try:
-                value = literal_eval(value)
-            except Exception:
-                await send_message(message, "Invalid dict format!")
-                await update_buttons(pre_message, "nzbserver")
-                return
-            res = await sabnzbd_client.add_server(value)
-            if not res["config"]["servers"][0]["host"]:
-                await send_message(message, "Invalid server!")
-                await update_buttons(pre_message, "nzbserver")
-                return
-            Config.USENET_SERVERS.append(value)
-            await update_buttons(pre_message, "nzbserver")
-        else:
+        if not (value.startswith("{") and value.endswith("}")):
             await send_message(message, "Invalid dict format!")
             await update_buttons(pre_message, "nzbserver")
             return
+        try:
+            value = literal_eval(value)
+        except Exception:
+            await send_message(message, "Invalid dict format!")
+            await update_buttons(pre_message, "nzbserver")
+            return
+        if not isinstance(value, dict):
+            await send_message(message, "Must be a dict!")
+            await update_buttons(pre_message, "nzbserver")
+            return
+        missing = [f for f in REQUIRED_SERVER_FIELDS if not value.get(f)]
+        if missing:
+            await send_message(
+                message, f"Missing required field(s): {', '.join(missing)}"
+            )
+            await update_buttons(pre_message, "nzbserver")
+            return
+        if not isinstance(value.get("port"), int) or value["port"] < 0:
+            await send_message(message, "port must be a positive integer!")
+            await update_buttons(pre_message, "nzbserver")
+            return
+        if not isinstance(value.get("connections"), int) or value["connections"] < 0:
+            await send_message(message, "connections must be a positive integer!")
+            await update_buttons(pre_message, "nzbserver")
+            return
+        if value.get("port") <= 0:
+            await send_message(message, "port must be greater than 0!")
+            await update_buttons(pre_message, "nzbserver")
+            return
+        if value.get("connections") <= 0:
+            await send_message(message, "connections must be greater than 0!")
+            await update_buttons(pre_message, "nzbserver")
+            return
+        res = await sabnzbd_client.add_server(value)
+        if not isinstance(res, dict) or not res.get("config", {}).get("servers", [{}])[0].get("host"):
+            await send_message(message, "Invalid server!")
+            await update_buttons(pre_message, "nzbserver")
+            return
+        Config.USENET_SERVERS.append(value)
+        await update_buttons(pre_message, "nzbserver")
     else:
+        servers = Config.USENET_SERVERS if isinstance(Config.USENET_SERVERS, list) else []
+        if not servers or index >= len(servers) or not isinstance(servers[index], dict) or key not in servers[index]:
+            await send_message(message, "Invalid server or key!")
+            await update_buttons(pre_message, "nzbserver")
+            return
         if value.isdigit():
             value = int(value)
+        if key in ("port", "connections") and (not isinstance(value, int) or value <= 0):
+            await send_message(message, f"{key} must be a positive integer!")
+            await update_buttons(pre_message, f"nzbser{index}")
+            return
+        if key in ("timeout", "retention", "priority") and not isinstance(value, int):
+            await send_message(message, f"{key} must be an integer!")
+            await update_buttons(pre_message, f"nzbser{index}")
+            return
         res = await sabnzbd_client.add_server(
-            {"name": Config.USENET_SERVERS[index]["name"], key: value}
+            {"name": servers[index]["name"], key: value}
         )
-        if res["config"]["servers"][0][key] == "":
+        if not isinstance(res, dict) or not res.get("config", {}).get("servers", [{}])[0].get(key):
             await send_message(message, "Invalid value")
             return
-        Config.USENET_SERVERS[index][key] = value
+        servers[index][key] = value
         await update_buttons(pre_message, f"nzbser{index}")
     await delete_message(message)
     await database.update_config({"USENET_SERVERS": Config.USENET_SERVERS})
@@ -966,8 +1034,9 @@ async def edit_bot_settings(client, query):
         elif data[2] in ("JD_EMAIL", "JD_PASS"):
             await create_subprocess_exec("pkill", "-9", "-f", "java")
         elif data[2] == "USENET_SERVERS":
-            for s in Config.USENET_SERVERS:
-                await sabnzbd_client.delete_config("servers", s["name"])
+            for s in (Config.USENET_SERVERS if isinstance(Config.USENET_SERVERS, list) else []):
+                if isinstance(s, dict):
+                    await sabnzbd_client.delete_config("servers", s.get("name", ""))
         elif data[2] == "AUTHORIZED_CHATS":
             auth_chats.clear()
         elif data[2] == "SUDO_USERS":
@@ -1032,8 +1101,12 @@ async def edit_bot_settings(client, query):
         await database.update_nzb_config()
     elif data[1] == "remser":
         index = int(data[2])
+        servers = Config.USENET_SERVERS if isinstance(Config.USENET_SERVERS, list) else []
+        if index >= len(servers) or not isinstance(servers[index], dict):
+            await query.answer("Invalid server!", show_alert=True)
+            return
         await sabnzbd_client.delete_config(
-            "servers", Config.USENET_SERVERS[index]["name"]
+            "servers", servers[index].get("name", "")
         )
         del Config.USENET_SERVERS[index]
         await update_buttons(message, "nzbserver")
@@ -1131,22 +1204,30 @@ async def edit_bot_settings(client, query):
         await query.answer()
         await update_buttons(message, f"nzbser{data[2]}")
         index = int(data[2])
+        servers = Config.USENET_SERVERS if isinstance(Config.USENET_SERVERS, list) else []
+        if index >= len(servers) or not isinstance(servers[index], dict):
+            return
         res = await sabnzbd_client.add_server(
-            {"name": Config.USENET_SERVERS[index]["name"], data[3]: ""}
+            {"name": servers[index].get("name", ""), data[3]: ""}
         )
-        Config.USENET_SERVERS[index][data[3]] = res["config"]["servers"][0][data[3]]
-        await database.update_config({"USENET_SERVERS": Config.USENET_SERVERS})
+        if isinstance(res, dict) and res.get("config", {}).get("servers", [{}])[0].get(data[3]) is not None:
+            Config.USENET_SERVERS[index][data[3]] = res["config"]["servers"][0][data[3]]
+            await database.update_config({"USENET_SERVERS": Config.USENET_SERVERS})
     elif data[1].startswith("nzbsevar") and (state == "edit" or data[2] == "newser"):
         index = 0 if data[2] == "newser" else int(data[1].replace("nzbsevar", ""))
         await query.answer()
         await update_buttons(message, data[2], data[1])
         pfunc = partial(edit_nzb_server, pre_message=message, key=data[2], index=index)
         LOGGER.info(f"Query Data: {data[1]}")
-        rfunc = partial(update_buttons, message, data[1])
+        rfunc = partial(update_buttons, message, "nzbserver" if data[2] == "newser" else f"nzbser{index}")
         await event_handler(client, query, pfunc, rfunc)
     elif data[1].startswith("nzbsevar") and state == "view":
         index = int(data[1].replace("nzbsevar", ""))
-        value = f"{Config.USENET_SERVERS[index][data[2]]}"
+        servers = Config.USENET_SERVERS if isinstance(Config.USENET_SERVERS, list) else []
+        if index >= len(servers) or not isinstance(servers[index], dict) or data[2] not in servers[index]:
+            await query.answer("Invalid server or key!", show_alert=True)
+            return
+        value = f"{servers[index][data[2]]}"
         if len(value) > 200:
             await query.answer()
             with BytesIO(str.encode(value)) as out_file:
