@@ -381,9 +381,7 @@ class TaskListener(TaskConfig):
             LOGGER.info(f"Mega Upload Name: {self.name}")
             mega_email = self.user_dict.get("MEGA_EMAIL") or ""
             mega_password = self.user_dict.get("MEGA_PASSWORD") or ""
-            LOGGER.info(f"DEBUG: up_path={up_path} gid={gid} email_configured={bool(mega_email)}")
             await add_mega_upload(self, up_path, mega_email, mega_password, gid)
-            LOGGER.info("DEBUG: add_mega_upload returned")
         else:
             LOGGER.info(f"Rclone Upload Name: {self.name}")
             RCTransfer = RcloneTransferHelper(self)

@@ -24,7 +24,7 @@ from aioaria2 import Aria2HttpClient
 from aiohttp.client_exceptions import ClientError
 from aioqbt.client import create_client
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from sabnzbdapi import SabnzbdClient
 from aioqbt.exc import AQError
@@ -439,7 +439,7 @@ async def proxy_fetch(
             ):
                 loc = upstream.headers["Location"]
                 new_loc = rewrite_location(loc, proxy_prefix)
-                return HTMLResponse(
+                return Response(
                     status_code=upstream.status, headers={"Location": new_loc}
                 )
             content = await upstream.read()
@@ -449,7 +449,7 @@ async def proxy_fetch(
                 for k, v in upstream.headers.items()
                 if k.lower() not in ["content-length", "content-encoding"]
             }
-            return HTMLResponse(
+            return Response(
                 content=content,
                 status_code=upstream.status,
                 headers=resp_headers,
@@ -460,6 +460,8 @@ async def proxy_fetch(
 async def protected_proxy(
     service: str, path: str, request: Request, password: str = None
 ):
+    from hmac import compare_digest
+
     service_info = SERVICES.get(service)
     if not service_info:
         raise HTTPException(status_code=404, detail="Service not found")
@@ -468,7 +470,7 @@ async def protected_proxy(
             password = request.query_params.get("pass") or request.cookies.get(
                 f"{service}_pass"
             )
-        if password != service_info["password"]:
+        if not password or not compare_digest(password, service_info["password"]):
             raise HTTPException(status_code=403, detail="Unauthorized access")
     if path:
         if not _SAFE_PATH.match(path):
@@ -479,16 +481,18 @@ async def protected_proxy(
     url = f"{base}/{path}" if path else base
     headers = {k: v for k, v in request.headers.items() if k.lower() != "host"}
     body = await request.body()
+    params = {k: v for k, v in request.query_params.items() if k != "pass"}
     response = await proxy_fetch(
-        request.method, url, headers, dict(request.query_params), body, f"/{service}"
+        request.method, url, headers, params, body, f"/{service}"
     )
     if "pass" in request.query_params:
+        is_https = request.headers.get("x-forwarded-proto") == "https"
         response.set_cookie(
             f"{service}_pass",
             password,
             httponly=True,
             samesite="strict",
-            secure=False,
+            secure=is_https,
         )
     return response
 

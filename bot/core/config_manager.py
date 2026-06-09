@@ -6,7 +6,6 @@ class Config:
     AS_DOCUMENT = False
     AUTHORIZED_CHATS = ""
     BASE_URL = ""
-    BASE_URL_PORT = 80
     BOT_TOKEN = ""
     HELPER_TOKENS = ""
     BOT_MAX_TASKS = 0
@@ -98,7 +97,7 @@ class Config:
     SHOW_CLOUD_LINK = True
     RCLONE_SERVE_USER = ""
     RCLONE_SERVE_PASS = ""
-    RCLONE_SERVE_PORT = 8080
+    RCLONE_SERVE_PORT = 8081
     RSS_CHAT = ""
     RSS_DELAY = 600
     RSS_SIZE_LIMIT = 0

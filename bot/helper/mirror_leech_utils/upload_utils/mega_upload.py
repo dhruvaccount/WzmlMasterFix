@@ -142,27 +142,19 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
     )
     mega_dir = os.path.join(mega_base, "main")
     await makedirs(mega_dir, exist_ok=True)
-    LOGGER.info(f"DEBUG: mega_dir={mega_dir}")
 
-    LOGGER.info(f"DEBUG: creating AsyncMega")
     async_api = AsyncMega()
-    LOGGER.info(f"DEBUG: creating MegaApi")
     async_api.api = api = MegaApi("", mega_dir, "WZML-X", 4)
-    LOGGER.info(f"DEBUG: MegaApi created, creating MegaAppListener")
     mega_listener = MegaAppListener(async_api, listener)
-    LOGGER.info(f"DEBUG: MegaAppListener created, setting up")
     mega_listener._upload_mode = True
     async_api._mega_listener = mega_listener
-    LOGGER.info(f"DEBUG: adding listener to api")
     api.addListener(mega_listener)
-    LOGGER.info(f"DEBUG: listener added, entering try block")
 
     try:
         async with task_dict_lock:
             task_dict[listener.mid] = MegaDownloadStatus(listener, mega_listener, gid, "up")
         await update_status_message(listener.message.chat.id)
 
-        LOGGER.info(f"DEBUG: logging in with mega_email={mega_email[:4]}...")
         await async_api.login(mega_email, mega_password)
         if mega_listener.error:
             await listener.on_upload_error(
@@ -170,14 +162,12 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
             )
             return
 
-        LOGGER.info(f"DEBUG: fetching nodes")
         await async_api.fetchNodes()
         if mega_listener.error:
             await listener.on_upload_error(
                 f"Mega fetch nodes failed: {_mega_error_format(mega_listener.error)}"
             )
             return
-        LOGGER.info(f"DEBUG: nodes fetched")
 
         root_node = mega_listener.node
         if not root_node:
@@ -185,29 +175,23 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
                 "Failed to get Mega root node."
             )
             return
-        LOGGER.info(f"DEBUG: root_node={root_node}")
 
         total_files = 0
         uploaded_files = 0
         mime_type = "application/octet-stream"
 
         upload_link = None
-        is_dir = await aiopath.isdir(path)
-        LOGGER.info(f"DEBUG: path_is_dir={is_dir}, path={path}")
-        if is_dir:
+        if await aiopath.isdir(path):
             total_files = await sync_to_async(lambda: sum(len(files) for _, _, files in os.walk(path)))
-            LOGGER.info(f"DEBUG: folder total_files={total_files}")
             if total_files == 0:
                 await listener.on_upload_error("No files to upload in folder")
                 return
             listener.size = await _get_total_size(path)
             dir_name = os.path.basename(path.rstrip("/\\"))
-            LOGGER.info(f"DEBUG: folder dir_name={dir_name}")
 
             mega_root, folder_map = await _ensure_folder_structure(
                 async_api, mega_listener, path, root_node, dir_name
             )
-            LOGGER.info(f"DEBUG: folder_structure mega_root={mega_root}, folder_map_size={len(folder_map)}")
             if not mega_root:
                 if not listener.is_cancelled:
                     await listener.on_upload_error("Failed to create root folder on Mega")
@@ -225,46 +209,37 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
                     parent = folder_map.get(root)
 
                 if parent is None:
-                    LOGGER.info(f"DEBUG: no parent for {root}, skipping")
                     continue
 
                 for f in files:
                     if listener.is_cancelled:
                         return
                     file_path = os.path.join(root, f)
-                    LOGGER.info(f"DEBUG: uploading file={f}")
                     ok, _ = await _upload_file(
                         async_api, mega_listener, file_path, parent, f, suppress_export=True
                     )
                     if ok:
                         uploaded_files += 1
-                        LOGGER.info(f"DEBUG: uploaded ok={ok}, uploaded_files={uploaded_files}")
                     else:
                         if not listener.is_cancelled:
                             await listener.on_upload_error(f"MegaUpload failed for {f}")
                         return
 
             mime_type = "Folder"
-            LOGGER.info(f"DEBUG: folder upload done, uploaded_files={uploaded_files}")
             if uploaded_files > 0 and not listener.is_cancelled:
                 try:
                     mega_listener._suppress_export = False
-                    LOGGER.info(f"DEBUG: exporting folder node")
                     upload_link = await async_api.export_node(mega_root)
-                    LOGGER.info(f"DEBUG: folder export done, link={upload_link}")
-                except Exception as e:
-                    LOGGER.exception(f"MegaUpload: folder export failed: {e}")
+                except Exception:
+                    LOGGER.exception("MegaUpload: folder export failed")
 
         else:
             total_files = 1
             file_name = os.path.basename(path)
-            LOGGER.info(f"DEBUG: single file, file_name={file_name}")
             listener.size = await aiopath.getsize(path)
-            LOGGER.info(f"DEBUG: file size={listener.size}")
             ok, link = await _upload_file(
                 async_api, mega_listener, path, root_node, file_name
             )
-            LOGGER.info(f"DEBUG: upload result ok={ok}, link={link}")
             if ok:
                 uploaded_files = 1
                 upload_link = link
@@ -280,7 +255,6 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
             LOGGER.info(
                 f"MegaUpload: completed, {uploaded_files}/{total_files} files"
             )
-            LOGGER.info(f"DEBUG: calling on_upload_complete")
             await listener.on_upload_complete(
                 upload_link, uploaded_files, 0, mime_type
             )
@@ -296,4 +270,3 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
             with suppress(Exception):
                 await async_api.logout()
         await _cleanup_dir(mega_base)
-    LOGGER.info(f"DEBUG: add_mega_upload exiting")

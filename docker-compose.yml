@@ -34,9 +34,6 @@ services:
       - ./sabnzbd:/usr/src/app/sabnzbd
     expose:
       - "8080"
-    ports:
-      - "127.0.0.1:8070:8070"
-      - "127.0.0.1:8090:8090"
 
   tunnel:
     image: cloudflare/cloudflared:latest

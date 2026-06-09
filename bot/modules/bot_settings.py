@@ -8,7 +8,7 @@ from ast import literal_eval
 from pyrogram.enums import ButtonStyle
 from functools import partial
 from io import BytesIO
-from os import getcwd
+from os import getcwd, getenv
 from shlex import quote as shlex_quote
 from time import time
 
@@ -109,7 +109,6 @@ DEFAULT_DESP = {
     "AS_DOCUMENT": "Send files as document instead of media. Default: False.",
     "AUTHORIZED_CHATS": "User/Chat IDs authorized to use the bot. Space-separated. Supports thread IDs with | separator.",
     "BASE_URL": "Public URL for torrent web file selection. Format: http://ip or http://ip:port.",
-    "BASE_URL_PORT": "Port for BASE_URL. Default: 80.",
     "BOT_TOKEN": "Telegram Bot Token from @BotFather.",
     "HELPER_TOKENS": "Additional bot tokens for parallel task handling.",
     "BOT_MAX_TASKS": "Max tasks (including queued) the bot runs in parallel. 0 = unlimited.",
@@ -200,7 +199,7 @@ DEFAULT_DESP = {
     "SHOW_CLOUD_LINK": "Show cloud link button on leeched files. Default: True.",
     "RCLONE_SERVE_USER": "Username for rclone serve authentication.",
     "RCLONE_SERVE_PASS": "Password for rclone serve authentication.",
-    "RCLONE_SERVE_PORT": "Port for rclone serve. Default: 8080.",
+    "RCLONE_SERVE_PORT": "Port for rclone serve. Default: 8081.",
     "RSS_CHAT": "Chat ID for RSS feed notifications.",
     "RSS_DELAY": "RSS feed check interval in seconds. Default: 600.",
     "RSS_SIZE_LIMIT": "RSS download size limit in GB. 0 = unlimited.",
@@ -507,13 +506,6 @@ async def edit_variable(_, message, pre_message, key):
         value = int(value)
     elif key == "LEECH_SPLIT_SIZE":
         value = min(int(value), TgClient.MAX_SPLIT_SIZE)
-    elif key == "BASE_URL_PORT":
-        value = int(value)
-        if Config.BASE_URL:
-            await (await create_subprocess_exec("pkill", "-9", "-f", "gunicorn")).wait()
-            await create_subprocess_shell(
-                f"gunicorn -k uvicorn.workers.UvicornWorker -w 1 web.wserver:app --bind 0.0.0.0:{value}"
-            )
     elif key == "EXCLUDED_EXTENSIONS":
         fx = value.split()
         excluded_extensions.clear()
@@ -961,15 +953,6 @@ async def edit_bot_settings(client, query):
             await database.update_aria2("bt-stop-timeout", "0")
         elif data[2] == "BASE_URL":
             await (await create_subprocess_exec("pkill", "-9", "-f", "gunicorn")).wait()
-        elif data[2] == "BASE_URL_PORT":
-            value = 80
-            if Config.BASE_URL:
-                await (
-                    await create_subprocess_exec("pkill", "-9", "-f", "gunicorn")
-                ).wait()
-                await create_subprocess_shell(
-                    f"gunicorn -k uvicorn.workers.UvicornWorker -w 1 web.wserver:app --bind 0.0.0.0:{value}"
-                )
         elif data[2] == "GDRIVE_ID":
             if drives_names and drives_names[0] == "Main":
                 drives_names.pop(0)
@@ -1239,8 +1222,9 @@ async def load_config():
 
     await (await create_subprocess_exec("pkill", "-9", "-f", "gunicorn")).wait()
     if Config.BASE_URL:
+        port = getenv("PORT", "") or "8080"
         await create_subprocess_shell(
-            f"gunicorn -k uvicorn.workers.UvicornWorker -w 1 web.wserver:app --bind 0.0.0.0:{Config.BASE_URL_PORT}"
+            f"gunicorn -k uvicorn.workers.UvicornWorker -w 1 web.wserver:app --bind 0.0.0.0:{port}"
         )
 
     if Config.DATABASE_URL:

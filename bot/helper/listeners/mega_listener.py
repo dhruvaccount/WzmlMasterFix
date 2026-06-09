@@ -146,35 +146,25 @@ class AsyncMega:
             self._expected_request_source = None
 
     async def create_folder(self, name, parent, source="main"):
-        LOGGER.info(f"DEBUG: create_folder start name={name} source={source}")
         mega_api = self.folder_api if source == "folder" else self.api
         ml = getattr(self, "_mega_listener", None)
-        LOGGER.info(f"DEBUG: create_folder mega_api={mega_api} ml={ml}")
 
         try:
-            LOGGER.info(f"DEBUG: create_folder checking getNodeByPath")
             existing = await sync_to_async(mega_api.getNodeByPath, name, parent)
-            LOGGER.info(f"DEBUG: create_folder getNodeByPath result={existing}")
             if existing:
-                LOGGER.info(f"DEBUG: create_folder found existing node, returning")
                 return existing
-        except Exception as e:
-            LOGGER.info(f"DEBUG: create_folder getNodeByPath exception: {e}")
+        except Exception:
+            pass
 
-        LOGGER.info(f"DEBUG: create_folder proceeding with createFolder")
         self.continue_event.clear()
         self._expected_request_type = MegaRequest.TYPE_CREATE_FOLDER
         self._expected_request_source = source
         if ml:
             ml._created_folder_node = None
         try:
-            LOGGER.info(f"DEBUG: create_folder calling sync_to_async createFolder")
             await sync_to_async(mega_api.createFolder, name, parent)
-            LOGGER.info(f"DEBUG: create_folder sync_to_async returned, waiting for callback")
             await wait_for(self.continue_event.wait(), timeout=_REQUEST_TIMEOUT_SECONDS)
-            LOGGER.info(f"DEBUG: create_folder continue_event received")
             node = getattr(ml, "_created_folder_node", None) if ml else None
-            LOGGER.info(f"DEBUG: create_folder node={node}")
             if not node:
                 LOGGER.warning(f"create_folder: no node for '{name}'")
             return node
@@ -187,7 +177,6 @@ class AsyncMega:
         finally:
             self._expected_request_type = None
             self._expected_request_source = None
-            LOGGER.info(f"DEBUG: create_folder cleanup done")
 
     async def logout(self):
         if self.folder_api:
@@ -338,7 +327,6 @@ class MegaAppListener(MegaListener):
         self._created_folder_node = None
         self._export_link = None
         super().__init__()
-        LOGGER.info("DEBUG: MegaAppListener created")
 
     @property
     def speed(self):
@@ -417,7 +405,6 @@ class MegaAppListener(MegaListener):
         try:
             request_type = request.getType()
             err_code = error.getErrorCode() if error else MegaError.API_OK
-            LOGGER.info(f"DEBUG: onRequestFinish type={request_type} err={err_code} source={source}")
             if err_code != MegaError.API_OK:
                 if self.is_cancelled:
                     self._set_request_event()
@@ -508,7 +495,6 @@ class MegaAppListener(MegaListener):
         try:
             if not self._is_target_transfer(transfer):
                 return
-            LOGGER.info(f"DEBUG: onTransferStart type={transfer.getType()}")
             self._current_transfer = transfer
             self._bytes_transferred = 0
             self._set_request_event()
@@ -545,7 +531,6 @@ class MegaAppListener(MegaListener):
     def onTransferFinish(self, api: MegaApi, transfer: MegaTransfer, error):
         try:
             err_code = error.getErrorCode() if error else MegaError.API_OK
-            LOGGER.info(f"DEBUG: onTransferFinish type={transfer.getType()} err={err_code} upload_mode={self._upload_mode} suppress={self._suppress_export} caller_manages={self._caller_manages_completion}")
             if self.is_cancelled:
                 self._set_transfer_event()
                 return
