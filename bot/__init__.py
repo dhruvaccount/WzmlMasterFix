@@ -133,7 +133,6 @@ def _update_sabnzbd_ini(api_key):
 
 
 _sabnzbd_api_key = _sabnzbd_key()
-_update_sabnzbd_ini(_sabnzbd_api_key)
 
 sabnzbd_client = SabnzbdClient(
     host="http://localhost",

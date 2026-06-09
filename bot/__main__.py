@@ -29,6 +29,11 @@ async def main():
 
     await load_settings()
 
+    from bot import _sabnzbd_api_key, _update_sabnzbd_ini
+    _update_sabnzbd_ini(_sabnzbd_api_key)
+    from .helper.ext_utils.db_handler import database
+    await database.update_nzb_config()
+
     from .helper.telegram_helper.bot_commands import BotCommands
 
     BotCommands.refresh_commands()
