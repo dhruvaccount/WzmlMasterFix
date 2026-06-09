@@ -82,12 +82,9 @@ if DATABASE_URL := config_file.get("DATABASE_URL", "").strip():
     try:
         conn = MongoClient(DATABASE_URL, server_api=ServerApi("1"))
         db = conn.wzmlx
-        old_config = db.settings.deployConfig.find_one({"_id": _DB_PART}, {"_id": 0})
-        config_dict = db.settings.config.find_one({"_id": _DB_PART})
-        if (
-            old_config is not None and old_config == config_file or old_config is None
-        ) and config_dict is not None:
-            config_file["UPSTREAM_REPO"] = config_dict["UPSTREAM_REPO"]
+        config_dict = db.settings.config.find_one({"_id": _DB_PART}, {"_id": 0})
+        if config_dict is not None:
+            config_file["UPSTREAM_REPO"] = config_dict.get("UPSTREAM_REPO", "https://github.com/SilentDemonSD/WZML-X")
             config_file["UPSTREAM_BRANCH"] = config_dict.get("UPSTREAM_BRANCH", "wzv3")
             config_file["UPDATE_PKGS"] = config_dict.get("UPDATE_PKGS", "True")
         conn.close()
