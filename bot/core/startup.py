@@ -365,6 +365,18 @@ async def load_configurations():
         )
     ).wait()
 
+    if not Config.BASE_URL:
+        tunnel_url_file = "/tmp/tunnel/url"
+        for _ in range(30):
+            if await aiopath.exists(tunnel_url_file):
+                async with aiopen(tunnel_url_file, "r") as f:
+                    url = (await f.read()).strip()
+                    if url:
+                        Config.BASE_URL = url
+                        LOGGER.info(f"Tunnel URL detected: {url}")
+                        break
+            await sleep(1)
+
     PORT = getenv("PORT", "") or "8080"
     if PORT:
         access_pwd = getenv("WEB_ACCESS_PASSWORD", "") or Config.WEB_ACCESS_PASSWORD

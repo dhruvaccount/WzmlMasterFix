@@ -149,16 +149,13 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
     mega_listener._upload_mode = True
     async_api._mega_listener = mega_listener
     api.addListener(mega_listener)
-    LOGGER.info(f"DBG: MegaApi+Listener setup done")
 
     try:
         async with task_dict_lock:
             task_dict[listener.mid] = MegaDownloadStatus(listener, mega_listener, gid, "up")
         await update_status_message(listener.message.chat.id)
 
-        LOGGER.info(f"DBG: login start")
         await async_api.login(mega_email, mega_password)
-        LOGGER.info(f"DBG: login done")
         if mega_listener.error:
             await listener.on_upload_error(
                 f"Mega login failed: {_mega_error_format(mega_listener.error)}"
@@ -184,7 +181,6 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
         mime_type = "application/octet-stream"
 
         upload_link = None
-        LOGGER.info(f"DBG: path={path} isdir={await aiopath.isdir(path)}")
         if await aiopath.isdir(path):
             total_files = await sync_to_async(lambda: sum(len(files) for _, _, files in os.walk(path)))
             if total_files == 0:
@@ -193,11 +189,9 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
             listener.size = await _get_total_size(path)
             dir_name = os.path.basename(path.rstrip("/\\"))
 
-            LOGGER.info(f"DBG: ensure_folder_structure start dir_name={dir_name}")
             mega_root, folder_map = await _ensure_folder_structure(
                 async_api, mega_listener, path, root_node, dir_name
             )
-            LOGGER.info(f"DBG: ensure_folder_structure done root={mega_root} map={len(folder_map)}")
             if not mega_root:
                 if not listener.is_cancelled:
                     await listener.on_upload_error("Failed to create root folder on Mega")
@@ -240,7 +234,6 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
                     LOGGER.exception("MegaUpload: folder export failed")
 
         else:
-            LOGGER.info(f"DBG: single file branch")
             total_files = 1
             file_name = os.path.basename(path)
             listener.size = await aiopath.getsize(path)

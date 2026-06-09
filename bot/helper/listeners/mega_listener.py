@@ -153,8 +153,8 @@ class AsyncMega:
             existing = await sync_to_async(mega_api.getNodeByPath, name, parent)
             if existing:
                 return existing
-        except Exception as e:
-            LOGGER.info(f"DBG: create_folder getNodeByPath fail {e}")
+        except Exception:
+            pass
 
         self.continue_event.clear()
         self._expected_request_type = MegaRequest.TYPE_CREATE_FOLDER
@@ -162,9 +162,7 @@ class AsyncMega:
         if ml:
             ml._created_folder_node = None
         try:
-            LOGGER.info(f"DBG: createFolder call name={name}")
             await sync_to_async(mega_api.createFolder, name, parent)
-            LOGGER.info(f"DBG: createFolder queued, waiting callback")
             await wait_for(self.continue_event.wait(), timeout=_REQUEST_TIMEOUT_SECONDS)
             node = getattr(ml, "_created_folder_node", None) if ml else None
             if not node:
@@ -352,6 +350,18 @@ class MegaAppListener(MegaListener):
         except Exception as e:
             LOGGER.error(f"Mega transfer event signal failed: {e}")
 
+    def _set_export_done(self):
+        try:
+            bot_loop.call_soon_threadsafe(self._export_done.set)
+        except Exception as e:
+            LOGGER.error(f"Mega export done signal failed: {e}")
+
+    def _clear_export_done(self):
+        try:
+            bot_loop.call_soon_threadsafe(self._export_done.clear)
+        except Exception as e:
+            LOGGER.error(f"Mega export done clear failed: {e}")
+
     def _cache_node_data(self, node):
         try:
             self._name = node.getName()
@@ -468,21 +478,18 @@ class MegaAppListener(MegaListener):
                 try:
                     self._export_link = request.getLink()
                     LOGGER.info(f"TYPE_EXPORT: link={self._export_link}")
-                except Exception as e:
-                    LOGGER.warning(f"TYPE_EXPORT: getLink failed: {e}")
-                self._export_done.set()
+                except Exception:
+                    pass
+                self._set_export_done()
             elif request_type == MegaRequest.TYPE_CREATE_FOLDER:
-                LOGGER.info(f"DBG: TYPE_CREATE_FOLDER callback")
                 try:
                     handle = request.getNodeHandle()
-                    LOGGER.info(f"DBG: TYPE_CREATE_FOLDER handle={handle}")
                     if handle:
                         node = api.getNodeByHandle(handle)
-                        LOGGER.info(f"DBG: TYPE_CREATE_FOLDER node={node}")
                         if node:
                             self._created_folder_node = node
-                except Exception as e:
-                    LOGGER.info(f"DBG: TYPE_CREATE_FOLDER error {e}")
+                except Exception:
+                    pass
 
             if self._is_expected_request(request_type) and self._is_expected_source(source):
                 self._set_request_event()
@@ -565,7 +572,7 @@ class MegaAppListener(MegaListener):
                     self._bytes_transferred = self._size
                     self._last_speed_time = time()
                 if self._upload_mode and transfer.getType() == MegaTransfer.TYPE_UPLOAD and not self._suppress_export:
-                    self._export_done.clear()
+                    self._clear_export_done()
                     try:
                         node = None
                         handle = self._uploaded_node_handle
@@ -589,10 +596,10 @@ class MegaAppListener(MegaListener):
                             api.exportNode(node, 0, False, False, None)
                         else:
                             LOGGER.warning("onTransferFinish: node not found for export")
-                            self._export_done.set()
+                            self._set_export_done()
                     except Exception as e:
                         LOGGER.error(f"onTransferFinish: export failed: {e}")
-                        self._export_done.set()
+                        self._set_export_done()
             self._set_transfer_event()
         except Exception as e:
             LOGGER.error(f"onTransferFinish exception: {e}")
