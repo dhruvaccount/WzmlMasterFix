@@ -439,22 +439,22 @@ async def proxy_fetch(
             ):
                 loc = upstream.headers["Location"]
                 new_loc = rewrite_location(loc, proxy_prefix)
-                resp_headers = {
-                    k: v
+                resp_headers = [
+                    (k, v)
                     for k, v in upstream.headers.items()
-                    if k.lower() not in ["content-length", "content-encoding"]
-                }
-                resp_headers["Location"] = new_loc
+                    if k.lower() not in ["content-length", "content-encoding", "location"]
+                ]
+                resp_headers.append(("Location", new_loc))
                 return Response(
                     status_code=upstream.status, headers=resp_headers
                 )
             content = await upstream.read()
             media_type = upstream.headers.get("Content-Type", "text/html")
-            resp_headers = {
-                k: v
+            resp_headers = [
+                (k, v)
                 for k, v in upstream.headers.items()
                 if k.lower() not in ["content-length", "content-encoding"]
-            }
+            ]
             return Response(
                 content=content,
                 status_code=upstream.status,
