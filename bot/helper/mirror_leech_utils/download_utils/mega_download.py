@@ -2,7 +2,6 @@ import os
 from asyncio import Lock as AsyncLock, sleep as asleep
 from contextlib import suppress
 from secrets import token_hex
-from time import sleep
 
 from aiofiles.os import makedirs, path as aiopath
 from aioshutil import rmtree
@@ -102,20 +101,20 @@ async def add_mega_download(listener, path):
 
         async_api = AsyncMega()
         async_api.api = api = MegaApi("", mega_dir, "WZML-X", 4)
-        sleep(0.5)
+        await asleep(0.1)
         mega_listener = MegaAppListener(async_api, listener)
         async_api._mega_listener = mega_listener
+        LOGGER.info("Mega: addListener main")
         api.addListener(mega_listener)
-        sleep(0.3)
 
         if _is_folder_link(listener.link):
             mega_folder_dir = os.path.join(mega_base, "folder")
             await makedirs(mega_folder_dir, exist_ok=True)
-            sleep(0.3)
+            LOGGER.info("Mega: folder api setup")
             async_api.folder_api = MegaApi("", mega_folder_dir, "WZML-X", 4)
-            sleep(0.3)
             folder_listener = MegaFolderListener(mega_listener)
             async_api._folder_listener = folder_listener
+            LOGGER.info("Mega: addListener folder")
             async_api.folder_api.addListener(folder_listener)
 
         if mega_email and mega_password:
