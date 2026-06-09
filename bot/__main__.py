@@ -29,8 +29,10 @@ async def main():
 
     await load_settings()
 
-    from bot import _sabnzbd_api_key, _update_sabnzbd_ini
-    _update_sabnzbd_ini(_sabnzbd_api_key)
+    from bot import _sabnzbd_key, _update_sabnzbd_ini, sabnzbd_client
+    derived_key = _sabnzbd_key()
+    _update_sabnzbd_ini(derived_key)
+    sabnzbd_client._default_params["apikey"] = derived_key
     from .helper.ext_utils.db_handler import database
     await database.update_nzb_config()
 
