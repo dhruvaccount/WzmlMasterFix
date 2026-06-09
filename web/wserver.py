@@ -65,10 +65,10 @@ def _load_config():
     except ModuleNotFoundError:
         cfg = None
     bot_token = environ.get("BOT_TOKEN", "") or (getattr(cfg, "BOT_TOKEN", "") if cfg else "")
-    secret = environ.get("WZMLX_WEB_SECRET", "") or (
-        getattr(cfg, "WZMLX_WEB_SECRET", "") if cfg else ""
+    access_pwd = environ.get("WEB_ACCESS_PASSWORD", "") or (
+        getattr(cfg, "WEB_ACCESS_PASSWORD", "") if cfg else ""
     )
-    return bot_token, secret
+    return bot_token, access_pwd
 
 
 def _resolve_bot_id(token):
@@ -80,7 +80,7 @@ def _resolve_bot_id(token):
     return (token.split(":", 1)[0] or "0").strip()
 
 
-_BOT_TOKEN, _WEB_SECRET = _load_config()
+_BOT_TOKEN, _ACCESS_PASSWORD = _load_config()
 _BOT_ID = _resolve_bot_id(_BOT_TOKEN)
 
 
@@ -89,14 +89,14 @@ def _service_pwd(service):
     from hmac import new as hmac_new
     from secrets import token_bytes
     global _cached_secret_bytes
-    if not _WEB_SECRET:
+    if not _ACCESS_PASSWORD:
         if _cached_secret_bytes is None:
             _cached_secret_bytes = token_bytes(32)
         secret = _cached_secret_bytes
-    elif isinstance(_WEB_SECRET, str):
-        secret = _WEB_SECRET.encode("utf-8")
+    elif isinstance(_ACCESS_PASSWORD, str):
+        secret = _ACCESS_PASSWORD.encode("utf-8")
     else:
-        secret = _WEB_SECRET
+        secret = _ACCESS_PASSWORD
     msg = f"{_BOT_ID}:{service}".encode("utf-8")
     digest = hmac_new(_SERVICE_PWD_SALT, msg, sha256)
     digest.update(secret)

@@ -130,8 +130,8 @@ class Config:
     USER_SESSION_STRING = ""
     USER_TRANSMISSION = True
     USE_SERVICE_ACCOUNTS = False
+    WEB_ACCESS_PASSWORD = ""
     WEB_PINCODE = True
-    WZMLX_WEB_SECRET = ""
     YT_DLP_OPTIONS = {}
     YT_DESP = "Uploaded with WZML-X bot"
     YT_TAGS = ["telegram", "bot", "youtube"]

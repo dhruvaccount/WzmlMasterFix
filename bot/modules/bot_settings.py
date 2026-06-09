@@ -230,8 +230,8 @@ DEFAULT_DESP = {
     "USER_SESSION_STRING": "Pyrogram session string for user account tasks.",
     "USER_TRANSMISSION": "Use user account for transmission tasks. Default: True.",
     "USE_SERVICE_ACCOUNTS": "Use Google Service Accounts. Default: False.",
+    "WEB_ACCESS_PASSWORD": "Secret for deriving proxy passwords. Set once, use derived passwords in browser. Empty = auto-generated.",
     "WEB_PINCODE": "Ask for pincode in web file selection. Default: True.",
-    "WZMLX_WEB_SECRET": "Secret key for web interface authentication.",
     "YT_DLP_OPTIONS": "Default yt-dlp options. Format: key:value|key:value.",
     "YT_DESP": "Description for YouTube uploads. Default: Uploaded with WZML-X bot.",
     "YT_TAGS": "Tags for YouTube uploads. List format.",
@@ -951,7 +951,7 @@ async def edit_bot_settings(client, query):
         elif data[2] == "TORRENT_TIMEOUT":
             await TorrentManager.change_aria2_option("bt-stop-timeout", "0")
             await database.update_aria2("bt-stop-timeout", "0")
-        elif data[2] == "BASE_URL":
+        elif data[2] in ("BASE_URL","WEB_ACCESS_PASSWORD"):
             await (await create_subprocess_exec("pkill", "-9", "-f", "gunicorn")).wait()
         elif data[2] == "GDRIVE_ID":
             if drives_names and drives_names[0] == "Main":
@@ -963,7 +963,7 @@ async def edit_bot_settings(client, query):
                 index_urls[0] = ""
         elif data[2] == "INC_TASK_NOTIFY":
             await database.trunc_table("tasks")
-        elif data[2] in ["JD_EMAIL", "JD_PASS"]:
+        elif data[2] in ("JD_EMAIL", "JD_PASS"):
             await create_subprocess_exec("pkill", "-9", "-f", "java")
         elif data[2] == "USENET_SERVERS":
             for s in Config.USENET_SERVERS:
@@ -977,16 +977,16 @@ async def edit_bot_settings(client, query):
         if data[2] == "DATABASE_URL":
             await database.disconnect()
         await database.update_config({data[2]: value})
-        if data[2] in ["SEARCH_PLUGINS", "SEARCH_API_LINK"]:
+        if data[2] in ("SEARCH_PLUGINS", "SEARCH_API_LINK"):
             await initiate_search_tools()
-        elif data[2] in ["QUEUE_ALL", "QUEUE_DOWNLOAD", "QUEUE_UPLOAD"]:
+        elif data[2] in ("QUEUE_ALL", "QUEUE_DOWNLOAD", "QUEUE_UPLOAD"):
             await start_from_queued()
-        elif data[2] in [
+        elif data[2] in (
             "RCLONE_SERVE_URL",
             "RCLONE_SERVE_PORT",
             "RCLONE_SERVE_USER",
             "RCLONE_SERVE_PASS",
-        ]:
+        ):
             await rclone_serve_booter()
     elif data[1] == "resetnzb":
         await query.answer()

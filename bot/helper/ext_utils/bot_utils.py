@@ -41,7 +41,7 @@ _cached_secret_bytes = None
 
 def _shared_secret():
     global _cached_secret_bytes
-    secret = Config.WZMLX_WEB_SECRET
+    secret = Config.WEB_ACCESS_PASSWORD
     if not secret:
         if _cached_secret_bytes is None:
             _cached_secret_bytes = token_bytes(32)

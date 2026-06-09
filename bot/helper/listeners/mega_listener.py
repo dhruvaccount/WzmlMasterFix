@@ -153,8 +153,8 @@ class AsyncMega:
             existing = await sync_to_async(mega_api.getNodeByPath, name, parent)
             if existing:
                 return existing
-        except Exception:
-            pass
+        except Exception as e:
+            LOGGER.info(f"DBG: create_folder getNodeByPath fail {e}")
 
         self.continue_event.clear()
         self._expected_request_type = MegaRequest.TYPE_CREATE_FOLDER
@@ -162,7 +162,9 @@ class AsyncMega:
         if ml:
             ml._created_folder_node = None
         try:
+            LOGGER.info(f"DBG: createFolder call name={name}")
             await sync_to_async(mega_api.createFolder, name, parent)
+            LOGGER.info(f"DBG: createFolder queued, waiting callback")
             await wait_for(self.continue_event.wait(), timeout=_REQUEST_TIMEOUT_SECONDS)
             node = getattr(ml, "_created_folder_node", None) if ml else None
             if not node:
@@ -470,14 +472,17 @@ class MegaAppListener(MegaListener):
                     LOGGER.warning(f"TYPE_EXPORT: getLink failed: {e}")
                 self._export_done.set()
             elif request_type == MegaRequest.TYPE_CREATE_FOLDER:
+                LOGGER.info(f"DBG: TYPE_CREATE_FOLDER callback")
                 try:
                     handle = request.getNodeHandle()
+                    LOGGER.info(f"DBG: TYPE_CREATE_FOLDER handle={handle}")
                     if handle:
                         node = api.getNodeByHandle(handle)
+                        LOGGER.info(f"DBG: TYPE_CREATE_FOLDER node={node}")
                         if node:
                             self._created_folder_node = node
-                except Exception:
-                    pass
+                except Exception as e:
+                    LOGGER.info(f"DBG: TYPE_CREATE_FOLDER error {e}")
 
             if self._is_expected_request(request_type) and self._is_expected_source(source):
                 self._set_request_event()

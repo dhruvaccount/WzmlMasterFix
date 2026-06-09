@@ -26,7 +26,7 @@ USE_SERVICE_ACCOUNTS = False
 NAME_SWAP = ""
 FFMPEG_CMDS = {}
 UPLOAD_PATHS = {}
-WZMLX_WEB_SECRET=""
+WEB_ACCESS_PASSWORD=""  # Secret for deriving proxy passwords. Logs derived passwords at startup.
 
 # Hyper Tg Downloader
 HELPER_TOKENS = ""
