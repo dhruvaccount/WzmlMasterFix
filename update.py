@@ -10,7 +10,8 @@ from logging import (
     ERROR,
 )
 from os import path, remove, environ
-from pymongo import AsyncMongoClient, PyMongoError
+from pymongo import AsyncMongoClient
+from pymongo.errors import PyMongoError
 from pymongo.server_api import ServerApi
 from re import compile as re_compile
 from subprocess import run as srun, call as scall
