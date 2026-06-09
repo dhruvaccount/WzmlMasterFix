@@ -146,25 +146,35 @@ class AsyncMega:
             self._expected_request_source = None
 
     async def create_folder(self, name, parent, source="main"):
+        LOGGER.info(f"DEBUG: create_folder start name={name} source={source}")
         mega_api = self.folder_api if source == "folder" else self.api
         ml = getattr(self, "_mega_listener", None)
+        LOGGER.info(f"DEBUG: create_folder mega_api={mega_api} ml={ml}")
 
         try:
+            LOGGER.info(f"DEBUG: create_folder checking getNodeByPath")
             existing = await sync_to_async(mega_api.getNodeByPath, name, parent)
+            LOGGER.info(f"DEBUG: create_folder getNodeByPath result={existing}")
             if existing:
+                LOGGER.info(f"DEBUG: create_folder found existing node, returning")
                 return existing
-        except Exception:
-            pass
+        except Exception as e:
+            LOGGER.info(f"DEBUG: create_folder getNodeByPath exception: {e}")
 
+        LOGGER.info(f"DEBUG: create_folder proceeding with createFolder")
         self.continue_event.clear()
         self._expected_request_type = MegaRequest.TYPE_CREATE_FOLDER
         self._expected_request_source = source
         if ml:
             ml._created_folder_node = None
         try:
+            LOGGER.info(f"DEBUG: create_folder calling sync_to_async createFolder")
             await sync_to_async(mega_api.createFolder, name, parent)
+            LOGGER.info(f"DEBUG: create_folder sync_to_async returned, waiting for callback")
             await wait_for(self.continue_event.wait(), timeout=_REQUEST_TIMEOUT_SECONDS)
+            LOGGER.info(f"DEBUG: create_folder continue_event received")
             node = getattr(ml, "_created_folder_node", None) if ml else None
+            LOGGER.info(f"DEBUG: create_folder node={node}")
             if not node:
                 LOGGER.warning(f"create_folder: no node for '{name}'")
             return node
@@ -172,11 +182,12 @@ class AsyncMega:
             LOGGER.error(f"create_folder timed out for '{name}'")
             return None
         except Exception as e:
-            LOGGER.error(f"create_folder failed for '{name}': {e}")
+            LOGGER.error(f"create_folder failed for '{name}': {e}", exc_info=True)
             return None
         finally:
             self._expected_request_type = None
             self._expected_request_source = None
+            LOGGER.info(f"DEBUG: create_folder cleanup done")
 
     async def logout(self):
         if self.folder_api:
