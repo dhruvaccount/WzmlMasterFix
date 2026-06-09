@@ -1,8 +1,16 @@
-from asyncio import Event, TimeoutError as AsyncTimeoutError, wait_for
-from time import time
+from asyncio import Event, wait_for, wrap_future, TimeoutError as AsyncTimeoutError
+from concurrent.futures import Future
 from re import match as rematch
+from time import time
 
-from mega import MegaApi, MegaError, MegaListener, MegaRequest, MegaTransfer, MegaUploadOptions
+from mega import (
+    MegaApi,
+    MegaError,
+    MegaListener,
+    MegaRequest,
+    MegaTransfer,
+    MegaUploadOptions,
+)
 
 from ... import LOGGER, bot_loop
 from ..ext_utils.bot_utils import async_to_sync, sync_to_async
@@ -75,6 +83,7 @@ class AsyncMega:
         self._expected_request_type = None
         self._expected_request_source = None
         self._download_is_folder = False
+        self._request_future = None
 
     def _download_api(self):
         return self.folder_api if self.folder_api else self.api
@@ -156,14 +165,15 @@ class AsyncMega:
         except Exception:
             pass
 
-        self.continue_event.clear()
+        future = Future()
+        self._request_future = future
         self._expected_request_type = MegaRequest.TYPE_CREATE_FOLDER
         self._expected_request_source = source
         if ml:
             ml._created_folder_node = None
         try:
             await sync_to_async(mega_api.createFolder, name, parent)
-            await wait_for(self.continue_event.wait(), timeout=_REQUEST_TIMEOUT_SECONDS)
+            await wait_for(wrap_future(future), timeout=_REQUEST_TIMEOUT_SECONDS)
             node = getattr(ml, "_created_folder_node", None) if ml else None
             if not node:
                 LOGGER.warning(f"create_folder: no node for '{name}'")
@@ -175,6 +185,7 @@ class AsyncMega:
             LOGGER.error(f"create_folder failed for '{name}': {e}", exc_info=True)
             return None
         finally:
+            self._request_future = None
             self._expected_request_type = None
             self._expected_request_source = None
 
@@ -483,10 +494,15 @@ class MegaAppListener(MegaListener):
             elif request_type == MegaRequest.TYPE_CREATE_FOLDER:
                 try:
                     handle = request.getNodeHandle()
-                    if handle:
-                        node = api.getNodeByHandle(handle)
-                        if node:
-                            self._created_folder_node = node
+                    node = api.getNodeByHandle(handle) if handle else None
+                    if node:
+                        self._created_folder_node = node
+                except Exception:
+                    pass
+                try:
+                    fut = self._async_api._request_future
+                    if fut is not None and not fut.done():
+                        fut.set_result(True)
                 except Exception:
                     pass
 
