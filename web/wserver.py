@@ -434,33 +434,17 @@ async def proxy_fetch(
             data=body,
             allow_redirects=False,
         ) as upstream:
-            if upstream.status in (301, 302, 303, 307, 308) and upstream.headers.get(
-                "Location"
-            ):
-                loc = upstream.headers["Location"]
-                new_loc = rewrite_location(loc, proxy_prefix)
-                resp_headers = [
-                    (k, v)
-                    for k, v in upstream.headers.items()
-                    if k.lower() not in ["content-length", "content-encoding", "location"]
-                ]
-                resp_headers.append(("Location", new_loc))
-                return Response(
-                    status_code=upstream.status, headers=resp_headers
-                )
-            content = await upstream.read()
-            media_type = upstream.headers.get("Content-Type", "text/html")
-            resp_headers = [
-                (k, v)
-                for k, v in upstream.headers.items()
-                if k.lower() not in ["content-length", "content-encoding"]
-            ]
-            return Response(
-                content=content,
-                status_code=upstream.status,
-                headers=resp_headers,
-                media_type=media_type,
-            )
+            raw = [(k.lower().encode("latin-1"), v.encode("latin-1")) for k, v in upstream.headers.items()
+                    if k.lower() not in ("content-length", "content-encoding")]
+            if upstream.status in (301, 302, 303, 307, 308):
+                loc = upstream.headers.get("Location")
+                if loc:
+                    new_loc = rewrite_location(loc, proxy_prefix)
+                    raw = [(k, new_loc.encode("latin-1") if k == b"location" else v) for k, v in raw]
+            body = await upstream.read() if upstream.status not in (301, 302, 303, 307, 308) else b""
+            response = Response(content=body, status_code=upstream.status)
+            response.raw_headers = raw
+            return response
 
 
 async def protected_proxy(
