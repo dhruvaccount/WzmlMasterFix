@@ -5,6 +5,7 @@ credentials.json
 rclone.conf
 .netrc
 log.txt
+rlog.txt
 cfg.zip
 accounts/*
 thumbnails/*
