@@ -176,6 +176,7 @@ def _update_packages(update_pkgs):
 def main():
     _setup_logging()
     config_file = _load_config()
+    version = _get_version()
 
     bot_token = config_file.get("BOT_TOKEN", "")
     if not bot_token:
@@ -187,7 +188,6 @@ def main():
 
     _fetch_config_from_db(config_file, db_part)
 
-    version = _get_version()
     upstream_repo, upstream_branch = _validate_config(config_file)
 
     _run_update(upstream_repo, upstream_branch, version)
