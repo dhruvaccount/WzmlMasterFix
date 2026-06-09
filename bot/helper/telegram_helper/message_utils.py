@@ -121,7 +121,7 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
                 **kwargs,
             )
         return await TgClient.bot.send_message(
-            chat_id=message,
+            chat_id=int(message),
             text=text,
             disable_web_page_preview=True,
             disable_notification=True,
@@ -139,10 +139,9 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
     except (MessageEmpty, EntityBoundsInvalid):
         return await send_message(message, text, parse_mode=ParseMode.DISABLED)
     except PeerIdInvalid:
+        LOGGER.warning(f"PeerIdInvalid {type(message)}") # My Debug Style
         if isinstance(message, (int, str)):
-            await TgClient.bot.resolve_peer(message)
-            return await send_message(message, text, buttons, block, photo)
-        raise
+            return await send_message(int(message), text, buttons, block, photo)
     except Exception as e:
         LOGGER.error(str(e), exc_info=True)
         return str(e)
