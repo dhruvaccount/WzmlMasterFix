@@ -101,21 +101,23 @@ async def add_mega_download(listener, path):
 
         async_api = AsyncMega()
         async_api.api = api = MegaApi("", mega_dir, "WZML-X", 4)
-        await asleep(0.1)
         mega_listener = MegaAppListener(async_api, listener)
         async_api._mega_listener = mega_listener
         LOGGER.info("Mega: addListener main")
         api.addListener(mega_listener)
+        LOGGER.info("Mega: addListener main done")
 
         if _is_folder_link(listener.link):
             mega_folder_dir = os.path.join(mega_base, "folder")
             await makedirs(mega_folder_dir, exist_ok=True)
-            LOGGER.info("Mega: folder api setup")
+            LOGGER.info("Mega: creating folder MegaApi")
             async_api.folder_api = MegaApi("", mega_folder_dir, "WZML-X", 4)
+            LOGGER.info("Mega: creating folder listener")
             folder_listener = MegaFolderListener(mega_listener)
             async_api._folder_listener = folder_listener
             LOGGER.info("Mega: addListener folder")
             async_api.folder_api.addListener(folder_listener)
+            LOGGER.info("Mega: folder api done")
 
         if mega_email and mega_password:
             await async_api.login(mega_email, mega_password)
