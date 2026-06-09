@@ -477,11 +477,13 @@ async def protected_proxy(
             raise HTTPException(status_code=400, detail="Invalid path")
         if ".." in path.split("/"):
             raise HTTPException(status_code=400, detail="Invalid path")
-    base = service_info["url"]
-    url = f"{base}/{path}" if path else base
+    base = service_info["url"].rstrip("/")
+    url = f"{base}/{path.lstrip('/')}" if path else f"{base}/"
     headers = {k: v for k, v in request.headers.items() if k.lower() != "host"}
     body = await request.body()
     params = {k: v for k, v in request.query_params.items() if k != "pass"}
+    if "password" in service_info:
+        params["apikey"] = service_info["password"]
     response = await proxy_fetch(
         request.method, url, headers, params, body, f"/{service}"
     )

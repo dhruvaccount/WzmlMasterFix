@@ -110,9 +110,31 @@ def _sabnzbd_key():
     )
 
 
+def _update_sabnzbd_ini(api_key):
+    from re import compile as _re
+    pat_key = _re(r"^api_key\s*=.*$", _re.MULTILINE)
+    pat_pwd = _re(r'^password\s*=.*$', _re.MULTILINE)
+    try:
+        with open("sabnzbd/SABnzbd.ini", "r+") as f:
+            content = f.read()
+            new = content
+            new = pat_key.sub(f"api_key = {api_key}", new)
+            new = pat_pwd.sub(f'password = "{api_key}"', new)
+            if new == content:
+                return
+            f.seek(0)
+            f.truncate()
+            f.write(new)
+    except FileNotFoundError:
+        pass
+
+
+_sabnzbd_api_key = _sabnzbd_key()
+_update_sabnzbd_ini(_sabnzbd_api_key)
+
 sabnzbd_client = SabnzbdClient(
     host="http://localhost",
-    api_key=_sabnzbd_key(),
+    api_key=_sabnzbd_api_key,
     port="8070",
 )
 srun([BinConfig.QBIT_NAME, "-d", f"--profile={getcwd()}"], check=False)
