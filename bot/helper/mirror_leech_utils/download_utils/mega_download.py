@@ -139,6 +139,9 @@ async def add_mega_download(listener, path):
             if mega_listener.error:
                 await listener.on_download_error(_mega_error_format(mega_listener.error))
                 return
+            if not mega_listener.node:
+                await listener.on_download_error("Failed to get root node for MEGA folder")
+                return
             if subfolder_handle:
                 node = await sync_to_async(_find_child_by_handle, api, mega_listener.node, subfolder_handle)
                 if not node:
@@ -152,6 +155,7 @@ async def add_mega_download(listener, path):
                 mega_listener._size = api.getSize(node)
             except Exception:
                 pass
+            async_api._folder_only = True
         else:
             LOGGER.info("Mega: file link")
             if mega_email and mega_password:
@@ -269,7 +273,8 @@ async def add_mega_download(listener, path):
             if async_api.api is not None and async_api._mega_listener is not None:
                 with suppress(Exception):
                     async_api.api.removeListener(async_api._mega_listener)
-            with suppress(Exception):
-                await async_api.logout()
+            if not getattr(async_api, "_folder_only", False):
+                with suppress(Exception):
+                    await async_api.logout()
         await _release_link(listener.link)
         await _cleanup_dir(mega_base)
