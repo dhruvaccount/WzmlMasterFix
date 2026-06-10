@@ -126,8 +126,8 @@ async def add_mega_download(listener, path):
         is_folder = _is_folder_link(listener.link)
         subfolder_handle = _get_subfolder_handle(listener.link)
 
-        if is_folder and subfolder_handle:
-            LOGGER.info("Mega: subfolder link, using loginToFolder")
+        if is_folder:
+            LOGGER.info("Mega: folder link, using loginToFolder")
             await async_api.loginToFolder(listener.link)
             LOGGER.info("Mega: loginToFolder done")
             if mega_listener.error:
@@ -139,24 +139,19 @@ async def add_mega_download(listener, path):
             if mega_listener.error:
                 await listener.on_download_error(_mega_error_format(mega_listener.error))
                 return
-            node = await sync_to_async(_find_child_by_handle, api, mega_listener.node, subfolder_handle)
-            if not node:
-                await listener.on_download_error("Subfolder not found in the MEGA link")
-                return
+            if subfolder_handle:
+                node = await sync_to_async(_find_child_by_handle, api, mega_listener.node, subfolder_handle)
+                if not node:
+                    await listener.on_download_error("Subfolder not found in the MEGA link")
+                    return
+            else:
+                node = mega_listener.node
             mega_listener.public_node = node
             mega_listener._cache_node_data(node)
             try:
                 mega_listener._size = api.getSize(node)
             except Exception:
                 pass
-        elif is_folder:
-            LOGGER.info("Mega: top-level folder link, using getPublicNode")
-            await async_api.getPublicNode(listener.link)
-            LOGGER.info("Mega: getPublicNode done")
-            node = mega_listener.public_node
-            if not node:
-                await listener.on_download_error("Failed to resolve MEGA link")
-                return
         else:
             LOGGER.info("Mega: file link")
             if mega_email and mega_password:
