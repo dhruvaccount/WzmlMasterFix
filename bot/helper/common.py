@@ -279,14 +279,29 @@ class TaskConfig:
             if self.up_dest in Config.UPLOAD_PATHS:
                 self.up_dest = Config.UPLOAD_PATHS[self.up_dest]
 
-        if self.category and not self.is_leech and not self.up_dest:
+        if self.category and not self.is_leech:
             dcats = fetch_drive_cat(self.user_id)
-            if self.category in dcats:
-                self.up_dest = dcats[self.category]["drive_id"]
-                self.index_link = dcats[self.category].get("index_link", "")
-            elif self.category in categories_dict:
-                self.up_dest = categories_dict[self.category]["drive_id"]
-                self.index_link = categories_dict[self.category].get("index_link", "")
+            default_id = self.user_dict.get("GDRIVE_ID") or Config.GDRIVE_ID
+            default_index = self.user_dict.get("INDEX_URL") or Config.INDEX_URL
+            merged_cats = {
+                "Default": {"drive_id": default_id, "index_link": default_index},
+                **dcats,
+                **categories_dict,
+            }
+            if self.category == "gdl":
+                self.up_dest = "gdl"
+            elif self.category == "gd":
+                self.up_dest = default_id
+                self.index_link = default_index
+            elif "|" in self.category:
+                parts = self.category.split("|", 1)
+                self.up_dest = parts[0]
+                self.index_link = parts[1] if len(parts) > 1 else ""
+            elif is_gdrive_id(self.category):
+                self.up_dest = self.category
+            elif self.category in merged_cats:
+                self.up_dest = merged_cats[self.category]["drive_id"]
+                self.index_link = merged_cats[self.category].get("index_link", "")
             else:
                 drive_id, index_link, is_cancelled = await open_category_btns(self.message)
                 if is_cancelled:
@@ -295,6 +310,9 @@ class TaskConfig:
                 if drive_id:
                     self.up_dest = drive_id
                     self.index_link = index_link or ""
+            gc_used = True
+        else:
+            gc_used = False
 
         if self.ffmpeg_cmds and not isinstance(self.ffmpeg_cmds, list):
             if self.user_dict.get("FFMPEG_CMDS", None):
@@ -324,42 +342,43 @@ class TaskConfig:
                 or "STOP_DUPLICATE" not in self.user_dict
                 and Config.STOP_DUPLICATE
             )
-            default_upload = (
-                self.user_dict.get("DEFAULT_UPLOAD", "") or Config.DEFAULT_UPLOAD
-            )
-            if not self.is_uphoster and (
-                (not self.up_dest and default_upload == "rc") or self.up_dest == "rc"
-            ):
-                self.up_dest = self.user_dict.get("RCLONE_PATH") or Config.RCLONE_PATH
-            elif not self.is_uphoster and (
-                (not self.up_dest and default_upload == "gd") or self.up_dest == "gd"
-            ):
-                self.up_dest = self.user_dict.get("GDRIVE_ID") or Config.GDRIVE_ID
-            elif (not self.up_dest and default_upload == "mega") or self.up_dest == "mega":
-                self.up_dest = "mega:"
+            if not gc_used:
+                default_upload = (
+                    self.user_dict.get("DEFAULT_UPLOAD", "") or Config.DEFAULT_UPLOAD
+                )
+                if not self.is_uphoster and (
+                    (not self.up_dest and default_upload == "rc") or self.up_dest == "rc"
+                ):
+                    self.up_dest = self.user_dict.get("RCLONE_PATH") or Config.RCLONE_PATH
+                elif not self.is_uphoster and (
+                    (not self.up_dest and default_upload == "gd") or self.up_dest == "gd"
+                ):
+                    self.up_dest = self.user_dict.get("GDRIVE_ID") or Config.GDRIVE_ID
+                elif (not self.up_dest and default_upload == "mega") or self.up_dest == "mega":
+                    self.up_dest = "mega:"
 
-            if self.is_uphoster and not self.up_dest:
-                uphoster_service = self.user_dict.get("UPHOSTER_SERVICE", "gofile")
-                services = uphoster_service.split(",")
-                for service in services:
-                    if service == "gofile":
-                        if not (
-                            self.user_dict.get("GOFILE_TOKEN") or Config.GOFILE_API
-                        ):
-                            raise ValueError("No Gofile Token Found!")
-                    elif service == "buzzheavier":
-                        if not (
-                            self.user_dict.get("BUZZHEAVIER_TOKEN")
-                            or Config.BUZZHEAVIER_API
-                        ):
-                            raise ValueError("No BuzzHeavier Token Found!")
-                    elif service == "pixeldrain":
-                        if not (
-                            self.user_dict.get("PIXELDRAIN_KEY")
-                            or Config.PIXELDRAIN_KEY
-                        ):
-                            raise ValueError("No PixelDrain Key Found!")
-                self.up_dest = "Uphoster"
+                if self.is_uphoster and not self.up_dest:
+                    uphoster_service = self.user_dict.get("UPHOSTER_SERVICE", "gofile")
+                    services = uphoster_service.split(",")
+                    for service in services:
+                        if service == "gofile":
+                            if not (
+                                self.user_dict.get("GOFILE_TOKEN") or Config.GOFILE_API
+                            ):
+                                raise ValueError("No Gofile Token Found!")
+                        elif service == "buzzheavier":
+                            if not (
+                                self.user_dict.get("BUZZHEAVIER_TOKEN")
+                                or Config.BUZZHEAVIER_API
+                            ):
+                                raise ValueError("No BuzzHeavier Token Found!")
+                        elif service == "pixeldrain":
+                            if not (
+                                self.user_dict.get("PIXELDRAIN_KEY")
+                                or Config.PIXELDRAIN_KEY
+                            ):
+                                raise ValueError("No PixelDrain Key Found!")
+                    self.up_dest = "Uphoster"
 
             if not self.up_dest:
                 raise ValueError("No Upload Destination!")

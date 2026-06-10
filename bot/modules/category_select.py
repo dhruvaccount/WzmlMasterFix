@@ -1,6 +1,7 @@
 from time import time
 
-from .. import bot_cache, categories_dict, task_dict, task_dict_lock
+from .. import bot_cache, categories_dict, task_dict, task_dict_lock, user_data
+from ..core.config_manager import Config
 from ..helper.ext_utils.bot_utils import (
     arg_parser,
     fetch_drive_cat,
@@ -124,7 +125,13 @@ async def confirm_category(client, query):
         return
     await query.answer()
     dcats = fetch_drive_cat(user_id)
-    merged_dict = {**dcats, **categories_dict}
+    default_id = user_data.get(user_id, {}).get("GDRIVE_ID") or Config.GDRIVE_ID
+    default_index = user_data.get(user_id, {}).get("INDEX_URL") or Config.INDEX_URL
+    merged_dict = {
+        "Default": {"drive_id": default_id, "index_link": default_index},
+        **dcats,
+        **categories_dict,
+    }
     cat_name = data[3].replace("_", " ")
     bot_cache[msg_id][0] = merged_dict[cat_name].get("drive_id")
     bot_cache[msg_id][1] = merged_dict[cat_name].get("index_link")

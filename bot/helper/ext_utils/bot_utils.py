@@ -274,7 +274,7 @@ def arg_parser(items, arg_base):
                 sub_list = []
                 for j in range(i + 1, total):
                     if items[j] in arg_base:
-                        if part == "-c" and items[j] == "-c":
+                        if (part == "-c" and items[j] == "-c") or (part == "-gc" and items[j] == "-gc"):
                             sub_list.append(items[j])
                             continue
                         if part in bool_arg_set and not sub_list:

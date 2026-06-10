@@ -24,7 +24,7 @@ try:
 except ImportError:
     FloodPremiumWait = FloodWait
 
-from ... import LOGGER, bot_cache, categories_dict, intervals, status_dict, task_dict_lock
+from ... import LOGGER, bot_cache, categories_dict, intervals, status_dict, task_dict_lock, user_data
 from ...core.config_manager import Config
 from ...core.tg_client import TgClient
 from ..ext_utils.bot_utils import SetInterval, download_image_url, fetch_drive_cat
@@ -461,7 +461,13 @@ async def open_category_btns(message):
     buttons = ButtonMaker()
     cat_name = None
     dcats = fetch_drive_cat(user_id)
-    merged = {**dcats, **categories_dict}
+    default_id = user_data.get(user_id, {}).get("GDRIVE_ID") or Config.GDRIVE_ID
+    default_index = user_data.get(user_id, {}).get("INDEX_URL") or Config.INDEX_URL
+    merged = {
+        "Default": {"drive_id": default_id, "index_link": default_index},
+        **dcats,
+        **categories_dict,
+    }
     for i, name in enumerate(merged):
         if i == 0:
             cat_name = name

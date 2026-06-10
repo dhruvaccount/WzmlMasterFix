@@ -82,6 +82,7 @@ class Clone(TaskListener):
             "-b": False,
             "-n": "",
             "-up": "",
+            "-gc": "",
             "-rcf": "",
             "-sync": False,
         }
@@ -94,6 +95,7 @@ class Clone(TaskListener):
             self.multi = 0
 
         self.up_dest = args["-up"]
+        self.category = args["-gc"]
         self.rc_flags = args["-rcf"]
         self.link = args["link"]
         self.name = args["-n"]

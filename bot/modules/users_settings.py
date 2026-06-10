@@ -804,16 +804,16 @@ async def get_user_settings(from_user, stype="main"):
             gdrive_id = "None"
         index = user_dict["INDEX_URL"] if user_dict.get("INDEX_URL", False) else "None"
         drive_cat_val = user_dict.get("DRIVE_CAT")
+        lines = []
+        default_ilink_part = f" | <code>{escape(index)}</code>" if index != "None" else ""
+        lines.append(f"  <b>Default</b>: <code>{escape(gdrive_id)}</code>{default_ilink_part}")
         if drive_cat_val:
-            lines = []
             for k, v in drive_cat_val.items():
                 did = v.get("drive_id", "")
                 ilink = v.get("index_link", "")
                 ilink_part = f" | <code>{escape(ilink)}</code>" if ilink else ""
                 lines.append(f"  <b>{escape(k)}</b>: <code>{escape(did)}</code>{ilink_part}")
-            drive_cat_display = "<br>".join(lines)
-        else:
-            drive_cat_display = "<b>Not Set</b>"
+        drive_cat_display = "<br>".join(lines)
         btns = buttons.build_menu(2)
 
         text = f"""⌬ <b>GDrive Tools Settings :</b>
@@ -1166,6 +1166,8 @@ async def add_one(_, message, option, rfunc):
             if option == "DRIVE_CAT":
                 parsed = {}
                 for k, v in value.items():
+                    if k.strip().casefold() == "default":
+                        raise ValueError('"Default" is reserved and cannot be used as a category name')
                     parts = str(v).split("|", 1)
                     did = parts[0].strip()
                     ilink = parts[1].strip() if len(parts) > 1 else ""
@@ -1288,6 +1290,8 @@ async def set_option(_, message, option, rfunc):
                 if option == "DRIVE_CAT":
                     parsed = {}
                     for k, v in value.items():
+                        if k.strip().casefold() == "default":
+                            raise ValueError('"Default" is reserved and cannot be used as a category name')
                         parts = str(v).split("|", 1)
                         did = parts[0].strip()
                         ilink = parts[1].strip() if len(parts) > 1 else ""
@@ -1382,6 +1386,22 @@ async def get_menu(option, message, user_id):
             val = "<b>Not Set</b>"
 
         if val is None:
+            val = "<b>Not Exists</b>"
+
+    elif option == "DRIVE_CAT":
+        default_id = user_dict.get("GDRIVE_ID") or Config.GDRIVE_ID
+        default_index = user_dict.get("INDEX_URL") or Config.INDEX_URL
+        lines = [f"  <b>Default</b>: <code>{escape(str(default_id))}</code>"]
+        if default_index:
+            lines[0] += f" | <code>{escape(default_index)}</code>"
+        if isinstance(val, dict):
+            for k, v in val.items():
+                did = v.get("drive_id", "")
+                ilink = v.get("index_link", "")
+                ilink_part = f" | <code>{escape(ilink)}</code>" if ilink else ""
+                lines.append(f"  <b>{escape(k)}</b>: <code>{escape(did)}</code>{ilink_part}")
+            val = "<br>".join(lines)
+        elif not val:
             val = "<b>Not Exists</b>"
 
     if option == "METADATA":
