@@ -244,7 +244,7 @@ class AsyncMega:
         LOGGER.info("Mega: startDownload creating transfer future")
         self._transfer_future = Future()
 
-        ml = getattr(self, "_mega_listener", None) or getattr(self, "_folder_listener", None)
+        ml = getattr(self, "_folder_listener", None) or getattr(self, "_mega_listener", None)
         if ml:
             self._download_is_folder = ml._is_folder
             if not ml._name:
@@ -258,35 +258,6 @@ class AsyncMega:
         await sync_to_async(
             self._download_api().startDownload,
             node,
-            localPath,
-            name,
-            listener,
-            startFirst,
-            cancelToken,
-            collisionCheck,
-            collisionResolution,
-            undelete,
-        )
-
-    async def startDownloadLink(self, megaLink, localPath, name, listener, startFirst, cancelToken, collisionCheck, collisionResolution, undelete):
-        LOGGER.info("Mega: startDownloadLink creating transfer future")
-        self._transfer_future = Future()
-
-        ml = getattr(self, "_mega_listener", None) or getattr(self, "_folder_listener", None)
-        if ml:
-            self._download_is_folder = True
-            if not ml._name:
-                ml._name = name
-            ml._target_handle = None
-            ml._bytes_transferred = 0
-            ml._total_downloaded_bytes = 0
-            ml._speed = 0
-            ml._smoothed_speed = 0
-
-        await sync_to_async(
-            self._download_api().startDownload,
-            megaLink,
-            None,
             localPath,
             name,
             listener,
