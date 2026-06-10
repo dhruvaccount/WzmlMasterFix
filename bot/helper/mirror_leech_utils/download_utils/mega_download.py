@@ -134,7 +134,7 @@ async def add_mega_download(listener, path):
                 await listener.on_download_error(_mega_error_format(mega_listener.error))
                 return
             LOGGER.info("Mega: fetchNodes for folder tree")
-            await async_api.fetchNodes(source="folder")
+            await async_api.fetchNodes()
             LOGGER.info("Mega: fetchNodes done")
             if mega_listener.error:
                 await listener.on_download_error(_mega_error_format(mega_listener.error))

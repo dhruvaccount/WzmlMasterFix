@@ -247,7 +247,6 @@ class AsyncMega:
             self.api.loginToFolder,
             link,
             expected_type=self._request_type_for_name("loginToFolder"),
-            expected_source="folder",
         )
 
     async def startDownload(self, node, localPath, name, listener, startFirst, cancelToken, collisionCheck, collisionResolution, undelete):
@@ -487,13 +486,7 @@ class MegaAppListener(MegaListener):
                     except Exception:
                         pass
             elif request_type == MegaRequest.TYPE_LOGIN:
-                root = api.getRootNode()
-                if source == "folder":
-                    self.node = root
-                else:
-                    self.public_node = root
-                if root:
-                    self._cache_node_data(root)
+                pass
             elif request_type == MegaRequest.TYPE_FETCH_NODES:
                 root_node = api.getRootNode()
                 self.node = root_node
