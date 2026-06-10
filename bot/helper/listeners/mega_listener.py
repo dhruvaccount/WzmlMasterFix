@@ -19,13 +19,20 @@ from ..ext_utils.bot_utils import async_to_sync, sync_to_async
 async def mega_cleanup():
     from ... import task_dict, task_dict_lock
 
+    tasks = []
     async with task_dict_lock:
         for tk in list(task_dict.values()):
             if hasattr(tk, "_obj") and hasattr(tk._obj, "cancel_task"):
-                await tk._obj.cancel_task()
+                tasks.append(tk._obj)
+    for obj in tasks:
+        try:
+            await obj.cancel_task()
+        except Exception:
+            pass
 
 
 _REQUEST_TIMEOUT_SECONDS = 300
+_LOGOUT_TIMEOUT_SECONDS = 30
 
 MEGA_ERRORS = {
     -30: "Sub-user encryption key missing",
@@ -75,8 +82,6 @@ def _mega_error_format(raw_error):
 class AsyncMega:
     def __init__(self):
         self.api = None
-        self.folder_api = None
-        self._folder_listener = None
         self.continue_event = Event()
         self._transfer_future = None
         self._export_future = None
@@ -86,7 +91,7 @@ class AsyncMega:
         self._request_future = None
 
     def _download_api(self):
-        return self.folder_api if self.folder_api else self.api
+        return self.api
 
     def _request_type_for_name(self, name):
         request_types = {
@@ -104,8 +109,9 @@ class AsyncMega:
     def _request_type_for(self, function):
         return self._request_type_for_name(getattr(function, "__name__", ""))
 
-    async def run(self, function, *args, expected_type=None, expected_source="main", **kwargs):
+    async def run(self, function, *args, expected_type=None, expected_source="main", timeout=None, **kwargs):
         fn_name = getattr(function, '__name__', 'unknown')
+        timeout = _REQUEST_TIMEOUT_SECONDS if timeout is None else timeout
         LOGGER.info("Mega: run(%s, source=%s) preparing future", fn_name, expected_source)
         future = Future()
         self._request_future = future
@@ -119,11 +125,11 @@ class AsyncMega:
             await sync_to_async(function, *args, **kwargs)
             LOGGER.info("Mega: run(%s, source=%s) sync_to_async returned, waiting on future", fn_name, expected_source)
             try:
-                await wait_for(wrap_future(future), timeout=_REQUEST_TIMEOUT_SECONDS)
+                await wait_for(wrap_future(future), timeout=timeout)
                 LOGGER.info("Mega: run(%s, source=%s) future resolved", fn_name, expected_source)
             except AsyncTimeoutError:
                 msg = (
-                    f"Mega SDK timed out after {_REQUEST_TIMEOUT_SECONDS}s waiting for "
+                    f"Mega SDK timed out after {timeout}s waiting for "
                     f"{fn_name} ({expected_source})"
                 )
                 LOGGER.error(msg)
@@ -149,29 +155,30 @@ class AsyncMega:
                 self._transfer_future.set_result(True)
 
     async def export_node(self, node, expireTime=0, writable=False, megaHosted=False):
-        self.continue_event.clear()
+        future = Future()
+        self._request_future = future
         self._expected_request_type = MegaRequest.TYPE_EXPORT
         self._expected_request_source = "main"
         try:
             await sync_to_async(
                 self.api.exportNode, node, expireTime, writable, megaHosted,
             )
-            await wait_for(self.continue_event.wait(), timeout=_REQUEST_TIMEOUT_SECONDS)
+            await wait_for(wrap_future(future), timeout=_REQUEST_TIMEOUT_SECONDS)
             ml = getattr(self, "_mega_listener", None)
             return getattr(ml, "_export_link", None) if ml else None
         except AsyncTimeoutError:
             LOGGER.error("export_node timed out waiting for TYPE_EXPORT callback")
             return None
         finally:
+            self._request_future = None
             self._expected_request_type = None
             self._expected_request_source = None
 
-    async def create_folder(self, name, parent, source="main"):
-        mega_api = self.folder_api if source == "folder" else self.api
+    async def create_folder(self, name, parent):
         ml = getattr(self, "_mega_listener", None)
 
         try:
-            existing = await sync_to_async(mega_api.getNodeByPath, name, parent)
+            existing = await sync_to_async(self.api.getNodeByPath, name, parent)
             if existing:
                 return existing
         except Exception:
@@ -180,11 +187,11 @@ class AsyncMega:
         future = Future()
         self._request_future = future
         self._expected_request_type = MegaRequest.TYPE_CREATE_FOLDER
-        self._expected_request_source = source
+        self._expected_request_source = "main"
         if ml:
             ml._created_folder_node = None
         try:
-            await sync_to_async(mega_api.createFolder, name, parent)
+            await sync_to_async(self.api.createFolder, name, parent)
             await wait_for(wrap_future(future), timeout=_REQUEST_TIMEOUT_SECONDS)
             node = getattr(ml, "_created_folder_node", None) if ml else None
             if not node:
@@ -202,17 +209,12 @@ class AsyncMega:
             self._expected_request_source = None
 
     async def logout(self):
-        if self.folder_api:
-            await self.run(
-                self.folder_api.logout, False, None,
-                expected_type=self._request_type_for_name("logout"),
-                expected_source="folder",
-            )
         if self.api:
             await self.run(
                 self.api.logout, False, None,
                 expected_type=self._request_type_for_name("logout"),
                 expected_source="main",
+                timeout=_LOGOUT_TIMEOUT_SECONDS,
             )
 
     async def fetchNodes(self, api=None, source="main"):
@@ -242,7 +244,7 @@ class AsyncMega:
 
     async def loginToFolder(self, link):
         return await self.run(
-            self.folder_api.loginToFolder,
+            self.api.loginToFolder,
             link,
             expected_type=self._request_type_for_name("loginToFolder"),
             expected_source="folder",
@@ -292,6 +294,7 @@ class AsyncMega:
             ml._speed = 0
             ml._smoothed_speed = 0
             ml._target_handle = parentNode.getHandle() if parentNode else None
+            ml._target_name = customName
             ml._uploaded_node_handle = None
             ml._export_link = None
 
@@ -337,7 +340,6 @@ class MegaAppListener(MegaListener):
         self._last_speed_time = 0
         self._caller_manages_completion = False
         self._cancel_token = None
-        self._subfolder_target = None
         self._upload_mode = False
         self.node = None
         self.public_node = None
@@ -419,7 +421,11 @@ class MegaAppListener(MegaListener):
 
     def _is_target_transfer(self, transfer):
         if self._upload_mode:
-            return True
+            try:
+                expected = getattr(self, "_target_name", None)
+                return expected is not None and transfer.getFileName() == expected
+            except Exception:
+                return False
         if self._async_api._download_is_folder:
             try:
                 return transfer.isFolderTransfer()
@@ -493,24 +499,6 @@ class MegaAppListener(MegaListener):
                 self.node = root_node
                 if self.node:
                     self._cache_node_data(self.node)
-                if self._subfolder_target is not None and self.node:
-                    try:
-                        children = api.getChildren(self.node)
-                        if children:
-                            for i in range(children.size()):
-                                child = children.get(i)
-                                if child.getHandle() == self._subfolder_target:
-                                    self.node = child
-                                    self._cache_node_data(self.node)
-                                    self._size = 0
-                                    try:
-                                        self._size = api.getSize(self.node)
-                                    except Exception:
-                                        pass
-                                    break
-                    except Exception as e:
-                        LOGGER.error(f"TYPE_FETCH_NODES: subfolder lookup error: {e}")
-
             elif request_type == MegaRequest.TYPE_EXPORT:
                 try:
                     self._export_link = request.getLink()
@@ -612,6 +600,7 @@ class MegaAppListener(MegaListener):
                     async_to_sync(self.listener.on_download_error, _mega_error_format(self.error))
                 self._set_transfer_event()
                 return
+            self.retryable_error = None
             if not self._caller_manages_completion:
                 async_to_sync(self.listener.on_download_complete)
             else:
@@ -660,6 +649,8 @@ class MegaAppListener(MegaListener):
         try:
             if self.is_cancelled:
                 return
+            if not self._is_target_transfer(transfer):
+                return
             err_code = error.getErrorCode() if error else 0
             err_str = error.toString() if error else "unknown"
             LOGGER.warning("Mega: onTransferTemporaryError err=%s", err_code)
@@ -671,7 +662,7 @@ class MegaAppListener(MegaListener):
                     async_to_sync(self.listener.on_download_error, _mega_error_format(msg))
                 self._set_transfer_event()
                 return
-            if err_code == MegaError.API_EINCOMPLETE and self._is_target_transfer(transfer):
+            if err_code == MegaError.API_EINCOMPLETE:
                 self.retryable_error = f"{err_code} {err_str}"
         except Exception as e:
             LOGGER.error(
@@ -772,112 +763,4 @@ class MegaAppListener(MegaListener):
         pass
 
 
-class MegaFolderListener(MegaListener):
-    def __init__(self, main_listener: MegaAppListener):
-        self._main = main_listener
-        super().__init__()
 
-    def onRequestStart(self, api, request):
-        pass
-
-    def onRequestFinish(self, api, request, error):
-        self._main.onRequestFinish(api, request, error, source="folder")
-
-    def onRequestUpdate(self, api, request):
-        pass
-
-    def onRequestTemporaryError(self, api, request, error):
-        self._main.onRequestTemporaryError(api, request, error, source="folder")
-
-    def onTransferStart(self, api, transfer):
-        self._main.onTransferStart(api, transfer)
-
-    def onTransferUpdate(self, api, transfer):
-        self._main.onTransferUpdate(api, transfer)
-
-    def onTransferFinish(self, api, transfer, error):
-        self._main.onTransferFinish(api, transfer, error)
-
-    def onTransferTemporaryError(self, api, transfer, error):
-        self._main.onTransferTemporaryError(api, transfer, error)
-
-    def onUsersUpdate(self, api, users):
-        pass
-
-    def onUserAlertsUpdate(self, api, alerts):
-        pass
-
-    def onNodesUpdate(self, api, nodes):
-        pass
-
-    def onAccountUpdate(self, api):
-        pass
-
-    def onSetsUpdate(self, api, sets):
-        pass
-
-    def onSetElementsUpdate(self, api, elements):
-        pass
-
-    def onContactRequestsUpdate(self, api, requests):
-        pass
-
-    def onReloadNeeded(self, api):
-        pass
-
-    def onSyncFileStateChanged(self, *args):
-        pass
-
-    def onSyncAdded(self, *args):
-        pass
-
-    def onSyncDeleted(self, *args):
-        pass
-
-    def onSyncStateChanged(self, *args):
-        pass
-
-    def onSyncStatsUpdated(self, *args):
-        pass
-
-    def onGlobalSyncStateChanged(self, api):
-        pass
-
-    def onSyncRemoteRootChanged(self, *args):
-        pass
-
-    def onBackupStateChanged(self, *args):
-        pass
-
-    def onBackupStart(self, *args):
-        pass
-
-    def onBackupFinish(self, *args):
-        pass
-
-    def onBackupUpdate(self, *args):
-        pass
-
-    def onBackupTemporaryError(self, *args):
-        pass
-
-    def onChatsUpdate(self, api, chats):
-        pass
-
-    def onEvent(self, api, event):
-        pass
-
-    def onMountAdded(self, *args):
-        pass
-
-    def onMountChanged(self, *args):
-        pass
-
-    def onMountDisabled(self, *args):
-        pass
-
-    def onMountEnabled(self, *args):
-        pass
-
-    def onMountRemoved(self, *args):
-        pass

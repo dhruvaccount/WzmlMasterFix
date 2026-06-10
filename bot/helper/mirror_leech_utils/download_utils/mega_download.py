@@ -16,7 +16,7 @@ from ...ext_utils.task_manager import (
     stop_duplicate_check,
 )
 from ...ext_utils.bot_utils import sync_to_async
-from ...listeners.mega_listener import AsyncMega, MegaAppListener, MegaFolderListener, _mega_error_format
+from ...listeners.mega_listener import AsyncMega, MegaAppListener, _mega_error_format
 from ...mirror_leech_utils.status_utils.mega_status import MegaDownloadStatus
 from ...mirror_leech_utils.status_utils.queue_status import QueueStatus
 
@@ -34,18 +34,31 @@ def _is_folder_link(link: str) -> bool:
 def _get_subfolder_handle(link: str) -> str | None:
     if not link:
         return None
-    # /folder/X/folder/Y format
     parts = link.split("/folder/")
     if len(parts) >= 3:
-        handle = parts[-1].split("#")[0].split("/")[0].split("?")[0]
-        if handle:
-            return handle
-    # #F!X#F!Y format
+        return parts[-1].split("#")[0].split("/")[0].split("?")[0]
     parts = link.split("#F!")
     if len(parts) >= 3:
-        handle = parts[-1].split("!")[0].split("/")[0].split("?")[0]
-        if handle:
-            return handle
+        return parts[-1].split("!")[0].split("/")[0].split("?")[0]
+    return None
+
+
+def _find_child_by_handle(api, parent_node, target_handle):
+    if not parent_node or not target_handle:
+        return None
+    try:
+        children = api.getChildren(parent_node)
+        if not children:
+            return None
+        for i in range(children.size()):
+            child = children.get(i)
+            try:
+                if child.getHandle() == target_handle:
+                    return child
+            except Exception:
+                pass
+    except Exception as e:
+        LOGGER.warning(f"_find_child_by_handle error: {e}")
     return None
 
 
@@ -107,70 +120,71 @@ async def add_mega_download(listener, path):
         async_api._mega_listener = mega_listener
         LOGGER.info("Mega: addListener main")
         api.addListener(mega_listener)
+        api._listener_ref = mega_listener
         LOGGER.info("Mega: addListener main done")
 
-        if _is_folder_link(listener.link):
-            mega_folder_dir = os.path.join(mega_base, "folder")
-            await makedirs(mega_folder_dir, exist_ok=True)
-            LOGGER.info("Mega: creating folder MegaApi")
-            async_api.folder_api = MegaApi("", mega_folder_dir, "WZML-X", 4)
-            LOGGER.info("Mega: creating folder listener")
-            folder_listener = MegaFolderListener(mega_listener)
-            async_api._folder_listener = folder_listener
-            LOGGER.info("Mega: addListener folder")
-            async_api.folder_api.addListener(folder_listener)
-            LOGGER.info("Mega: folder api done")
+        is_folder = _is_folder_link(listener.link)
+        subfolder_handle = _get_subfolder_handle(listener.link)
 
-        if mega_email and mega_password:
-            LOGGER.info("Mega: login starting")
-            await async_api.login(mega_email, mega_password)
-            LOGGER.info("Mega: login done, error=%s", getattr(mega_listener, "error", None))
-            if mega_listener.error:
-                await listener.on_download_error(_mega_error_format(mega_listener.error))
-                return
-            LOGGER.info("Mega: fetchNodes starting")
-            await async_api.fetchNodes()
-            LOGGER.info("Mega: fetchNodes done, error=%s", getattr(mega_listener, "error", None))
-            if mega_listener.error:
-                await listener.on_download_error(_mega_error_format(mega_listener.error))
-                return
-
-        if _is_folder_link(listener.link):
-            LOGGER.info("Mega: loginToFolder starting")
+        if is_folder and subfolder_handle:
+            LOGGER.info("Mega: subfolder link, using loginToFolder")
             await async_api.loginToFolder(listener.link)
-            LOGGER.info("Mega: loginToFolder done, error=%s", getattr(mega_listener, "error", None))
+            LOGGER.info("Mega: loginToFolder done")
             if mega_listener.error:
                 await listener.on_download_error(_mega_error_format(mega_listener.error))
                 return
-            subfolder_handle = _get_subfolder_handle(listener.link)
-            if subfolder_handle:
-                try:
-                    mega_listener._subfolder_target = async_api.folder_api.base64ToHandle(subfolder_handle)
-                except Exception as e:
-                    LOGGER.warning(f"Mega subfolder handle conversion failed: {e}")
-            LOGGER.info("Mega: fetchNodes folder starting")
-            await async_api.fetchNodes(async_api.folder_api, source="folder")
-            LOGGER.info("Mega: fetchNodes folder done")
-            node = mega_listener.node
-            LOGGER.info("Mega: folder node=%s", node)
+            LOGGER.info("Mega: fetchNodes for folder tree")
+            await async_api.fetchNodes(source="folder")
+            LOGGER.info("Mega: fetchNodes done")
+            if mega_listener.error:
+                await listener.on_download_error(_mega_error_format(mega_listener.error))
+                return
+            node = await sync_to_async(_find_child_by_handle, api, mega_listener.node, subfolder_handle)
             if not node:
-                await listener.on_download_error("Failed to get folder root node", is_limit=False)
+                await listener.on_download_error("Subfolder not found in the MEGA link")
+                return
+            mega_listener.public_node = node
+            mega_listener._cache_node_data(node)
+            try:
+                mega_listener._size = api.getSize(node)
+            except Exception:
+                pass
+        elif is_folder:
+            LOGGER.info("Mega: top-level folder link, using getPublicNode")
+            await async_api.getPublicNode(listener.link)
+            LOGGER.info("Mega: getPublicNode done")
+            node = mega_listener.public_node
+            if not node:
+                await listener.on_download_error("Failed to resolve MEGA link")
                 return
         else:
+            LOGGER.info("Mega: file link")
+            if mega_email and mega_password:
+                LOGGER.info("Mega: login starting")
+                await async_api.login(mega_email, mega_password)
+                LOGGER.info("Mega: login done, error=%s", getattr(mega_listener, "error", None))
+                if mega_listener.error:
+                    await listener.on_download_error(_mega_error_format(mega_listener.error))
+                    return
+                LOGGER.info("Mega: fetchNodes starting")
+                await async_api.fetchNodes()
+                LOGGER.info("Mega: fetchNodes done, error=%s", getattr(mega_listener, "error", None))
+                if mega_listener.error:
+                    await listener.on_download_error(_mega_error_format(mega_listener.error))
+                    return
             LOGGER.info("Mega: getPublicNode starting")
             await async_api.getPublicNode(listener.link)
             LOGGER.info("Mega: getPublicNode done")
             node = mega_listener.public_node
-        if not node:
-            await listener.on_download_error("Failed to resolve MEGA link")
-            return
+            if not node:
+                await listener.on_download_error("Failed to resolve MEGA link")
+                return
 
         listener.name = listener.name or mega_listener._name or f"MEGA_Download_{token_hex(5)}"
         listener.size = mega_listener._size
         if not listener.size and node:
             try:
-                the_api = async_api.folder_api if _is_folder_link(listener.link) else api
-                listener.size = await sync_to_async(the_api.getSize, node)
+                listener.size = await sync_to_async(api.getSize, node)
             except Exception:
                 pass
         gid = token_hex(5)
@@ -256,8 +270,11 @@ async def add_mega_download(listener, path):
         if not listener.is_cancelled:
             await listener.on_download_error(f"Internal error: {e}")
     finally:
-        await _release_link(listener.link)
         if async_api is not None:
+            if async_api.api is not None and async_api._mega_listener is not None:
+                with suppress(Exception):
+                    async_api.api.removeListener(async_api._mega_listener)
             with suppress(Exception):
                 await async_api.logout()
+        await _release_link(listener.link)
         await _cleanup_dir(mega_base)
