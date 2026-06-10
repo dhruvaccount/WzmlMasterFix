@@ -417,14 +417,14 @@ async def get_user_settings(from_user, stype="main"):
             f"Swap to {'OWNER' if not def_cookies else 'USER'}'s Cookie File",
             f"userset {user_id} tog USE_DEFAULT_COOKIE {'f' if def_cookies else 't'}",
         )
-        btns = buttons.build_menu(1)
+        btns = buttons.build_menu(2)
 
         text = f"""⌬ <b>General Settings :</b>
 ┟ <b>Name</b> → {user_name}
 ┃
 ┠ <b>Default Upload Package</b> → <b>{du}</b>
 ┠ <b>Default Usage Mode</b> → <b>{tr}'s</b> token/config
-┖ <b>yt Cookies Mode</b> → <b>{cookie_mode}</b>
+┖ <b>YT Cookies Mode</b> → <b>{cookie_mode}</b>
 """
 
     elif stype == "leech":
@@ -594,7 +594,7 @@ async def get_user_settings(from_user, stype="main"):
         buttons.data_button(
             "Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
         )
-        btns = buttons.build_menu(1)
+        btns = buttons.build_menu(2)
 
         destinations = [s.capitalize() for s in uphoster_service.split(",")]
         text = f"""⌬ <b>Uphoster Settings :</b>
@@ -753,7 +753,7 @@ async def get_user_settings(from_user, stype="main"):
             rccpath = Config.RCLONE_PATH
         else:
             rccpath = "None"
-        btns = buttons.build_menu(1)
+        btns = buttons.build_menu(2)
 
         if user_dict.get("RCLONE_FLAGS", False):
             rcflags = user_dict["RCLONE_FLAGS"]
@@ -770,9 +770,9 @@ async def get_user_settings(from_user, stype="main"):
 ┖ <b>Rclone Path</b> → <code>{rccpath}</code>"""
 
     elif stype == "gdrive":
-        buttons.data_button("token.pickle", f"userset {user_id} menu TOKEN_PICKLE")
         buttons.data_button("Default Gdrive ID", f"userset {user_id} menu GDRIVE_ID")
-        buttons.data_button("Index URL", f"userset {user_id} menu INDEX_URL")
+        buttons.data_button("Default Index URL", f"userset {user_id} menu INDEX_URL")
+        buttons.data_button("Token.pickle", f"userset {user_id} menu TOKEN_PICKLE")
         if (
             user_dict.get("STOP_DUPLICATE", False)
             or "STOP_DUPLICATE" not in user_dict
@@ -789,7 +789,7 @@ async def get_user_settings(from_user, stype="main"):
                 "l_body",
             )
             sd_msg = "Disabled"
-        buttons.data_button("User Drive Categories", f"userset {user_id} menu DRIVE_CAT")
+        buttons.data_button("User Drive Categories", f"userset {user_id} menu DRIVE_CAT", "header")
         buttons.data_button("Back", f"userset {user_id} back mirror", "footer")
         buttons.data_button(
             "Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
@@ -803,6 +803,11 @@ async def get_user_settings(from_user, stype="main"):
         else:
             gdrive_id = "None"
         index = user_dict["INDEX_URL"] if user_dict.get("INDEX_URL", False) else "None"
+        upload_sa = user_dict.get("DRIVE_CATEGORY_SA") or Config.DRIVE_CATEGORY_SA
+        sa_display = escape(upload_sa) if upload_sa else "Not Set"
+        dc_status = "Enabled" if user_dict.get("drive_cat_mode", False) else "Disabled"
+        if not Config.DRIVE_CATEGORY_MODE:
+            dc_status = "Force Disabled (Global)"
         drive_cat_val = user_dict.get("DRIVE_CAT")
         lines = []
         default_ilink_part = f" | <code>{escape(index)}</code>" if index != "None" else ""
@@ -813,17 +818,19 @@ async def get_user_settings(from_user, stype="main"):
                 ilink = v.get("index_link", "")
                 ilink_part = f" | <code>{escape(ilink)}</code>" if ilink else ""
                 lines.append(f"  <b>{escape(k)}</b>: <code>{escape(did)}</code>{ilink_part}")
-        drive_cat_display = "<br>".join(lines)
+        drive_cat_display = "\n   ".join(lines)
         btns = buttons.build_menu(2)
 
         text = f"""⌬ <b>GDrive Tools Settings :</b>
 ┟ <b>Name</b> → {user_name}
 ┃
-┠ <b>Gdrive Token</b> → <b>{tokenmsg}</b>
-┠ <b>Gdrive ID</b> → <code>{gdrive_id}</code>
-┠ <b>Index URL</b> → <code>{index}</code>
+┠ <b>Gdrive ID</b> → <code>{gdrive_id}</code> <i>(Default)</i>
+┠ <b>Index URL</b> → <code>{index}</code> <i>(Default)</i>
 ┠ <b>Stop Duplicate</b> → <b>{sd_msg}</b>
-┖ <b>Drive Categories:</b>
+┠ <b>GDrive token.pickle</b> → <b>{tokenmsg}</b>
+┠ <b>Drive Upload SA</b> → <code>{sa_display}</code>
+┠ <b>Drive Category</b> → <b>{dc_status}</b>
+┖ <b>Drive Categories:</b> 
    {drive_cat_display}"""
     elif stype == "mirror":
         buttons.data_button("RClone Tools", f"userset {user_id} rclone")
@@ -866,21 +873,12 @@ async def get_user_settings(from_user, stype="main"):
         buttons.data_button(
             "Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
         )
-        btns = buttons.build_menu(1)
+        btns = buttons.build_menu(2)
 
-        dc_status = "Enabled" if user_dict.get("drive_cat_mode", False) else "Disabled"
-        if not Config.DRIVE_CATEGORY_MODE:
-            dc_status = "Force Disabled (Global)"
         text = f"""⌬ <b>Mirror Settings :</b>
 ┟ <b>Name</b> → {user_name}
 ┃
-┠ <b>Rclone Config</b> → <b>{rccmsg}</b>
-┠ <b>Rclone Path</b> → <code>{rccpath}</code>
-┠ <b>Gdrive Token</b> → <b>{tokenmsg}</b>
-┠ <b>Gdrive ID</b> → <code>{gdrive_id}</code>
-┠ <b>Index Link</b> → <code>{index}</code>
-┠ <b>Stop Duplicate</b> → <b>{sd_msg}</b>
-┖ <b>Drive Category</b> → <b>{dc_status}</b>
+┖ <b>Bot Stop Duplicate</b> → <b>{sd_msg}</b>
 """
 
     elif stype == "mega":
@@ -1047,12 +1045,12 @@ async def get_user_settings(from_user, stype="main"):
         buttons.data_button(
             "Close", f"userset {user_id} close", "footer", style=ButtonStyle.DANGER
         )
-        btns = buttons.build_menu(1)
+        btns = buttons.build_menu(2)
 
         text = f"""⌬ <b>Advanced Settings :</b>
 ┟ <b>Name</b> → {user_name}
 ┃
-┠ <b>Name Swaps</b> → {ns_msg}
+┠ <b>Auto Name Swaps</b> → {ns_msg}
 ┠ <b>Excluded Extensions</b> → <code>{ex_ex}</code>
 ┠ <b>Upload Paths</b> → <b>{upload_paths}</b>
 ┠ <b>YT-DLP Options</b> → <code>{ytopt}</code>
@@ -1567,7 +1565,7 @@ async def edit_user_settings(client, query):
         )
 
         text = """⌬ <b>Select Uphoster Destinations :</b>"""
-        await edit_message(message, text, buttons.build_menu(1))
+        await edit_message(message, text, buttons.build_menu(2))
     elif data[2] == "menu":
         await query.answer()
         await get_menu(data[3], message, user_id)

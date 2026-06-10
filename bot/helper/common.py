@@ -396,6 +396,8 @@ class TaskConfig:
                 ):
                     self.up_dest = f"mrcc:{self.up_dest}"
                 self.up_dest = self.up_dest.strip("/")
+            elif self.up_dest in ("gdl", "rcl"):
+                pass
             elif self.is_uphoster:
                 pass
             else:
