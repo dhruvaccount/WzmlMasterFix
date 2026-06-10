@@ -88,10 +88,12 @@ class AsyncMega:
         self._expected_request_type = None
         self._expected_request_source = None
         self._download_is_folder = False
+        self.folder_api = None
+        self._folder_listener = None
         self._request_future = None
 
     def _download_api(self):
-        return self.api
+        return self.folder_api or self.api
 
     def _request_type_for_name(self, name):
         request_types = {
@@ -133,9 +135,10 @@ class AsyncMega:
                     f"{fn_name} ({expected_source})"
                 )
                 LOGGER.error(msg)
-                listener = getattr(self, "_mega_listener", None)
-                if listener is not None and not listener.error:
-                    listener.error = msg
+                for attr in ("_mega_listener", "_folder_listener"):
+                    lst = getattr(self, attr, None)
+                    if lst is not None and not lst.error:
+                        lst.error = msg
                 if self._transfer_future is not None and not self._transfer_future.done():
                     self._transfer_future.set_result(True)
         finally:
@@ -209,42 +212,30 @@ class AsyncMega:
             self._expected_request_source = None
 
     async def logout(self):
+        if self.folder_api:
+            await self.run(
+                self.folder_api.logout, False, None,
+                expected_type=self._request_type_for_name("logout"),
+                timeout=_LOGOUT_TIMEOUT_SECONDS,
+            )
         if self.api:
             await self.run(
                 self.api.logout, False, None,
                 expected_type=self._request_type_for_name("logout"),
-                expected_source="main",
                 timeout=_LOGOUT_TIMEOUT_SECONDS,
             )
 
-    async def fetchNodes(self, api=None, source="main"):
+    async def fetchNodes(self, api=None):
         api = api or self.api
         return await self.run(
             api.fetchNodes,
             expected_type=self._request_type_for_name("fetchNodes"),
-            expected_source=source,
-        )
-
-    async def login(self, email, password):
-        return await self.run(
-            self.api.login,
-            email,
-            password,
-            expected_type=self._request_type_for_name("login"),
-            expected_source="main",
-        )
-
-    async def getPublicNode(self, link):
-        return await self.run(
-            self.api.getPublicNode,
-            link,
-            expected_type=self._request_type_for_name("getPublicNode"),
-            expected_source="main",
         )
 
     async def loginToFolder(self, link):
+        api = self.folder_api or self.api
         return await self.run(
-            self.api.loginToFolder,
+            api.loginToFolder,
             link,
             expected_type=self._request_type_for_name("loginToFolder"),
         )
@@ -253,7 +244,7 @@ class AsyncMega:
         LOGGER.info("Mega: startDownload creating transfer future")
         self._transfer_future = Future()
 
-        ml = getattr(self, "_mega_listener", None)
+        ml = getattr(self, "_mega_listener", None) or getattr(self, "_folder_listener", None)
         if ml:
             self._download_is_folder = ml._is_folder
             if not ml._name:
@@ -267,6 +258,35 @@ class AsyncMega:
         await sync_to_async(
             self._download_api().startDownload,
             node,
+            localPath,
+            name,
+            listener,
+            startFirst,
+            cancelToken,
+            collisionCheck,
+            collisionResolution,
+            undelete,
+        )
+
+    async def startDownloadLink(self, megaLink, localPath, name, listener, startFirst, cancelToken, collisionCheck, collisionResolution, undelete):
+        LOGGER.info("Mega: startDownloadLink creating transfer future")
+        self._transfer_future = Future()
+
+        ml = getattr(self, "_mega_listener", None) or getattr(self, "_folder_listener", None)
+        if ml:
+            self._download_is_folder = True
+            if not ml._name:
+                ml._name = name
+            ml._target_handle = None
+            ml._bytes_transferred = 0
+            ml._total_downloaded_bytes = 0
+            ml._speed = 0
+            ml._smoothed_speed = 0
+
+        await sync_to_async(
+            self._download_api().startDownload,
+            megaLink,
+            None,
             localPath,
             name,
             listener,
@@ -445,15 +465,6 @@ class MegaAppListener(MegaListener):
                 pass
         return target_match
 
-    def onRequestStart(self, api, request):
-        try:
-            LOGGER.info("Mega: onRequestStart type=%s", request.getType())
-        except Exception:
-            pass
-
-    def onRequestUpdate(self, api, request):
-        pass
-
     def onRequestFinish(self, api, request, error, source="main"):
         try:
             request_type = request.getType()
@@ -489,6 +500,11 @@ class MegaAppListener(MegaListener):
                 pass
             elif request_type == MegaRequest.TYPE_FETCH_NODES:
                 root_node = api.getRootNode()
+                if not root_node:
+                    try:
+                        root_node = api.getNodeByPath("/", None)
+                    except Exception:
+                        pass
                 self.node = root_node
                 if self.node:
                     self._cache_node_data(self.node)
@@ -680,6 +696,332 @@ class MegaAppListener(MegaListener):
                 self._async_api.api.cancelTransfer(current, None)
             except Exception as e:
                 LOGGER.error(f"Mega cancel-transfer failed: {e}")
+        self._set_request_event()
+        self._set_transfer_event()
+
+    def onUsersUpdate(self, api, users):
+        pass
+
+    def onUserAlertsUpdate(self, api, alerts):
+        pass
+
+    def onNodesUpdate(self, api, nodes):
+        pass
+
+    def onAccountUpdate(self, api):
+        pass
+
+    def onSetsUpdate(self, api, sets):
+        pass
+
+    def onSetElementsUpdate(self, api, elements):
+        pass
+
+    def onContactRequestsUpdate(self, api, requests):
+        pass
+
+    def onReloadNeeded(self, api):
+        pass
+
+    def onSyncFileStateChanged(self, *args):
+        pass
+
+    def onSyncAdded(self, *args):
+        pass
+
+    def onSyncDeleted(self, *args):
+        pass
+
+    def onSyncStateChanged(self, *args):
+        pass
+
+    def onSyncStatsUpdated(self, *args):
+        pass
+
+    def onGlobalSyncStateChanged(self, api):
+        pass
+
+    def onSyncRemoteRootChanged(self, *args):
+        pass
+
+    def onBackupStateChanged(self, *args):
+        pass
+
+    def onBackupStart(self, *args):
+        pass
+
+    def onBackupFinish(self, *args):
+        pass
+
+    def onBackupUpdate(self, *args):
+        pass
+
+    def onBackupTemporaryError(self, *args):
+        pass
+
+    def onChatsUpdate(self, api, chats):
+        pass
+
+    def onEvent(self, api, event):
+        pass
+
+    def onMountAdded(self, *args):
+        pass
+
+    def onMountChanged(self, *args):
+        pass
+
+
+class MegaFolderListener(MegaListener):
+    def __init__(self, async_api: AsyncMega, listener):
+        self._async_api = async_api
+        self.listener = listener
+        self.is_cancelled = False
+        self.error = None
+        self.retryable_error = None
+        self._bytes_transferred = 0
+        self._total_downloaded_bytes = 0
+        self._total_folder_size = 0
+        self._current_transfer = None
+        self._speed = 0
+        self._smoothed_speed = 0
+        self._last_speed_time = 0
+        self._cancel_token = None
+        self.node = None
+        self.public_node = None
+        self._name = ""
+        self._size = 0
+        self._handle = None
+        self._is_folder = True
+        self._target_handle = None
+        self._caller_manages_completion = False
+        super().__init__()
+
+    @property
+    def speed(self):
+        if self._last_speed_time and (time() - self._last_speed_time) > 2:
+            return 0
+        return int(self._smoothed_speed)
+
+    @property
+    def downloaded_bytes(self):
+        return self._total_downloaded_bytes + self._bytes_transferred
+
+    def _set_request_event(self):
+        try:
+            fut = self._async_api._request_future
+            if fut is not None and not fut.done():
+                fut.set_result(True)
+        except Exception as e:
+            LOGGER.error(f"MegaFolder request future resolve failed: {e}")
+
+    def _set_transfer_event(self):
+        try:
+            fut = self._async_api._transfer_future
+            if fut is not None and not fut.done():
+                fut.set_result(True)
+        except Exception as e:
+            LOGGER.error(f"MegaFolder transfer future resolve failed: {e}")
+
+    def _cache_node_data(self, node):
+        try:
+            self._name = node.getName()
+        except Exception:
+            pass
+        try:
+            self._handle = node.getHandle()
+        except Exception:
+            pass
+
+    def _is_expected_request(self, request_type):
+        expected = self._async_api._expected_request_type
+        return expected is None or request_type == expected
+
+    def _is_expected_source(self, source):
+        expected = self._async_api._expected_request_source
+        return expected is None or source == expected
+
+    def _is_target_transfer(self, transfer):
+        if self._async_api._download_is_folder:
+            try:
+                return transfer.isFolderTransfer()
+            except Exception:
+                return False
+        target_match = False
+        if self._target_handle is not None:
+            try:
+                if transfer.getNodeHandle() == self._target_handle:
+                    target_match = True
+            except Exception:
+                pass
+        if not target_match:
+            try:
+                if transfer.getFileName() == self._name:
+                    target_match = True
+            except Exception:
+                pass
+        return target_match
+
+    def onRequestFinish(self, api, request, error, source="main"):
+        try:
+            request_type = request.getType()
+            err_code = error.getErrorCode() if error else MegaError.API_OK
+            LOGGER.info("MegaFolder: onRequestFinish type=%s source=%s err=%s", request_type, source, err_code)
+            if err_code != MegaError.API_OK:
+                if self.is_cancelled:
+                    self._set_request_event()
+                    self._set_transfer_event()
+                    return
+                if err_code in (MegaError.API_EAGAIN, MegaError.API_ERATELIMIT):
+                    return
+                if not (self._is_expected_request(request_type) and self._is_expected_source(source)):
+                    return
+                self.error = f"{err_code} {error.toString()}"
+                LOGGER.error(f"MegaFolder onRequestFinishError: {self.error}")
+                self._set_request_event()
+                self._set_transfer_event()
+                return
+
+            if request_type == MegaRequest.TYPE_LOGIN:
+                pass
+            elif request_type == MegaRequest.TYPE_FETCH_NODES:
+                root_node = api.getRootNode()
+                if not root_node:
+                    try:
+                        root_node = api.getNodeByPath("/", None)
+                    except Exception:
+                        pass
+                self.node = root_node
+                if self.node:
+                    self._cache_node_data(self.node)
+
+            if self._is_expected_request(request_type) and self._is_expected_source(source):
+                self._set_request_event()
+        except Exception as e:
+            self.error = f"MegaFolder request callback exception: {e}"
+            LOGGER.error(self.error, exc_info=True)
+            self._set_request_event()
+            self._set_transfer_event()
+
+    def onRequestTemporaryError(self, api, request, error: MegaError, source="main"):
+        try:
+            LOGGER.warning("MegaFolder: onRequestTemporaryError source=%s err=%s", source, error.toString() if error else "?")
+        except Exception:
+            pass
+        if self.is_cancelled:
+            self._set_request_event()
+
+    def onTransferStart(self, api, transfer):
+        try:
+            if not self._is_target_transfer(transfer):
+                LOGGER.info("MegaFolder: onTransferStart skipped (not target)")
+                return
+            LOGGER.info("MegaFolder: onTransferStart TARGET name=%s", transfer.getFileName())
+            self._current_transfer = transfer
+            self._bytes_transferred = 0
+            self._set_request_event()
+        except Exception as e:
+            LOGGER.error(f"MegaFolder transfer start callback exception: {e}", exc_info=True)
+
+    def onTransferUpdate(self, api: MegaApi, transfer: MegaTransfer):
+        try:
+            if not self._is_target_transfer(transfer):
+                return
+            if self.is_cancelled:
+                token = self._cancel_token
+                if token is not None and not token.isCancelled():
+                    try:
+                        token.cancel()
+                    except Exception:
+                        pass
+                try:
+                    api.cancelTransfer(transfer, None)
+                except Exception:
+                    pass
+                return
+            self._speed = transfer.getSpeed()
+            alpha = 0.3
+            self._smoothed_speed = alpha * self._speed + (1 - alpha) * self._smoothed_speed
+            self._last_speed_time = time()
+            self._bytes_transferred = transfer.getTransferredBytes()
+            total = transfer.getTotalBytes()
+            if total > self._total_folder_size:
+                self._total_folder_size = total
+        except Exception as e:
+            LOGGER.error(f"MegaFolder transfer update callback exception: {e}", exc_info=True)
+
+    def onTransferFinish(self, api: MegaApi, transfer: MegaTransfer, error):
+        try:
+            err_code = error.getErrorCode() if error else MegaError.API_OK
+            LOGGER.info("MegaFolder: onTransferFinish err=%s cancelled=%s", err_code, self.is_cancelled)
+            if self.is_cancelled:
+                LOGGER.info("MegaFolder: onTransferFinish cancelled, signalling transfer event")
+                self._set_transfer_event()
+                return
+
+            if not self._is_target_transfer(transfer):
+                LOGGER.info("MegaFolder: onTransferFinish skipped (not target)")
+                return
+            LOGGER.info("MegaFolder: onTransferFinish TARGET err=%s", err_code)
+            if err_code != MegaError.API_OK:
+                self.error = f"{err_code} {error.toString()}"
+                if err_code == MegaError.API_EINCOMPLETE:
+                    self.retryable_error = self.error
+                    self._set_transfer_event()
+                    return
+                LOGGER.error(f"MegaFolder onTransferFinishError: {self.error}")
+                self.is_cancelled = True
+                async_to_sync(self.listener.on_download_error, _mega_error_format(self.error))
+                self._set_transfer_event()
+                return
+            self.retryable_error = None
+            async_to_sync(self.listener.on_download_complete)
+            self._set_transfer_event()
+        except Exception as e:
+            LOGGER.error(f"MegaFolder onTransferFinish exception: {e}")
+            self._set_transfer_event()
+
+    def onTransferTemporaryError(self, api, transfer, error):
+        try:
+            if self.is_cancelled:
+                return
+            if not self._is_target_transfer(transfer):
+                return
+            err_code = error.getErrorCode() if error else 0
+            err_str = error.toString() if error else "unknown"
+            LOGGER.warning("MegaFolder: onTransferTemporaryError err=%s", err_code)
+            if err_code == MegaError.API_EOVERQUOTA:
+                msg = f"TransferTempError: Over quota: {err_str}"
+                self.error = msg
+                self.is_cancelled = True
+                async_to_sync(self.listener.on_download_error, _mega_error_format(msg))
+                self._set_transfer_event()
+                return
+            if err_code == MegaError.API_EINCOMPLETE:
+                self.retryable_error = f"{err_code} {err_str}"
+        except Exception as e:
+            LOGGER.error(
+                f"MegaFolder transfer temporary-error callback exception: {e}",
+                exc_info=True,
+            )
+
+    async def cancel_task(self):
+        LOGGER.info("MegaFolder: cancel_task entered")
+        if self.is_cancelled:
+            return
+        self.is_cancelled = True
+        token = self._cancel_token
+        if token is not None and not token.isCancelled():
+            try:
+                token.cancel()
+            except Exception as e:
+                LOGGER.error(f"MegaFolder cancel-token cancel failed: {e}")
+        current = getattr(self, '_current_transfer', None)
+        if current is not None:
+            try:
+                self._async_api._download_api().cancelTransfer(current, None)
+            except Exception as e:
+                LOGGER.error(f"MegaFolder cancel-transfer failed: {e}")
         self._set_request_event()
         self._set_transfer_event()
 

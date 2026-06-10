@@ -274,9 +274,9 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
             await listener.on_upload_error(f"Internal error: {e}")
     finally:
         if async_api is not None:
+            with suppress(Exception):
+                await async_api.logout()
             if async_api.api is not None and async_api._mega_listener is not None:
                 with suppress(Exception):
                     async_api.api.removeListener(async_api._mega_listener)
-            with suppress(Exception):
-                await async_api.logout()
         await _cleanup_dir(mega_base)
