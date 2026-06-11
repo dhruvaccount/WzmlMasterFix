@@ -400,6 +400,9 @@ class MegaAppListener(MegaListener):
         self._uploaded_node_handle = None
         self._created_folder_node = None
         self._imported_node = None
+        self._imported_node_name = None
+        self._imported_node_size = 0
+        self._imported_node_is_folder = False
         self._auto_export = False
         self._export_link = None
         super().__init__()
@@ -571,6 +574,9 @@ class MegaAppListener(MegaListener):
                     node = api.getNodeByHandle(handle) if handle else None
                     if node:
                         self._imported_node = node
+                        self._imported_node_name = node.getName()
+                        self._imported_node_size = node.getSize()
+                        self._imported_node_is_folder = node.isFolder()
                         if self._auto_export:
                             self._auto_export = False
                             api.exportNode(node, 0, False, False, None)

@@ -80,19 +80,13 @@ async def add_mega_clone(listener, link, mega_email, mega_password, gid):
 
         files = 1
         folders = 0
-        try:
-            is_folder = imported_node.isFolder()
-            if is_folder:
-                folders = 1
-                files = 0
-            node_name = imported_node.getName()
-            if node_name:
-                listener.name = node_name
-            node_size = imported_node.getSize()
-            if node_size:
-                listener.size = node_size
-        except Exception:
-            pass
+        if mega_listener._imported_node_is_folder:
+            folders = 1
+            files = 0
+        if mega_listener._imported_node_name:
+            listener.name = mega_listener._imported_node_name
+        if mega_listener._imported_node_size:
+            listener.size = mega_listener._imported_node_size
 
         if not export_link:
             LOGGER.warning("MegaClone: export returned no link")
