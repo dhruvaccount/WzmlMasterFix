@@ -866,6 +866,7 @@ class MegaFolderListener(MegaListener):
                 if self.node:
                     self._cache_node_data(self.node)
                     self._size = api.getSize(self.node)
+                    self._children = api.getChildren(self.node)
 
             if self._is_expected_request(request_type) and self._is_expected_source(source):
                 self._set_request_event()

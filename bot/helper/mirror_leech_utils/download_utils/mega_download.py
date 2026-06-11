@@ -48,17 +48,22 @@ def _find_child_by_handle(api, parent_node, target_handle):
         return None
     try:
         children = api.getChildren(parent_node)
-        if not children:
-            return None
-        for i in range(children.size()):
-            child = children.get(i)
-            try:
-                if child.getHandle() == target_handle:
-                    return child
-            except Exception:
-                pass
+        return _find_child_in_list(children, target_handle)
     except Exception as e:
         LOGGER.warning(f"_find_child_by_handle error: {e}")
+    return None
+
+
+def _find_child_in_list(children, target_handle):
+    if not children:
+        return None
+    for i in range(children.size()):
+        child = children.get(i)
+        try:
+            if child.getHandle() == target_handle:
+                return child
+        except Exception:
+            pass
     return None
 
 
@@ -144,7 +149,7 @@ async def add_mega_download(listener, path):
                 return
 
             if subfolder_handle:
-                node = await sync_to_async(_find_child_by_handle, folder_api, dl_listener.node, subfolder_handle)
+                node = _find_child_in_list(dl_listener._children, subfolder_handle)
                 if not node:
                     await listener.on_download_error("Subfolder not found in the MEGA link")
                     return
