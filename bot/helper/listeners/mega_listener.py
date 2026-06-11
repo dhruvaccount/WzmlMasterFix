@@ -178,11 +178,16 @@ class AsyncMega:
         ml = getattr(self, "_mega_listener", None)
 
         try:
-            existing = await sync_to_async(self.api.getNodeByPath, name, parent)
+            existing = await wait_for(
+                sync_to_async(self.api.getNodeByPath, name, parent),
+                timeout=30,
+            )
             if existing:
                 return existing
-        except Exception:
-            pass
+        except AsyncTimeoutError:
+            LOGGER.warning(f"create_folder: getNodeByPath timed out for '{name}', proceeding with create")
+        except Exception as e:
+            LOGGER.info(f"create_folder: getNodeByPath check failed for '{name}': {e}")
 
         future = Future()
         self._request_future = future
@@ -191,11 +196,8 @@ class AsyncMega:
         if ml:
             ml._created_folder_node = None
         try:
-            LOGGER.info("Mega: createFolder calling SDK for '%s'", name)
             await sync_to_async(self.api.createFolder, name, parent)
-            LOGGER.info("Mega: createFolder SDK returned, waiting for callback for '%s'", name)
             await wait_for(wrap_future(future), timeout=_REQUEST_TIMEOUT_SECONDS)
-            LOGGER.info("Mega: createFolder callback received for '%s'", name)
             node = getattr(ml, "_created_folder_node", None) if ml else None
             if not node:
                 LOGGER.warning(f"create_folder: no node for '{name}'")
