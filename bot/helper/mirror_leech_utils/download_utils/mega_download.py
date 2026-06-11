@@ -255,12 +255,12 @@ async def add_mega_download(listener, path):
             if not is_folder:
                 with suppress(Exception):
                     await async_api.logout()
-            if async_api.api is not None and async_api._mega_listener is not None:
-                with suppress(Exception):
-                    async_api.api.removeListener(async_api._mega_listener)
-            if async_api.folder_api is not None and async_api._folder_listener is not None:
-                with suppress(Exception):
-                    async_api.folder_api.removeListener(async_api._folder_listener)
+                if async_api.api is not None and async_api._mega_listener is not None:
+                    with suppress(Exception):
+                        async_api.api.removeListener(async_api._mega_listener)
+                if async_api.folder_api is not None and async_api._folder_listener is not None:
+                    with suppress(Exception):
+                        async_api.folder_api.removeListener(async_api._folder_listener)
         LOGGER.info("Mega: cleanup done, exiting add_mega_download")
         await _release_link(listener.link)
         await _cleanup_dir(mega_base)
