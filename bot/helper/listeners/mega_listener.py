@@ -114,7 +114,6 @@ class AsyncMega:
     async def run(self, function, *args, expected_type=None, expected_source="main", timeout=None, **kwargs):
         fn_name = getattr(function, '__name__', 'unknown')
         timeout = _REQUEST_TIMEOUT_SECONDS if timeout is None else timeout
-        LOGGER.info("Mega: run(%s, source=%s) preparing future", fn_name, expected_source)
         future = Future()
         self._request_future = future
         self._expected_request_type = (
@@ -123,12 +122,9 @@ class AsyncMega:
         self._expected_request_source = expected_source
         
         try:
-            LOGGER.info("Mega: run(%s, source=%s) calling sync_to_async", fn_name, expected_source)
             await sync_to_async(function, *args, **kwargs)
-            LOGGER.info("Mega: run(%s, source=%s) sync_to_async returned, waiting on future", fn_name, expected_source)
             try:
                 await wait_for(wrap_future(future), timeout=timeout)
-                LOGGER.info("Mega: run(%s, source=%s) future resolved", fn_name, expected_source)
             except AsyncTimeoutError:
                 msg = (
                     f"Mega SDK timed out after {timeout}s waiting for "
