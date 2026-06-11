@@ -40,8 +40,11 @@ def _find_child_by_handle(api, parent_node, target_handle):
 def _find_child_in_list(children, target_handle):
     if not children:
         return None
-    _to_handle = getattr(MegaApi, "base64ToHandle", None)
-    target_int = _to_handle(target_handle) if _to_handle else None
+    try:
+        _to_handle = getattr(MegaApi, "base64ToHandle", None)
+        target_int = _to_handle(target_handle) if callable(_to_handle) else None
+    except Exception:
+        target_int = None
     for i in range(children.size()):
         child = children.get(i)
         try:
@@ -138,6 +141,12 @@ async def add_mega_download(listener, path):
                 if not node:
                     await listener.on_download_error("Subfolder not found in the MEGA link")
                     return
+                dl_listener.node = node
+                dl_listener._cache_node_data(node)
+                try:
+                    dl_listener._size = await sync_to_async(folder_api.getSize, node)
+                except Exception:
+                    pass
             else:
                 node = dl_listener.node
         else:
