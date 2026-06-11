@@ -122,6 +122,7 @@ class AsyncMega:
         self._expected_request_source = expected_source
         
         try:
+            LOGGER.info("Mega: run(%s, src=%s)", fn_name, expected_source)
             await sync_to_async(function, *args, **kwargs)
             try:
                 await wait_for(wrap_future(future), timeout=timeout)

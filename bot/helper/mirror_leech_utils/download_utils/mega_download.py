@@ -135,7 +135,6 @@ async def add_mega_download(listener, path):
                 await listener.on_download_error(_mega_error_format(dl_listener.error))
                 return
             await async_api.fetchNodes(api=folder_api)
-            LOGGER.info("Mega: fetchNodes done")
             await asleep(0)
             if dl_listener.error:
                 await listener.on_download_error(_mega_error_format(dl_listener.error))
@@ -152,11 +151,7 @@ async def add_mega_download(listener, path):
             else:
                 node = dl_listener.node
 
-            dl_listener._cache_node_data(node)
-            try:
-                dl_listener._size = await sync_to_async(folder_api.getSize, node)
-            except Exception as e:
-                LOGGER.info("Mega: getSize exception: %s", e)
+            dl_listener._size = folder_api.getSize(node)
         else:
             dl_listener = mega_listener
             if mega_email and mega_password:
