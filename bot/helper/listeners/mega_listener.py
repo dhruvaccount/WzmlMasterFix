@@ -225,14 +225,20 @@ class AsyncMega:
             LOGGER.warning(f"_find_child_by_name failed for '{name}': {e}")
         return None
 
-    async def import_link(self, link, parent):
+    async def import_link(self, link, parent, auto_export=False):
         ml = getattr(self, "_mega_listener", None)
         future = Future()
         self._request_future = future
         self._expected_request_type = MegaRequest.TYPE_IMPORT_LINK
         self._expected_request_source = "main"
+        export_future = None
         if ml:
             ml._imported_node = None
+            ml._export_link = None
+            ml._auto_export = auto_export
+            if auto_export:
+                export_future = Future()
+                self._export_future = export_future
         try:
             LOGGER.info("Mega: importFileLink")
             await sync_to_async(self.api.importFileLink, link, parent)
@@ -240,17 +246,30 @@ class AsyncMega:
             node = getattr(ml, "_imported_node", None) if ml else None
             if not node:
                 LOGGER.warning(f"import_link: no node returned for link")
+                return None
+            if auto_export and export_future:
+                LOGGER.info("Mega: waiting for auto-export")
+                await wait_for(wrap_future(export_future), timeout=_REQUEST_TIMEOUT_SECONDS)
+                elink = getattr(ml, "_export_link", None) if ml else None
+                return node, elink
             return node
         except AsyncTimeoutError:
             LOGGER.error("import_link timed out")
+            if auto_export:
+                return None, None
             return None
         except Exception as e:
             LOGGER.error(f"import_link failed: {e}", exc_info=True)
+            if auto_export:
+                return None, None
             return None
         finally:
             self._request_future = None
             self._expected_request_type = None
             self._expected_request_source = None
+            if ml:
+                ml._auto_export = False
+                self._export_future = None
 
     async def logout(self):
         if self.folder_api:
@@ -381,6 +400,7 @@ class MegaAppListener(MegaListener):
         self._uploaded_node_handle = None
         self._created_folder_node = None
         self._imported_node = None
+        self._auto_export = False
         self._export_link = None
         super().__init__()
 
@@ -551,6 +571,9 @@ class MegaAppListener(MegaListener):
                     node = api.getNodeByHandle(handle) if handle else None
                     if node:
                         self._imported_node = node
+                        if self._auto_export:
+                            self._auto_export = False
+                            api.exportNode(node, 0, False, False, None)
                 except Exception:
                     pass
 

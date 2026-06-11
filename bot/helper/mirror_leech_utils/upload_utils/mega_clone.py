@@ -63,14 +63,19 @@ async def add_mega_clone(listener, link, mega_email, mega_password, gid):
             return None, 0, 0
 
         LOGGER.info("MegaClone: importing %s", link)
-        imported_node = await async_api.import_link(link, root_node)
-        if not imported_node:
+        result = await async_api.import_link(link, root_node, auto_export=True)
+        if result is None:
             if mega_listener.error:
                 await listener.on_upload_error(
                     f"Mega import failed: {_mega_error_format(mega_listener.error)}"
                 )
             else:
                 await listener.on_upload_error("Mega import returned no node.")
+            return None, 0, 0
+
+        imported_node, export_link = result
+        if not imported_node:
+            await listener.on_upload_error("Mega import returned no node.")
             return None, 0, 0
 
         files = 1
@@ -83,8 +88,6 @@ async def add_mega_clone(listener, link, mega_email, mega_password, gid):
         except Exception:
             pass
 
-        LOGGER.info("MegaClone: exporting imported node")
-        export_link = await async_api.export_node(imported_node)
         if not export_link:
             LOGGER.warning("MegaClone: export returned no link")
 
