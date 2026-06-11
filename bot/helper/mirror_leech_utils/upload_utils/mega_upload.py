@@ -96,13 +96,16 @@ async def _upload_file(async_api, mega_listener, file_path, parent_node, custom_
         mega_listener._caller_manages_completion = True
         mega_listener._size = await aiopath.getsize(file_path)
 
+        LOGGER.info("Mega: _upload_file attempt %d calling startUpload for '%s' (size=%s)", attempt + 1, custom_name, mega_listener._size)
         await async_api.startUpload(
             file_path,
             parent_node,
             custom_name,
             cancel_token,
         )
+        LOGGER.info("Mega: _upload_file startUpload returned, waiting for transfer for '%s'", custom_name)
         await async_api.wait_for_transfer()
+        LOGGER.info("Mega: _upload_file transfer complete for '%s' (err=%s)", custom_name, mega_listener.error)
 
         if mega_listener.is_cancelled:
             return False, None
@@ -184,18 +187,22 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
             )
             return
 
+        LOGGER.info("Mega: root_node obtained, checking path type")
+
         total_files = 0
         uploaded_files = 0
         mime_type = "application/octet-stream"
 
         upload_link = None
-        if await aiopath.isdir(path):
+        is_dir = await aiopath.isdir(path)
+        LOGGER.info("Mega: path is_dir=%s for '%s'", is_dir, path)
+        if is_dir:
             total_files = await sync_to_async(lambda: sum(len(files) for _, _, files in os.walk(path)))
             if total_files == 0:
                 await listener.on_upload_error("No files to upload in folder")
                 return
             dir_name = os.path.basename(path.rstrip("/\\"))
-
+            LOGGER.info("Mega: creating remote folder '%s' for upload", dir_name)
             mega_root, folder_map = await _ensure_folder_structure(
                 async_api, mega_listener, path, root_node, dir_name
             )
@@ -243,9 +250,11 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
         else:
             total_files = 1
             file_name = os.path.basename(path)
+            LOGGER.info("Mega: calling _upload_file for '%s'", file_name)
             ok, link = await _upload_file(
                 async_api, mega_listener, path, root_node, file_name
             )
+            LOGGER.info("Mega: _upload_file returned ok=%s", ok)
             if ok:
                 uploaded_files = 1
                 upload_link = link
