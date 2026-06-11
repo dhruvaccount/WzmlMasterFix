@@ -649,22 +649,29 @@ class MegaAppListener(MegaListener):
     async def cancel_task(self):
         LOGGER.info("Mega: cancel_task entered")
         if self.is_cancelled:
+            LOGGER.info("Mega: cancel_task already cancelled")
             return
         self.is_cancelled = True
         token = self._cancel_token
+        LOGGER.info("Mega: cancel_task token=%s", token)
         if token is not None and not token.isCancelled():
             try:
                 token.cancel()
+                LOGGER.info("Mega: cancel_task token cancelled")
             except Exception as e:
                 LOGGER.error(f"Mega cancel-token cancel failed: {e}")
         current = getattr(self, '_current_transfer', None)
+        LOGGER.info("Mega: cancel_task current=%s", current)
         if current is not None:
             try:
                 self._async_api.api.cancelTransfer(current, None)
+                LOGGER.info("Mega: cancel_task transfer cancelled")
             except Exception as e:
                 LOGGER.error(f"Mega cancel-transfer failed: {e}")
+        LOGGER.info("Mega: cancel_task setting events")
         self._set_request_event()
         self._set_transfer_event()
+        LOGGER.info("Mega: cancel_task done")
 
     def onUsersUpdate(self, api, users):
         pass
@@ -971,22 +978,29 @@ class MegaFolderListener(MegaListener):
     async def cancel_task(self):
         LOGGER.info("MegaFolder: cancel_task entered")
         if self.is_cancelled:
+            LOGGER.info("MegaFolder: cancel_task already cancelled, returning")
             return
         self.is_cancelled = True
         token = self._cancel_token
+        LOGGER.info("MegaFolder: cancel_task token=%s", token)
         if token is not None and not token.isCancelled():
             try:
                 token.cancel()
+                LOGGER.info("MegaFolder: cancel_task token cancelled")
             except Exception as e:
                 LOGGER.error(f"MegaFolder cancel-token cancel failed: {e}")
         current = getattr(self, '_current_transfer', None)
+        LOGGER.info("MegaFolder: cancel_task current=%s", current)
         if current is not None:
             try:
                 self._async_api._download_api().cancelTransfer(current, None)
+                LOGGER.info("MegaFolder: cancel_task transfer cancelled")
             except Exception as e:
                 LOGGER.error(f"MegaFolder cancel-transfer failed: {e}")
+        LOGGER.info("MegaFolder: cancel_task setting events")
         self._set_request_event()
         self._set_transfer_event()
+        LOGGER.info("MegaFolder: cancel_task done")
 
     def onUsersUpdate(self, api, users):
         pass
