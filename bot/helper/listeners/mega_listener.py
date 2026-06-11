@@ -105,6 +105,7 @@ class AsyncMega:
             "getAccountDetails": getattr(MegaRequest, "TYPE_ACCOUNT_DETAILS", None),
             "exportNode": getattr(MegaRequest, "TYPE_EXPORT", None),
             "createFolder": getattr(MegaRequest, "TYPE_CREATE_FOLDER", None),
+            "importFileLink": getattr(MegaRequest, "TYPE_IMPORT_LINK", None),
         }
         return request_types.get(name)
 
@@ -178,19 +179,6 @@ class AsyncMega:
 
     async def create_folder(self, name, parent):
         ml = getattr(self, "_mega_listener", None)
-
-        try:
-            existing = await wait_for(
-                sync_to_async(self.api.getNodeByPath, name, parent),
-                timeout=30,
-            )
-            if existing:
-                return existing
-        except AsyncTimeoutError:
-            LOGGER.warning(f"create_folder: getNodeByPath timed out for '{name}', proceeding with create")
-        except Exception as e:
-            LOGGER.info(f"create_folder: getNodeByPath check failed for '{name}': {e}")
-
         future = Future()
         self._request_future = future
         self._expected_request_type = MegaRequest.TYPE_CREATE_FOLDER
@@ -202,13 +190,62 @@ class AsyncMega:
             await wait_for(wrap_future(future), timeout=_REQUEST_TIMEOUT_SECONDS)
             node = getattr(ml, "_created_folder_node", None) if ml else None
             if not node:
-                LOGGER.warning(f"create_folder: no node for '{name}'")
+                LOGGER.warning(f"create_folder: no node for '{name}', falling back to child scan")
+                node = await self._find_child_by_name(parent, name)
             return node
         except AsyncTimeoutError:
             LOGGER.error(f"create_folder timed out for '{name}'")
             return None
         except Exception as e:
-            LOGGER.error(f"create_folder failed for '{name}': {e}", exc_info=True)
+            LOGGER.warning(f"create_folder failed for '{name}' (may already exist): {e}")
+            try:
+                node = await self._find_child_by_name(parent, name)
+                if node:
+                    return node
+            except Exception:
+                pass
+            return None
+        finally:
+            self._request_future = None
+            self._expected_request_type = None
+            self._expected_request_source = None
+
+    async def _find_child_by_name(self, parent, name):
+        try:
+            children = await sync_to_async(self.api.getChildren, parent)
+            if children:
+                for i in range(children.size()):
+                    child = children.get(i)
+                    try:
+                        if child.getName() == name:
+                            return child
+                    except Exception:
+                        pass
+        except Exception as e:
+            LOGGER.warning(f"_find_child_by_name failed for '{name}': {e}")
+        return None
+
+    async def import_link(self, link, parent):
+        ml = getattr(self, "_mega_listener", None)
+        future = Future()
+        self._request_future = future
+        self._expected_request_type = MegaRequest.TYPE_IMPORT_LINK
+        self._expected_request_source = "main"
+        if ml:
+            ml._imported_node = None
+        try:
+            LOGGER.info("Mega: importFileLink")
+            await sync_to_async(self.api.importFileLink, link, parent)
+            await wait_for(wrap_future(future), timeout=_REQUEST_TIMEOUT_SECONDS)
+            node = getattr(ml, "_imported_node", None) if ml else None
+            if not node:
+                LOGGER.warning(f"import_link: no node returned for link")
+            return node
+        except AsyncTimeoutError:
+            LOGGER.error("import_link timed out")
+            return None
+        except Exception as e:
+            LOGGER.error(f"import_link failed: {e}", exc_info=True)
             return None
         finally:
             self._request_future = None
@@ -343,6 +380,7 @@ class MegaAppListener(MegaListener):
         self._target_handle = None
         self._uploaded_node_handle = None
         self._created_folder_node = None
+        self._imported_node = None
         self._export_link = None
         super().__init__()
 
@@ -505,6 +543,14 @@ class MegaAppListener(MegaListener):
                     fut = self._async_api._request_future
                     if fut is not None and not fut.done():
                         fut.set_result(True)
+                except Exception:
+                    pass
+            elif request_type == MegaRequest.TYPE_IMPORT_LINK:
+                try:
+                    handle = request.getNodeHandle()
+                    node = api.getNodeByHandle(handle) if handle else None
+                    if node:
+                        self._imported_node = node
                 except Exception:
                     pass
 
