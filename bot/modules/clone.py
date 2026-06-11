@@ -352,7 +352,6 @@ class Clone(TaskListener):
             flink, files, folders = await add_mega_clone(
                 self, self.link, mega_email, mega_password, gid
             )
-            LOGGER.info(f"MegaClone: back from add_mega_clone, flink={'yes' if flink else 'no'}")
             if not flink:
                 return
             mime_type = "Folder" if folders else "application/octet-stream"

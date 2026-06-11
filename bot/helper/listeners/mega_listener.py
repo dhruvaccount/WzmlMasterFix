@@ -85,6 +85,7 @@ class AsyncMega:
         self.continue_event = Event()
         self._transfer_future = None
         self._export_future = None
+        self._export_event = None
         self._expected_request_type = None
         self._expected_request_source = None
         self._download_is_folder = False
@@ -232,6 +233,7 @@ class AsyncMega:
         self._expected_request_type = MegaRequest.TYPE_IMPORT_LINK
         self._expected_request_source = "main"
         export_future = None
+        export_event = None
         if ml:
             ml._imported_node = None
             ml._export_link = None
@@ -239,24 +241,18 @@ class AsyncMega:
             if auto_export:
                 export_future = Future()
                 self._export_future = export_future
+                export_event = Event()
+                self._export_event = export_event
         try:
-            LOGGER.info("Mega: importFileLink")
             await sync_to_async(self.api.importFileLink, link, parent)
             await wait_for(wrap_future(future), timeout=_REQUEST_TIMEOUT_SECONDS)
             node = getattr(ml, "_imported_node", None) if ml else None
             if not node:
                 LOGGER.warning("import_link: no node returned for link")
                 return None
-            if auto_export and export_future:
-                LOGGER.info("Mega: waiting for auto-export")
-                try:
-                    await wait_for(wrap_future(export_future), timeout=_REQUEST_TIMEOUT_SECONDS)
-                    LOGGER.info("Mega: export future wait_for resolved")
-                except AsyncTimeoutError:
-                    LOGGER.error("Mega: export future wait_for TIMEOUT")
-                    raise
+            if auto_export and export_event:
+                await wait_for(export_event.wait(), timeout=_REQUEST_TIMEOUT_SECONDS)
                 elink = getattr(ml, "_export_link", None) if ml else None
-                LOGGER.info(f"Mega: import_link returning, has_elink={bool(elink)}")
                 return node, elink
             return node
         except AsyncTimeoutError:
@@ -276,6 +272,7 @@ class AsyncMega:
             if ml:
                 ml._auto_export = False
                 self._export_future = None
+                self._export_event = None
 
     async def logout(self):
         if self.folder_api:
@@ -446,12 +443,16 @@ class MegaAppListener(MegaListener):
     def _set_export_done(self):
         try:
             fut = self._async_api._export_future
-            LOGGER.info(f"Mega: _set_export_done fut={fut is not None} done={fut.done() if fut else 'N/A'}")
             if fut is not None and not fut.done():
                 fut.set_result(True)
-                LOGGER.info("Mega: _set_export_done set_result OK")
         except Exception as e:
             LOGGER.error(f"Mega export future resolve failed: {e}")
+        try:
+            evt = self._async_api._export_event
+            if evt is not None and not evt.is_set():
+                bot_loop.call_soon_threadsafe(evt.set)
+        except Exception as e:
+            LOGGER.error(f"Mega export event set failed: {e}")
 
     def _clear_export_done(self):
         try:
