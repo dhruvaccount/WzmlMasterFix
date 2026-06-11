@@ -519,7 +519,6 @@ class MegaAppListener(MegaListener):
     def onTransferStart(self, api, transfer):
         try:
             if not self._is_target_transfer(transfer):
-                LOGGER.info("Mega: onTransferStart skipped (not target)")
                 return
             LOGGER.info("Mega: onTransferStart TARGET name=%s", transfer.getFileName())
             self._current_transfer = transfer
@@ -558,14 +557,11 @@ class MegaAppListener(MegaListener):
     def onTransferFinish(self, api: MegaApi, transfer: MegaTransfer, error):
         try:
             err_code = error.getErrorCode() if error else MegaError.API_OK
-            LOGGER.info("Mega: onTransferFinish err=%s cancelled=%s target_check=...", err_code, self.is_cancelled)
             if self.is_cancelled:
-                LOGGER.info("Mega: onTransferFinish cancelled, signalling transfer event")
                 self._set_transfer_event()
                 return
 
             if not self._is_target_transfer(transfer):
-                LOGGER.info("Mega: onTransferFinish skipped (not target)")
                 return
             LOGGER.info("Mega: onTransferFinish TARGET err=%s", err_code)
             if err_code != MegaError.API_OK:
@@ -885,7 +881,6 @@ class MegaFolderListener(MegaListener):
     def onTransferStart(self, api, transfer):
         try:
             if not self._is_target_transfer(transfer):
-                LOGGER.info("MegaFolder: onTransferStart skipped (not target)")
                 return
             LOGGER.info("MegaFolder: onTransferStart TARGET name=%s", transfer.getFileName())
             self._current_transfer = transfer
@@ -924,14 +919,11 @@ class MegaFolderListener(MegaListener):
     def onTransferFinish(self, api: MegaApi, transfer: MegaTransfer, error):
         try:
             err_code = error.getErrorCode() if error else MegaError.API_OK
-            LOGGER.info("MegaFolder: onTransferFinish err=%s cancelled=%s", err_code, self.is_cancelled)
             if self.is_cancelled:
-                LOGGER.info("MegaFolder: onTransferFinish cancelled, signalling transfer event")
                 self._set_transfer_event()
                 return
 
             if not self._is_target_transfer(transfer):
-                LOGGER.info("MegaFolder: onTransferFinish skipped (not target)")
                 return
             LOGGER.info("MegaFolder: onTransferFinish TARGET err=%s", err_code)
             if err_code != MegaError.API_OK:
