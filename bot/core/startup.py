@@ -77,14 +77,22 @@ async def update_aria2_options():
 async def update_nzb_options():
     if Config.USENET_SERVERS:
         LOGGER.info("Get SABnzbd options from server")
-        while True:
+        retries = 10
+        for i in range(retries):
             try:
                 no = (await sabnzbd_client.get_config())["config"]["misc"]
                 nzb_options.update(no)
-            except Exception:
-                await sleep(0.5)
-                continue
-            break
+                break
+            except Exception as e:
+                if i == retries - 1:
+                    LOGGER.error(
+                        f"Failed to get SABnzbd options after {retries} retries: {e}"
+                    )
+                    return
+                LOGGER.warning(
+                    f"SABnzbd not ready, retrying ({i + 1}/{retries}): {e}"
+                )
+                await sleep(2)
 
 
 async def load_settings():
@@ -126,27 +134,22 @@ async def load_settings():
             await database.db.settings.deployConfig.replace_one(
                 deploy_filter, config_file, upsert=True
             )
-        if old_config and old_config != config_file:
+        elif old_config != config_file:
             LOGGER.info("Saving.. Deploy Config imported from Bot")
             await database.db.settings.deployConfig.replace_one(
                 deploy_filter, config_file, upsert=True
             )
-            config_dict = (
-                await database.db.settings.config.find_one(deploy_filter, {"_id": 0})
-                or {}
-            )
-            for k, v in config_file.items():
-                if v:
-                    config_dict[k] = v
-            if config_dict:
-                Config.load_dict(config_dict)
-        else:
-            LOGGER.info("Updating.. Saved Config imported from MongoDB")
-            config_dict = await database.db.settings.config.find_one(
-                deploy_filter, {"_id": 0}
-            )
-            if config_dict:
-                Config.load_dict(config_dict)
+
+        LOGGER.info("Updating.. Saved Config imported from MongoDB")
+        config_dict = (
+            await database.db.settings.config.find_one(deploy_filter, {"_id": 0})
+            or {}
+        )
+        for k, v in config_file.items():
+            if v is not None:
+                config_dict[k] = v
+        if config_dict:
+            Config.load_dict(config_dict)
 
         if pf_dict := await database.db.settings.files.find_one(
             deploy_filter, {"_id": 0}

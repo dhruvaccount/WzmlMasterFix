@@ -1,9 +1,10 @@
 # ruff: noqa: E402
 
 import faulthandler
-import sys
+from sys import stderr
+from logging import FileHandler, getLogger
 
-faulthandler.enable(file=sys.stderr, all_threads=True)
+faulthandler.enable(file=stderr, all_threads=True)
 
 from .core.config_manager import Config
 
@@ -16,6 +17,14 @@ from time import localtime
 from pytz import timezone
 
 from . import LOGGER, bot_loop
+
+for _h in getLogger().handlers:
+    if isinstance(_h, FileHandler):
+        try:
+            faulthandler.enable(file=_h.stream.fileno(), all_threads=True)
+        except Exception:
+            pass
+        break
 from .core.tg_client import TgClient
 
 

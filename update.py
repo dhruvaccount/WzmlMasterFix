@@ -13,7 +13,6 @@ from os import path, remove, environ
 from pymongo import AsyncMongoClient
 from pymongo.errors import PyMongoError
 from pymongo.server_api import ServerApi
-from re import compile as re_compile
 from subprocess import run as srun, call as scall
 from sys import exit
 
@@ -22,10 +21,6 @@ getLogger("pymongo").setLevel(ERROR)
 _LOGGER = getLogger("update")
 
 _DB_PARTITION_SALT = b"wzmlx_v3_db_partition_salt"
-_UPSTREAM_PATTERN = re_compile(
-    r"^https://(github\.com/[\w.-]+/[\w.-]+/?|raw\.githubusercontent\.com/[\w.-]+/[\w.-]+/?)$"
-)
-_BRANCH_RE = re_compile(r"^[\w./-]+$")
 _VAR_LIST = [
     "BOT_TOKEN",
     "TELEGRAM_API",
@@ -37,12 +32,6 @@ _VAR_LIST = [
     "UPSTREAM_BRANCH",
     "UPDATE_PKGS",
 ]
-_UPSTREAM_DEFAULTS = {
-    "UPSTREAM_REPO": "https://github.com/SilentDemonSD/WZML-X",
-    "UPSTREAM_BRANCH": "wzv3",
-    "UPDATE_PKGS": "True",
-}
-
 
 def _get_version():
     try:
@@ -110,30 +99,14 @@ def _fetch_config_from_db(config_file, db_part):
     database_url = config_file.get("DATABASE_URL", "").strip()
     if not database_url:
         return
-    config_dict = run(_fetch_db_config(database_url, db_part))
-    if config_dict is not None:
-        for key, default in _UPSTREAM_DEFAULTS.items():
-            config_file[key] = config_dict.get(key, default)
+    db_config = run(_fetch_db_config(database_url, db_part))
+    if db_config is not None:
+        for key, value in db_config.items():
+            if key not in config_file or config_file[key] is None:
+                config_file[key] = value
         _LOGGER.info("Config imported from MongoDB")
     else:
         _LOGGER.warning("No saved config found in MongoDB, using defaults")
-
-
-def _validate_config(config_file):
-    upstream_repo = config_file.get("UPSTREAM_REPO", "").strip()
-    upstream_branch = config_file.get("UPSTREAM_BRANCH", "").strip() or "wzv3"
-
-    if upstream_repo and not _UPSTREAM_PATTERN.match(upstream_repo):
-        _LOGGER.error(
-            f"UPSTREAM_REPO rejected (must be github.com/raw.githubusercontent.com): {upstream_repo}"
-        )
-        exit(1)
-
-    if not _BRANCH_RE.match(upstream_branch):
-        _LOGGER.error(f"UPSTREAM_BRANCH rejected (invalid characters): {upstream_branch}")
-        exit(1)
-
-    return upstream_repo, upstream_branch
 
 
 def _run_update(upstream_repo, upstream_branch, version):
@@ -188,7 +161,8 @@ def main():
 
     _fetch_config_from_db(config_file, db_part)
 
-    upstream_repo, upstream_branch = _validate_config(config_file)
+    upstream_repo = config_file.get("UPSTREAM_REPO", "").strip()
+    upstream_branch = config_file.get("UPSTREAM_BRANCH", "").strip() or "wzv3"
 
     _run_update(upstream_repo, upstream_branch, version)
 

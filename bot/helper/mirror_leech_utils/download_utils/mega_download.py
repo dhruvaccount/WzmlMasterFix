@@ -192,11 +192,15 @@ async def add_mega_download(listener, path):
         listener.size = dl_listener._size
         if not listener.size and node:
             try:
-                listener.size = await sync_to_async(api.getSize, node)
-            except Exception:
-                pass
-        gid = token_hex(5)
+                LOGGER.info("Mega: getting size from correct api")
+                correct_api = folder_api if node == dl_listener.node and is_folder else api
+                listener.size = await sync_to_async(correct_api.getSize, node)
+                LOGGER.info("Mega: size=%s", listener.size)
+            except Exception as e:
+                LOGGER.info("Mega: size exception: %s", e)
 
+        LOGGER.info("Mega: stop_duplicate_check starting")
+        gid = token_hex(5)
         msg, button = await stop_duplicate_check(listener)
         if msg:
             await listener.on_download_error(msg, button)
