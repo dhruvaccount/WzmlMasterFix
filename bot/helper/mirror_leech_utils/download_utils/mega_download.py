@@ -3,8 +3,7 @@ from asyncio import Lock as AsyncLock, sleep as asleep
 from contextlib import suppress
 from secrets import token_hex
 
-from aiofiles.os import makedirs, path as aiopath
-from aioshutil import rmtree
+from aiofiles.os import makedirs
 from mega import MegaApi, MegaCancelToken
 
 from .... import LOGGER, task_dict, task_dict_lock, user_data
@@ -16,6 +15,8 @@ from ...ext_utils.task_manager import (
     stop_duplicate_check,
 )
 from ...ext_utils.bot_utils import sync_to_async
+from ...ext_utils.files_utils import clean_download
+from ...ext_utils.links_utils import get_mega_subfolder_handle, is_mega_folder_link
 from ...listeners.mega_listener import AsyncMega, MegaAppListener, MegaFolderListener, _mega_error_format
 from ...mirror_leech_utils.status_utils.mega_status import MegaDownloadStatus
 from ...mirror_leech_utils.status_utils.queue_status import QueueStatus
@@ -23,24 +24,6 @@ from ...mirror_leech_utils.status_utils.queue_status import QueueStatus
 
 _ACTIVE_MEGA_LINKS = set()
 _ACTIVE_MEGA_LINKS_LOCK = AsyncLock()
-
-
-def _is_folder_link(link: str) -> bool:
-    if not link:
-        return False
-    return "/folder/" in link or "#F!" in link
-
-
-def _get_subfolder_handle(link: str) -> str | None:
-    if not link:
-        return None
-    parts = link.split("/folder/")
-    if len(parts) >= 3:
-        return parts[-1].split("#")[0].split("/")[0].split("?")[0]
-    parts = link.split("#F!")
-    if len(parts) >= 3:
-        return parts[-1].split("!")[0].split("/")[0].split("?")[0]
-    return None
 
 
 def _find_child_by_handle(api, parent_node, target_handle):
@@ -93,11 +76,6 @@ async def _release_link(link: str):
         _ACTIVE_MEGA_LINKS.discard(link)
 
 
-async def _cleanup_dir(directory: str):
-    if directory and await aiopath.exists(directory):
-        await rmtree(directory, ignore_errors=True)
-
-
 async def add_mega_download(listener, path):
     if Config.DISABLE_MEGA:
         await listener.on_download_error("Mega Link downloads are currently disabled by the Bot Owner.")
@@ -127,8 +105,8 @@ async def add_mega_download(listener, path):
         api.addListener(mega_listener)
         api._listener_ref = mega_listener
 
-        is_folder = _is_folder_link(listener.link)
-        subfolder_handle = _get_subfolder_handle(listener.link)
+        is_folder = is_mega_folder_link(listener.link)
+        subfolder_handle = get_mega_subfolder_handle(listener.link)
 
         if is_folder:
             async_api.folder_api = folder_api = MegaApi("", mega_dir, "WZML-X", 4)
@@ -227,7 +205,7 @@ async def add_mega_download(listener, path):
         if listener.is_cancelled or dl_listener.is_cancelled:
             return
         download_path = path
-        if _is_folder_link(listener.link):
+        if is_mega_folder_link(listener.link):
             download_path = os.path.join(path, listener.name)
             await makedirs(download_path, exist_ok=True)
 
@@ -260,7 +238,7 @@ async def add_mega_download(listener, path):
             if attempt >= 4:
                 await listener.on_download_error(_mega_error_format(dl_listener.retryable_error))
                 return
-            await _cleanup_dir(download_path)
+            await clean_download(download_path)
             await asleep(2 ** attempt)
 
     except Exception as e:
@@ -279,4 +257,4 @@ async def add_mega_download(listener, path):
                     with suppress(Exception):
                         async_api.folder_api.removeListener(async_api._folder_listener)
         await _release_link(listener.link)
-        await _cleanup_dir(mega_base)
+        await clean_download(mega_base)

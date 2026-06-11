@@ -5,11 +5,11 @@ from mimetypes import guess_type
 from secrets import token_hex
 
 from aiofiles.os import makedirs, path as aiopath
-from aioshutil import rmtree
 from mega import MegaApi, MegaCancelToken
 
 from .... import LOGGER, task_dict, task_dict_lock
 from ...ext_utils.bot_utils import sync_to_async
+from ...ext_utils.files_utils import clean_download
 from ...listeners.mega_listener import AsyncMega, MegaAppListener, _mega_error_format
 from ...mirror_leech_utils.status_utils.mega_status import MegaDownloadStatus
 from ...telegram_helper.message_utils import update_status_message
@@ -24,10 +24,6 @@ def _make_cancel_token():
         LOGGER.error(f"Mega: failed to create cancel token: {e}")
         return None
 
-
-async def _cleanup_dir(directory: str):
-    if directory and await aiopath.exists(directory):
-        await rmtree(directory, ignore_errors=True)
 
 
 def _find_node_by_name(api, parent_node, name):
@@ -282,4 +278,4 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
             if async_api.api is not None and async_api._mega_listener is not None:
                 with suppress(Exception):
                     async_api.api.removeListener(async_api._mega_listener)
-        await _cleanup_dir(mega_base)
+        await clean_download(mega_base)
