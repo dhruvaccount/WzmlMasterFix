@@ -85,6 +85,12 @@ async def add_mega_clone(listener, link, mega_email, mega_password, gid):
             if is_folder:
                 folders = 1
                 files = 0
+            node_name = imported_node.getName()
+            if node_name:
+                listener.name = node_name
+            node_size = imported_node.getSize()
+            if node_size:
+                listener.size = node_size
         except Exception:
             pass
 
