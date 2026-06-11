@@ -145,12 +145,16 @@ async def add_mega_download(listener, path):
             await async_api.fetchNodes(api=folder_api)
             LOGGER.info("Mega: fetchNodes done")
             if dl_listener.error:
+                LOGGER.info("Mega: folder error detected, exiting")
                 await listener.on_download_error(_mega_error_format(dl_listener.error))
                 return
+            LOGGER.info("Mega: node=%s", dl_listener.node)
             if not dl_listener.node:
+                LOGGER.info("Mega: no root node, exiting")
                 await listener.on_download_error("Failed to get root node for MEGA folder")
                 return
 
+            LOGGER.info("Mega: subfolder_handle=%s", subfolder_handle)
             if subfolder_handle:
                 node = await sync_to_async(_find_child_by_handle, folder_api, dl_listener.node, subfolder_handle)
                 if not node:
@@ -159,6 +163,7 @@ async def add_mega_download(listener, path):
             else:
                 node = dl_listener.node
 
+            LOGGER.info("Mega: caching node data")
             dl_listener._cache_node_data(node)
             try:
                 dl_listener._size = folder_api.getSize(node)
