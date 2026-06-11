@@ -147,6 +147,7 @@ class AsyncMega:
         if self._transfer_future is None:
             LOGGER.error("Mega wait_for_transfer called without active transfer")
             return
+        LOGGER.info("Mega: wait_for_transfer entered")
         try:
             await wait_for(wrap_future(self._transfer_future), timeout=43200)
         except AsyncTimeoutError:
@@ -271,6 +272,7 @@ class AsyncMega:
 
     async def startUpload(self, localPath, parentNode, customName, cancelToken, mtime=-1):
         self._transfer_future = Future()
+        LOGGER.info("Mega: startUpload for %s", customName)
 
         options = MegaUploadOptions.createInstance()
         options.fileName = customName
@@ -295,6 +297,7 @@ class AsyncMega:
             cancelToken,
             options,
         )
+        LOGGER.info("Mega: startUpload sync_to_async returned for %s", customName)
 
     def __getattr__(self, name):
         attr = getattr(self.api, name)
