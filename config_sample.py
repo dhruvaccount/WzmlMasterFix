@@ -64,6 +64,12 @@ EXTRACT_LIMIT = 0
 ARCHIVE_LIMIT = 0
 STORAGE_LIMIT = 0
 
+# Image Search
+USE_IMAGES = False
+IMG_SEARCH = ""
+IMG_PAGE = 1
+IMG_SOURCES = ["wallpaperflare"]
+
 # Insta video downloader api
 INSTADL_API = ""
 

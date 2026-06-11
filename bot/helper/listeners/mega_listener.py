@@ -1,4 +1,5 @@
 from asyncio import Event, sleep as asleep, wait_for, wrap_future, TimeoutError as AsyncTimeoutError
+from threading import Event as ThreadEvent
 from concurrent.futures import Future
 from re import match as rematch
 from time import time
@@ -241,7 +242,7 @@ class AsyncMega:
             if auto_export:
                 export_future = Future()
                 self._export_future = export_future
-                export_event = Event()
+                export_event = ThreadEvent()
                 self._export_event = export_event
         try:
             await sync_to_async(self.api.importFileLink, link, parent)
@@ -251,7 +252,9 @@ class AsyncMega:
                 LOGGER.warning("import_link: no node returned for link")
                 return None
             if auto_export and export_event:
-                await wait_for(export_event.wait(), timeout=_REQUEST_TIMEOUT_SECONDS)
+                exp_ok = await sync_to_async(export_event.wait, timeout=_REQUEST_TIMEOUT_SECONDS)
+                if not exp_ok:
+                    LOGGER.error("Mega: export event TIMEOUT")
                 elink = getattr(ml, "_export_link", None) if ml else None
                 return node, elink
             return node
@@ -449,8 +452,8 @@ class MegaAppListener(MegaListener):
             LOGGER.error(f"Mega export future resolve failed: {e}")
         try:
             evt = self._async_api._export_event
-            if evt is not None and not evt.is_set():
-                bot_loop.call_soon_threadsafe(evt.set)
+            if evt is not None:
+                evt.set()
         except Exception as e:
             LOGGER.error(f"Mega export event set failed: {e}")
 

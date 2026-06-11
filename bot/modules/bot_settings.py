@@ -152,6 +152,7 @@ DEFAULT_DESP = {
     "IMG_SEARCH": "Comma-separated keywords to auto-fetch wallpaper images on startup. e.g. anime, nature, space",
     "IMG_PAGE": "Number of pages to search for each keyword in IMG_SEARCH. Each page has ~70 images. Default: 1",
     "USE_IMAGES": "Enable random photo backgrounds on bot messages. Requires IMAGES list. Default: False",
+    "IMG_SOURCES": "List of image sources to fetch from. Options: wallpaperflare, peapix, wallhaven. Default: wallpaperflare",
     "INC_TASK_NOTIFY": "Notify about incomplete tasks after restart. Default: False.",
     "INDEX_URL": "Google Drive Index URL for direct links.",
     "IS_TEAM_DRIVE": "Set True for TeamDrive uploads. Default: False.",
@@ -999,7 +1000,9 @@ async def edit_bot_settings(client, query):
     elif data[1] == "resetvar":
         await query.answer()
         value = ""
-        if data[2] in DEFAULT_VALUES:
+        if data[2] in ("IMAGES", "SEARCH_PLUGINS", "USENET_SERVERS", "YT_TAGS", "IMG_SOURCES"):
+            value = []
+        elif data[2] in DEFAULT_VALUES:
             value = DEFAULT_VALUES[data[2]]
             if (
                 data[2] == "STATUS_UPDATE_INTERVAL"

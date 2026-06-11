@@ -1,3 +1,4 @@
+from ast import literal_eval
 from importlib import import_module
 from os import getenv
 
@@ -49,6 +50,7 @@ class Config:
     IMG_SEARCH = ""
     IMG_PAGE = 1
     USE_IMAGES = False
+    IMG_SOURCES = ["wallpaperflare"]
     INC_TASK_NOTIFY = False
     INDEX_URL = ""
     IS_TEAM_DRIVE = False
@@ -233,6 +235,31 @@ class Config:
                 return float(value)
             except (ValueError, TypeError):
                 return original_value
+        elif isinstance(original_value, list):
+            if isinstance(value, list):
+                return value
+            if isinstance(value, str):
+                try:
+                    parsed = literal_eval(value)
+                    if isinstance(parsed, list):
+                        return parsed
+                except (ValueError, SyntaxError):
+                    pass
+                if value.startswith("[") and value.endswith("]"):
+                    return original_value
+                return [v.strip() for v in value.split(",") if v.strip()]
+            return original_value
+        elif isinstance(original_value, dict):
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, str):
+                try:
+                    parsed = literal_eval(value)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except (ValueError, SyntaxError):
+                    pass
+            return original_value
         return value
 
     @classmethod
