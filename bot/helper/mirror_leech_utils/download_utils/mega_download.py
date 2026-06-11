@@ -252,13 +252,7 @@ async def add_mega_download(listener, path):
             await listener.on_download_error(f"Internal error: {e}")
     finally:
         if async_api is not None:
-            if is_folder:
-                if async_api.folder_api is not None:
-                    with suppress(Exception):
-                        await async_api.run(
-                            async_api.folder_api.logout, False, None, timeout=10,
-                        )
-            else:
+            if not is_folder:
                 with suppress(Exception):
                     await async_api.logout()
             if async_api.api is not None and async_api._mega_listener is not None:
