@@ -191,8 +191,11 @@ class AsyncMega:
         if ml:
             ml._created_folder_node = None
         try:
+            LOGGER.info("Mega: createFolder calling SDK for '%s'", name)
             await sync_to_async(self.api.createFolder, name, parent)
+            LOGGER.info("Mega: createFolder SDK returned, waiting for callback for '%s'", name)
             await wait_for(wrap_future(future), timeout=_REQUEST_TIMEOUT_SECONDS)
+            LOGGER.info("Mega: createFolder callback received for '%s'", name)
             node = getattr(ml, "_created_folder_node", None) if ml else None
             if not node:
                 LOGGER.warning(f"create_folder: no node for '{name}'")
@@ -238,7 +241,6 @@ class AsyncMega:
         )
 
     async def startDownload(self, node, localPath, name, listener, startFirst, cancelToken, collisionCheck, collisionResolution, undelete):
-        LOGGER.info("Mega: startDownload creating transfer future")
         self._transfer_future = Future()
 
         ml = getattr(self, "_folder_listener", None) or getattr(self, "_mega_listener", None)
@@ -266,7 +268,6 @@ class AsyncMega:
         )
 
     async def startUpload(self, localPath, parentNode, customName, cancelToken, mtime=-1):
-        LOGGER.info("Mega: startUpload creating transfer future")
         self._transfer_future = Future()
 
         options = MegaUploadOptions.createInstance()
