@@ -158,6 +158,11 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
     api._listener_ref = mega_listener
 
     try:
+        if await aiopath.isdir(path):
+            listener.size = await _get_total_size(path)
+        else:
+            listener.size = await aiopath.getsize(path)
+
         async with task_dict_lock:
             task_dict[listener.mid] = MegaDownloadStatus(listener, mega_listener, gid, "up")
         await update_status_message(listener.message.chat.id)
@@ -193,7 +198,6 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
             if total_files == 0:
                 await listener.on_upload_error("No files to upload in folder")
                 return
-            listener.size = await _get_total_size(path)
             dir_name = os.path.basename(path.rstrip("/\\"))
 
             mega_root, folder_map = await _ensure_folder_structure(
@@ -243,7 +247,6 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
         else:
             total_files = 1
             file_name = os.path.basename(path)
-            listener.size = await aiopath.getsize(path)
             ok, link = await _upload_file(
                 async_api, mega_listener, path, root_node, file_name
             )

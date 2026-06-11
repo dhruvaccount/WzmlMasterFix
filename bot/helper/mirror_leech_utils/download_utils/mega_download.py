@@ -57,10 +57,13 @@ def _find_child_by_handle(api, parent_node, target_handle):
 def _find_child_in_list(children, target_handle):
     if not children:
         return None
+    _to_handle = getattr(MegaApi, "base64ToHandle", None)
+    target_int = _to_handle(target_handle) if _to_handle else None
     for i in range(children.size()):
         child = children.get(i)
         try:
-            if child.getHandle() == target_handle:
+            ch = child.getHandle()
+            if ch == target_handle or (target_int is not None and ch == target_int):
                 return child
         except Exception:
             pass
@@ -136,11 +139,15 @@ async def add_mega_download(listener, path):
             dl_listener = folder_listener
 
             await async_api.loginToFolder(listener.link)
+            if listener.is_cancelled or dl_listener.is_cancelled:
+                return
             if dl_listener.error:
                 await listener.on_download_error(_mega_error_format(dl_listener.error))
                 return
             await async_api.fetchNodes(api=folder_api)
             await asleep(0)
+            if listener.is_cancelled or dl_listener.is_cancelled:
+                return
             if dl_listener.error:
                 await listener.on_download_error(_mega_error_format(dl_listener.error))
                 return
@@ -159,14 +166,20 @@ async def add_mega_download(listener, path):
             dl_listener = mega_listener
             if mega_email and mega_password:
                 await async_api.login(mega_email, mega_password)
+                if listener.is_cancelled or mega_listener.is_cancelled:
+                    return
                 if mega_listener.error:
                     await listener.on_download_error(_mega_error_format(mega_listener.error))
                     return
                 await async_api.fetchNodes()
+                if listener.is_cancelled or mega_listener.is_cancelled:
+                    return
                 if mega_listener.error:
                     await listener.on_download_error(_mega_error_format(mega_listener.error))
                     return
             await async_api.getPublicNode(listener.link)
+            if listener.is_cancelled or mega_listener.is_cancelled:
+                return
             node = mega_listener.public_node
             if not node:
                 await listener.on_download_error("Failed to resolve MEGA link")
@@ -211,6 +224,8 @@ async def add_mega_download(listener, path):
             if listener.multi <= 1:
                 await send_status_message(listener.message)
 
+        if listener.is_cancelled or dl_listener.is_cancelled:
+            return
         download_path = path
         if _is_folder_link(listener.link):
             download_path = os.path.join(path, listener.name)
@@ -225,7 +240,6 @@ async def add_mega_download(listener, path):
             dl_listener._total_downloaded_bytes = 0
             dl_listener._caller_manages_completion = False
 
-            LOGGER.info("Mega: calling startDownload")
             await async_api.startDownload(
                 node,
                 download_path,
@@ -237,9 +251,7 @@ async def add_mega_download(listener, path):
                 2,
                 False,
             )
-            LOGGER.info("Mega: startDownload done, calling wait_for_transfer")
             await async_api.wait_for_transfer()
-            LOGGER.info("Mega: wait_for_transfer returned")
 
             if listener.is_cancelled or dl_listener.is_cancelled:
                 return
@@ -266,6 +278,5 @@ async def add_mega_download(listener, path):
                 if async_api.folder_api is not None and async_api._folder_listener is not None:
                     with suppress(Exception):
                         async_api.folder_api.removeListener(async_api._folder_listener)
-        LOGGER.info("Mega: cleanup done, exiting add_mega_download")
         await _release_link(listener.link)
         await _cleanup_dir(mega_base)
