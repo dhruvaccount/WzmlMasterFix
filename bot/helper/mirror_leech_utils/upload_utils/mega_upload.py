@@ -95,7 +95,6 @@ async def _upload_file(async_api, mega_listener, file_path, parent_node, custom_
         mega_listener._total_downloaded_bytes = 0
         mega_listener._caller_manages_completion = True
         mega_listener._size = await aiopath.getsize(file_path)
-        LOGGER.info("MegaUpload: calling startUpload for %s", custom_name)
 
         await async_api.startUpload(
             file_path,
@@ -172,6 +171,7 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
             return
 
         await async_api.fetchNodes()
+        await asleep(0)
         if mega_listener.error:
             await listener.on_upload_error(
                 f"Mega fetch nodes failed: {_mega_error_format(mega_listener.error)}"
@@ -179,7 +179,6 @@ async def add_mega_upload(listener, path, mega_email, mega_password, gid):
             return
 
         root_node = mega_listener.node
-        LOGGER.info("MegaUpload: root_node=%s", root_node is not None)
         if not root_node:
             await listener.on_upload_error(
                 "Failed to get Mega root node."

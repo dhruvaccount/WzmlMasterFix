@@ -1,4 +1,4 @@
-from asyncio import Event, wait_for, wrap_future, TimeoutError as AsyncTimeoutError
+from asyncio import Event, sleep as asleep, wait_for, wrap_future, TimeoutError as AsyncTimeoutError
 from concurrent.futures import Future
 from re import match as rematch
 from time import time
@@ -124,6 +124,7 @@ class AsyncMega:
         try:
             LOGGER.info("Mega: run(%s, src=%s)", fn_name, expected_source)
             await sync_to_async(function, *args, **kwargs)
+            await asleep(0)
             try:
                 await wait_for(wrap_future(future), timeout=timeout)
             except AsyncTimeoutError:
@@ -147,7 +148,7 @@ class AsyncMega:
         if self._transfer_future is None:
             LOGGER.error("Mega wait_for_transfer called without active transfer")
             return
-        LOGGER.info("Mega: wait_for_transfer entered")
+        await asleep(0)
         try:
             await wait_for(wrap_future(self._transfer_future), timeout=43200)
         except AsyncTimeoutError:
@@ -297,7 +298,6 @@ class AsyncMega:
             cancelToken,
             options,
         )
-        LOGGER.info("Mega: startUpload sync_to_async returned for %s", customName)
 
     def __getattr__(self, name):
         attr = getattr(self.api, name)
