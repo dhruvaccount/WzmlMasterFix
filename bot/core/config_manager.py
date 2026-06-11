@@ -8,6 +8,7 @@ class Config:
     BASE_URL = ""
     BOT_TOKEN = ""
     HELPER_TOKENS = ""
+    HELPER_STRINGS = ""
     BOT_MAX_TASKS = 0
     BOT_PM = False
     CMD_SUFFIX = ""

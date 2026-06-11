@@ -566,7 +566,7 @@ async def get_user_settings(from_user, stype="main"):
 ┟ <b>Name</b> → {user_name}
 ┃
 ┠ Leech Type → <b>{ltype}</b>
-┠ Custom Thumbnail → <b>{thumbmsg}</b>
+┠ Leech Thumbnail → <b>{thumbmsg}</b>
 ┠ Leech Split Size → <b>{get_readable_file_size(split_size)}</b>
 ┠ Equal Splits → <b>{equal_splits}</b>
 ┠ Media Group → <b>{media_group}</b>
@@ -575,7 +575,7 @@ async def get_user_settings(from_user, stype="main"):
 ┠ Leech Caption → <code>{escape(lcap)}</code>
 ┠ Leech Destination → <code>{leech_dest}</code>
 ┠ Leech by <b>{leech_method}</b> session
-┠ Mixed Leech → <b>{hybrid_leech}</b>
+┠ Hybrid Leech → <b>{hybrid_leech}</b>
 ┖ Thumbnail Layout → <b>{thumb_layout}</b>
 """
 
@@ -584,6 +584,7 @@ async def get_user_settings(from_user, stype="main"):
         buttons.data_button(
             "Change Destination ⇋",
             f"userset {user_id} uphoster_destinations",
+            "header"
         )
         buttons.data_button("Gofile Tools", f"userset {user_id} gofile")
         buttons.data_button("BuzzHeavier Tools", f"userset {user_id} buzzheavier")

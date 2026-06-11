@@ -70,7 +70,10 @@ async def main():
     Formatter.converter = changetz
 
     await gather(
-        TgClient.start_bot(), TgClient.start_user(), TgClient.start_helper_bots()
+        TgClient.start_bot(),
+        TgClient.start_user(),
+        TgClient.start_helper_bots(),
+        TgClient.start_helper_users(),
     )
     await gather(load_configurations(), update_variables())
 
@@ -113,12 +116,9 @@ def _handle_asyncio_exception(loop, context):
     exc = context.get("exception")
     if exc and isinstance(exc, (KeyError, ValueError)):
         msg = str(exc)
-        if "unknown constructor" in msg.lower() or "server sent an unknown" in msg.lower():
-            LOGGER.warning(f"Pyrogram schema mismatch detected: {msg}. Restarting user client...")
-            try:
-                bot_loop.create_task(TgClient.reload())
-            except Exception:
-                pass
+        msg_lower = msg.lower()
+        if "unknown constructor" in msg_lower or "server sent an unknown" in msg_lower:
+            LOGGER.warning(f"Pyrogram schema mismatch (tg side): {msg}")
             return
     loop.default_exception_handler(context)
 
