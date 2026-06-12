@@ -251,13 +251,10 @@ class AsyncMega:
                 LOGGER.warning("import_link: no node returned for link")
                 return None
             if auto_export and export_event:
-                LOGGER.info("Mega: awaiting export event")
                 exp_ok = await sync_to_async(export_event.wait, timeout=_REQUEST_TIMEOUT_SECONDS)
-                LOGGER.info(f"Mega: export event done exp_ok={exp_ok}")
                 if not exp_ok:
                     LOGGER.error("Mega: export event TIMEOUT")
                 elink = getattr(ml, "_export_link", None) if ml else None
-                LOGGER.info(f"Mega: returning from import_link has_elink={bool(elink)}")
                 return True, elink
             return True
         except AsyncTimeoutError:
@@ -454,10 +451,8 @@ class MegaAppListener(MegaListener):
             LOGGER.error(f"Mega export future resolve failed: {e}")
         try:
             evt = self._async_api._export_event
-            LOGGER.info(f"Mega: _set_export_done has_evt={evt is not None}")
             if evt is not None:
                 evt.set()
-                LOGGER.info("Mega: _set_export_done evt.set() done")
         except Exception as e:
             LOGGER.error(f"Mega export event set failed: {e}")
 
