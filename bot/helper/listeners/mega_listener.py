@@ -247,8 +247,8 @@ class AsyncMega:
         try:
             await sync_to_async(self.api.importFileLink, link, parent)
             await wait_for(wrap_future(future), timeout=_REQUEST_TIMEOUT_SECONDS)
-            node = getattr(ml, "_imported_node", None) if ml else None
-            if not node:
+            import_ok = bool(ml and ml._import_success)
+            if not import_ok:
                 LOGGER.warning("import_link: no node returned for link")
                 return None
             if auto_export and export_event:
@@ -256,8 +256,8 @@ class AsyncMega:
                 if not exp_ok:
                     LOGGER.error("Mega: export event TIMEOUT")
                 elink = getattr(ml, "_export_link", None) if ml else None
-                return node, elink
-            return node
+                return True, elink
+            return True
         except AsyncTimeoutError:
             LOGGER.error("import_link timed out")
             if auto_export:
@@ -406,6 +406,7 @@ class MegaAppListener(MegaListener):
         self._uploaded_node_handle = None
         self._created_folder_node = None
         self._imported_node = None
+        self._import_success = False
         self._imported_node_name = None
         self._imported_node_size = 0
         self._imported_node_is_folder = False
@@ -586,6 +587,7 @@ class MegaAppListener(MegaListener):
                     node = api.getNodeByHandle(handle) if handle else None
                     if node:
                         self._imported_node = node
+                        self._import_success = True
                         self._imported_node_name = node.getName()
                         self._imported_node_size = node.getSize()
                         self._imported_node_is_folder = node.isFolder()

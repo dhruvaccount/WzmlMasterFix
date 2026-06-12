@@ -72,8 +72,8 @@ async def add_mega_clone(listener, link, mega_email, mega_password, gid):
                 await listener.on_upload_error("Mega import returned no node.")
             return None, 0, 0
 
-        imported_node, export_link = result
-        if not imported_node:
+        import_ok, export_link = result
+        if not import_ok:
             await listener.on_upload_error("Mega import returned no node.")
             return None, 0, 0
 
