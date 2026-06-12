@@ -142,6 +142,8 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
         LOGGER.warning(f"PeerIdInvalid {type(message)}") # My Debug Style
         if isinstance(message, (int, str)):
             return await send_message(int(message), text, buttons, block, photo)
+    except ConnectionError:
+        return
     except Exception as e:
         LOGGER.error(str(e), exc_info=True)
         return str(e)
@@ -196,6 +198,8 @@ async def edit_message(message, text, buttons=None, block=True, photo=None):
             return str(f)
         await sleep(f.value * 1.2)
         return await edit_message(message, text, buttons, block, photo)
+    except ConnectionError:
+        return
     except Exception as e:
         LOGGER.error(str(e), exc_info=True)
         return str(e)
@@ -210,6 +214,8 @@ async def edit_reply_markup(message, buttons):
         LOGGER.warning(str(f))
         await sleep(f.value * 1.2)
         return await edit_reply_markup(message, buttons)
+    except ConnectionError:
+        return
     except Exception as e:
         LOGGER.error(str(e), exc_info=True)
         return str(e)
@@ -228,6 +234,8 @@ async def send_file(message, file, caption="", buttons=None):
         LOGGER.warning(str(f))
         await sleep(f.value * 1.2)
         return await send_file(message, file, caption)
+    except ConnectionError:
+        return
     except Exception as e:
         LOGGER.error(str(e), exc_info=True)
         return str(e)
@@ -246,6 +254,8 @@ async def send_rss(text, chat_id, thread_id):
         LOGGER.warning(str(f))
         await sleep(f.value * 1.2)
         return await send_rss(text, chat_id, thread_id)
+    except ConnectionError:
+        return
     except Exception as e:
         LOGGER.error(str(e), exc_info=True)
         return str(e)

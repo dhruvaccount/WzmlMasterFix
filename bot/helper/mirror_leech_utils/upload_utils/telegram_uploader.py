@@ -80,10 +80,13 @@ class TelegramUploader:
 
     async def _upload_progress(self, current, _):
         if self._listener.is_cancelled:
-            if self._user_session:
-                TgClient.user.stop_transmission()
-            else:
-                self._listener.client.stop_transmission()
+            try:
+                if self._user_session:
+                    TgClient.user.stop_transmission()
+                else:
+                    self._listener.client.stop_transmission()
+            except ConnectionError:
+                pass
         chunk_size = current - self._last_uploaded
         self._last_uploaded = current
         self._processed_bytes += chunk_size

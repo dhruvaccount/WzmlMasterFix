@@ -93,7 +93,7 @@ FIRST_SPLIT_REGEX = (
     r"\.part0*1\.rar$|\.7z\.0*1$|\.zip\.0*1$|^(?!.*\.part\d+\.rar$).*\.rar$"
 )
 
-SPLIT_REGEX = r"\.r\d+$|\.7z\.\d+$|\.z\d+$|\.zip\.\d+$|\.part\d+\.rar$"
+SPLIT_REGEX = r"\.\w+\.\d{3}$|\.r\d+$|\.7z\.\d+$|\.z\d+$|\.zip\.\d+$|\.part\d+\.rar$"
 
 
 def is_first_archive_split(file):

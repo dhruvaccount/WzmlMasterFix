@@ -22,6 +22,7 @@ from pyrogram.handlers import MessageHandler
 from .. import (
     LOGGER,
     aria2_options,
+    bot_loop,
     categories_dict,
     drives_ids,
     drives_names,
@@ -31,6 +32,7 @@ from .. import (
     nzb_options,
     qbit_options,
     sabnzbd_client,
+    scheduler,
     task_dict,
     shortener_dict,
     excluded_extensions,
@@ -201,8 +203,8 @@ DEFAULT_DESP = {
     "MEDIA_GROUP": "Upload split parts as media group. Default: False.",
     "HYBRID_LEECH": "Use both premium and normal upload methods for speed. Default: True.",
     "HYPER_THREADS": "Number of parallel download parts (clients). 0 = auto.",
-    "HYPER_PIPELINE": "Concurrent GetFile requests per HyperDL part. Default: 32.",
-    "HYPER_CHUNK": "HyperDL working chunk size in bytes. Default: 256 * 1024 (256KB).",
+    "HYPER_PIPELINE": "Concurrent GetFile requests per HyperDL part. Default: 64.",
+    "HYPER_CHUNK": "HyperDL working chunk size in bytes. Default: 512 * 1024 (512KB).",
     "HYDRA_IP": "Hydra API IP address for search.",
     "HYDRA_API_KEY": "Hydra API key for search.",
     "NAME_SWAP": "Rename files using pattern. Format: old:new|old2:new2.",
@@ -380,7 +382,7 @@ async def get_buttons(key=None, edit_type=None, edit_mode=False):
                 buttons.data_button(label, f"botset toggleonoff {k} off")
         buttons.data_button("Back", "botset back", position="footer")
         buttons.data_button("Close", "botset close", position="footer", style=ButtonStyle.DANGER)
-        msg = "⌬ <b><u>On/Off Settings</u></b>"
+        msg = "⌬ <b><u>Module Settings</u></b>"
     elif key == "private":
         if edit_mode:
             buttons.data_button("Stop Invoke File", "botset private stop", "header")
@@ -673,8 +675,62 @@ async def toggle_onoff_var(_, query, pre_message, key, value):
     handler_dict[query.message.chat.id] = False
     bool_value = value == "on"
     Config.set(key, bool_value)
-    await update_buttons(pre_message, "setonoff")
     await database.update_config({key: bool_value})
+    await _handle_service_toggle(key, bool_value)
+    await update_buttons(pre_message, "setonoff")
+
+
+async def _handle_service_toggle(key, disabled):
+    if key == "DISABLE_JD":
+        if disabled:
+            if jdownloader.is_connected:
+                try:
+                    await jdownloader.device.downloadcontroller.stop_downloads()
+                    await jdownloader.close()
+                except Exception:
+                    pass
+                try:
+                    await create_subprocess_exec("pkill", "-9", "-f", "java").wait()
+                except Exception:
+                    pass
+                LOGGER.info("JDownloader stopped via Module Settings")
+        else:
+            try:
+                from ..core.startup import load_configurations
+                load_configurations()
+            except Exception:
+                pass
+            bot_loop.create_task(jdownloader.boot())
+            LOGGER.info("JDownloader starting via Module Settings")
+    elif key == "DISABLE_NZB":
+        if disabled:
+            if sabnzbd_client.LOGGED_IN:
+                try:
+                    await gather(
+                        sabnzbd_client.pause_all(),
+                        sabnzbd_client.close(),
+                    )
+                except Exception:
+                    pass
+                try:
+                    await create_subprocess_exec("pkill", "-9", "-f", "SABnzbd").wait()
+                except Exception:
+                    pass
+                LOGGER.info("SABnzbd stopped via Module Settings")
+        else:
+            LOGGER.info("SABnzbd requires restart to re-enable")
+    elif key == "DISABLE_RSS":
+        if disabled:
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+                LOGGER.info("RSS Scheduler stopped via Module Settings")
+        else:
+            if not scheduler.running:
+                try:
+                    scheduler.start()
+                    LOGGER.info("RSS Scheduler started via Module Settings")
+                except Exception:
+                    pass
 
 
 @new_task

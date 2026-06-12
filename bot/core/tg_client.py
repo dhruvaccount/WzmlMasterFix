@@ -233,18 +233,21 @@ class TgClient:
     @classmethod
     async def stop(cls):
         async with cls._lock:
+            clients = []
             if cls.bot:
-                await cls.bot.stop()
+                clients.append(cls.bot.stop())
                 cls.bot = None
             if cls.user:
-                await cls.user.stop()
+                clients.append(cls.user.stop())
                 cls.user = None
             if cls.helper_bots:
-                await gather(*[h_bot.stop() for h_bot in cls.helper_bots.values()])
+                clients.extend(h_bot.stop() for h_bot in cls.helper_bots.values())
                 cls.helper_bots = {}
             if cls.helper_users:
-                await gather(*[h_user.stop() for h_user in cls.helper_users.values()])
+                clients.extend(h_user.stop() for h_user in cls.helper_users.values())
                 cls.helper_users = {}
+            if clients:
+                await gather(*clients, return_exceptions=True)
             LOGGER.info("All Client(s) stopped")
 
     @classmethod
