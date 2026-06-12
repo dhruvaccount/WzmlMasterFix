@@ -26,6 +26,11 @@ class Config:
     DISABLE_SEED = False
     DISABLE_FF_MODE = False
     DISABLE_MEGA = False
+    DISABLE_JD = False
+    DISABLE_NZB = False
+    DISABLE_RSS = False
+    DISABLE_SEARCH = False
+    DISABLE_YTDLP = False
     EQUAL_SPLITS = False
     EXCLUDED_EXTENSIONS = ""
     FFMPEG_CMDS = {}

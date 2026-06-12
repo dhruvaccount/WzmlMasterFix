@@ -43,12 +43,15 @@ async def main():
 
     await load_settings()
 
-    from bot import _sabnzbd_key, _update_sabnzbd_ini, sabnzbd_client
-    derived_key = _sabnzbd_key()
-    _update_sabnzbd_ini(derived_key)
-    sabnzbd_client._default_params["apikey"] = derived_key
-    from .helper.ext_utils.db_handler import database
-    await database.update_nzb_config()
+    if not Config.DISABLE_NZB:
+        from bot import _sabnzbd_key, _update_sabnzbd_ini, sabnzbd_client
+
+        derived_key = _sabnzbd_key()
+        _update_sabnzbd_ini(derived_key)
+        sabnzbd_client._default_params["apikey"] = derived_key
+        from .helper.ext_utils.db_handler import database
+
+        await database.update_nzb_config()
 
     from .helper.telegram_helper.bot_commands import BotCommands
 
@@ -93,7 +96,8 @@ async def main():
     )
 
     await save_settings()
-    bot_loop.create_task(jdownloader.boot())
+    if not Config.DISABLE_JD:
+        bot_loop.create_task(jdownloader.boot())
     bot_loop.create_task(clean_all())
     bot_loop.create_task(initiate_search_tools())
     bot_loop.create_task(get_packages_version())

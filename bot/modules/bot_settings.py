@@ -87,10 +87,15 @@ BOOL_VARS = [
     "DRIVE_CATEGORY_MODE",
     "DISABLE_BULK",
     "DISABLE_FF_MODE",
+    "DISABLE_JD",
     "DISABLE_LEECH",
     "DISABLE_MULTI",
+    "DISABLE_NZB",
+    "DISABLE_RSS",
+    "DISABLE_SEARCH",
     "DISABLE_SEED",
     "DISABLE_TORRENTS",
+    "DISABLE_YTDLP",
     "DISABLE_MEGA",
     "EQUAL_SPLITS",
     "HYBRID_LEECH",
@@ -131,6 +136,11 @@ DEFAULT_DESP = {
     "DISABLE_SEED": "Disable seeding after torrent download. Default: False.",
     "DISABLE_FF_MODE": "Disable FFmpeg processing mode. Default: False.",
     "DISABLE_MEGA": "Disable Mega Processor for bot. Default: False.",
+    "DISABLE_JD": "Disable JDownloader downloads. Saves ~256-500MB RAM. Default: False.",
+    "DISABLE_NZB": "Disable SABnzbd/Usenet downloads. Saves ~100-200MB RAM. Default: False.",
+    "DISABLE_RSS": "Disable RSS feed monitoring. Saves CPU cycles. Default: False.",
+    "DISABLE_SEARCH": "Disable torrent search plugins. Saves network I/O. Default: False.",
+    "DISABLE_YTDLP": "Disable YouTube/YT-DLP downloads. Default: False.",
     "EQUAL_SPLITS": "Split files into equal parts of LEECH_SPLIT_SIZE. Default: False.",
     "EXCLUDED_EXTENSIONS": "File extensions to exclude from upload/clone. Space-separated.",
     "FFMPEG_CMDS": "Custom FFmpeg command presets. Dict format.",
@@ -265,6 +275,11 @@ ONOFF_VARS = [
     "DISABLE_SEED",
     "DISABLE_FF_MODE",
     "DISABLE_MEGA",
+    "DISABLE_JD",
+    "DISABLE_NZB",
+    "DISABLE_RSS",
+    "DISABLE_SEARCH",
+    "DISABLE_YTDLP",
 ]
 
 
@@ -272,7 +287,7 @@ async def get_buttons(key=None, edit_type=None, edit_mode=False):
     buttons = ButtonMaker()
     if key is None:
         buttons.data_button("Config Variables", "botset var")
-        buttons.data_button("On/Off Settings", "botset setonoff")
+        buttons.data_button("Module Settings", "botset setonoff")
         buttons.data_button("Private Files", "botset private open")
         buttons.data_button("Qbit Settings", "botset qbit")
         buttons.data_button("Aria2c Settings", "botset aria")

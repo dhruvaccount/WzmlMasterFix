@@ -68,6 +68,9 @@ async def add_servers():
 
 
 async def add_nzb(listener, path):
+    if Config.DISABLE_NZB:
+        await listener.on_download_error("SABnzbd is currently disabled by the Bot Owner.")
+        return
     if not sabnzbd_client.LOGGED_IN:
         try:
             await add_servers()

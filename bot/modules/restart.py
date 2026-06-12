@@ -189,7 +189,7 @@ async def confirm_restart(_, query):
         await mega_cleanup()
         await clean_all()
         await TorrentManager.close_all()
-        if sabnzbd_client.LOGGED_IN:
+        if not Config.DISABLE_NZB and sabnzbd_client.LOGGED_IN:
             await gather(
                 sabnzbd_client.pause_all(),
                 sabnzbd_client.delete_job("all", True),
@@ -197,7 +197,7 @@ async def confirm_restart(_, query):
                 sabnzbd_client.delete_history("all", delete_files=True),
             )
             await sabnzbd_client.close()
-        if jdownloader.is_connected:
+        if not Config.DISABLE_JD and jdownloader.is_connected:
             await gather(
                 jdownloader.device.downloadcontroller.stop_downloads(),
                 jdownloader.device.linkgrabber.clear_list(),

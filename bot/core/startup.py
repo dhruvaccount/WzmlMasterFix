@@ -75,24 +75,25 @@ async def update_aria2_options():
 
 
 async def update_nzb_options():
-    if Config.USENET_SERVERS:
-        LOGGER.info("Get SABnzbd options from server")
-        retries = 10
-        for i in range(retries):
-            try:
-                no = (await sabnzbd_client.get_config())["config"]["misc"]
-                nzb_options.update(no)
-                break
-            except Exception as e:
-                if i == retries - 1:
-                    LOGGER.error(
-                        f"Failed to get SABnzbd options after {retries} retries: {e}"
-                    )
-                    return
-                LOGGER.warning(
-                    f"SABnzbd not ready, retrying ({i + 1}/{retries}): {e}"
+    if Config.DISABLE_NZB or not Config.USENET_SERVERS:
+        return
+    LOGGER.info("Get SABnzbd options from server")
+    retries = 10
+    for i in range(retries):
+        try:
+            no = (await sabnzbd_client.get_config())["config"]["misc"]
+            nzb_options.update(no)
+            break
+        except Exception as e:
+            if i == retries - 1:
+                LOGGER.error(
+                    f"Failed to get SABnzbd options after {retries} retries: {e}"
                 )
-                await sleep(2)
+                return
+            LOGGER.warning(
+                f"SABnzbd not ready, retrying ({i + 1}/{retries}): {e}"
+            )
+            await sleep(2)
 
 
 async def load_settings():
@@ -370,10 +371,11 @@ async def load_configurations():
         async with aiopen(".netrc", "w"):
             pass
 
+    cmd = f"chmod 600 .netrc && cp .netrc /root/.netrc && chmod +x setpkgs.sh && ./setpkgs.sh {BinConfig.ARIA2_NAME}"
+    if not Config.DISABLE_NZB:
+        cmd += f" {BinConfig.SABNZBD_NAME}"
     await (
-        await create_subprocess_shell(
-            f"chmod 600 .netrc && cp .netrc /root/.netrc && chmod +x setpkgs.sh && ./setpkgs.sh {BinConfig.ARIA2_NAME} {BinConfig.SABNZBD_NAME}"
-        )
+        await create_subprocess_shell(cmd)
     ).wait()
 
     PORT = getenv("PORT", "") or "8080"

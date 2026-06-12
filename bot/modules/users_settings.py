@@ -867,8 +867,9 @@ async def get_user_settings(from_user, stype="main"):
         if Config.DRIVE_CATEGORY_MODE:
             dc_enabled = user_dict.get("drive_cat_mode", False)
             buttons.data_button(
-                f"Drive Cat: {'ON' if dc_enabled else 'OFF'}",
+                f"Drive Categories: {'ON' if dc_enabled else 'OFF'}",
                 f"userset {user_id} tog drive_cat_mode {'f' if dc_enabled else 't'}",
+                "header"
             )
         buttons.data_button("Back", f"userset {user_id} back", "footer")
         buttons.data_button(
