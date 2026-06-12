@@ -1,4 +1,4 @@
-from asyncio import create_subprocess_exec, gather, get_event_loop
+from asyncio import create_subprocess_exec, gather, get_event_loop, sleep
 from datetime import datetime
 from os import execl as osexecl
 from sys import executable
@@ -88,6 +88,7 @@ async def restart_notification():
                 await _resume_tasks(notifier_dict)
             if Config.INC_TASK_NOTIFY:
                 await _notify_tasks(notifier_dict, chat_id, now)
+            await database.drop_incomplete_tasks()
 
     if await aiopath.isfile(".restartmsg"):
         try:
@@ -157,7 +158,7 @@ async def _resume_tasks(notifier_dict):
                                 f"Resume: cannot fetch reply msg {reply_to_msg_id}: {e}"
                             )
                     await handler(TgClient.bot, msg)
-                    await delete_message(msg)
+                    await sleep(1)
                 except Exception as e:
                     LOGGER.error(f"Resume: failed for '{command}' in {cid}: {e}")
 

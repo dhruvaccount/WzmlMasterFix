@@ -27,6 +27,8 @@ for _h in getLogger().handlers:
         break
 from .core.tg_client import TgClient
 
+_clean_task = None
+
 
 async def main():
     from asyncio import gather
@@ -98,7 +100,8 @@ async def main():
     await save_settings()
     if not Config.DISABLE_JD:
         bot_loop.create_task(jdownloader.boot())
-    bot_loop.create_task(clean_all())
+    global _clean_task
+    _clean_task = bot_loop.create_task(clean_all())
     bot_loop.create_task(initiate_search_tools())
     bot_loop.create_task(get_packages_version())
     bot_loop.create_task(telegraph.create_account())
@@ -132,6 +135,7 @@ add_handlers()
 
 from .modules import restart_notification
 
+bot_loop.run_until_complete(_clean_task)
 bot_loop.run_until_complete(restart_notification())
 
 from .core.plugin_manager import get_plugin_manager

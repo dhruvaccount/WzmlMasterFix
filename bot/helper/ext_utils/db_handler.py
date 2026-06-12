@@ -267,8 +267,12 @@ class DbManager:
                         notifier_dict[cid][tag] = [task_data]
                 else:
                     notifier_dict[cid] = {tag: [task_data]}
-        await self.db.tasks[_part()].drop()
         return notifier_dict
+
+    async def drop_incomplete_tasks(self):
+        if self._return:
+            return
+        await self.db.tasks[_part()].drop()
 
     async def trunc_table(self, name):
         if self._return:
