@@ -132,6 +132,8 @@ class Clone(TaskListener):
             )
             await delete_links(self.message)
             return
+        if is_mega_link(self.link) and self.up_dest not in ("mega", "mega:"):
+            self.up_dest = "mega:"
         LOGGER.info(self.link)
         try:
             await self.before_start()
