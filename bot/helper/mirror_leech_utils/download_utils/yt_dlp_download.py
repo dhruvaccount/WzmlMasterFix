@@ -86,6 +86,8 @@ class YoutubeDLHelper:
             "downloader": {
                 "http": f"/bin/{BinConfig.ARIA2_NAME}",
                 "https": f"/bin/{BinConfig.ARIA2_NAME}",
+                "dash": "native",
+                "m3u8": "native",
                 "default": f"/bin/{BinConfig.FFMPEG_NAME}",
             },
             "downloader_args": {
