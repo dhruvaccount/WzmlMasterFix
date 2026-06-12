@@ -11,8 +11,6 @@ from asyncio import new_event_loop, set_event_loop
 bot_loop = new_event_loop()
 set_event_loop(bot_loop)
 
-from subprocess import run as srun
-from os import getcwd
 from asyncio import Lock
 from logging import (
     ERROR,
@@ -28,7 +26,7 @@ from time import time
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from .core.config_manager import BinConfig, Config
+from .core.config_manager import Config
 from sabnzbdapi import SabnzbdClient
 
 getLogger("requests").setLevel(WARNING)
@@ -143,6 +141,5 @@ sabnzbd_client = SabnzbdClient(
     api_key=_sabnzbd_api_key,
     port="8070",
 )
-srun([BinConfig.QBIT_NAME, "-d", f"--profile={getcwd()}"], check=False)
 
 scheduler = AsyncIOScheduler(event_loop=bot_loop)

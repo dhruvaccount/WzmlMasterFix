@@ -77,9 +77,6 @@ async def main():
     )
     await gather(load_configurations(), update_variables())
 
-    from .core.torrent_manager import TorrentManager
-
-    await TorrentManager.initiate()
     await gather(
         update_qb_options(),
         update_aria2_options(),
@@ -95,15 +92,13 @@ async def main():
         initiate_search_tools,
     )
 
-    await gather(
-        save_settings(),
-        jdownloader.boot(),
-        clean_all(),
-        initiate_search_tools(),
-        get_packages_version(),
-        telegraph.create_account(),
-        rclone_serve_booter(),
-    )
+    await save_settings()
+    bot_loop.create_task(jdownloader.boot())
+    bot_loop.create_task(clean_all())
+    bot_loop.create_task(initiate_search_tools())
+    bot_loop.create_task(get_packages_version())
+    bot_loop.create_task(telegraph.create_account())
+    bot_loop.create_task(rclone_serve_booter())
     bot_loop.create_task(search_images())
 
 

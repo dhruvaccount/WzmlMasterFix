@@ -1,7 +1,8 @@
-from asyncio import TimeoutError, gather
+from asyncio import TimeoutError, create_subprocess_exec, gather, sleep
 from contextlib import suppress
 from inspect import iscoroutinefunction
 from pathlib import Path
+from os import getcwd
 
 from aioaria2 import Aria2WebsocketClient
 from aiohttp import ClientError
@@ -14,7 +15,7 @@ from tenacity import (
 )
 
 from .. import LOGGER, aria2_options
-from .config_manager import Config
+from .config_manager import BinConfig, Config
 
 
 def wrap_with_retry(obj, max_retries=3):
@@ -51,6 +52,12 @@ class TorrentManager:
             if Config.DISABLE_TORRENTS:
                 LOGGER.info("Torrents are disabled.")
                 return
+
+            proc = await create_subprocess_exec(
+                BinConfig.QBIT_NAME, "-d", f"--profile={getcwd()}"
+            )
+            await sleep(2)
+            LOGGER.info(f"qBittorrent started (PID: {proc.pid})")
 
             cls.qbittorrent = await create_client("http://localhost:8090/api/v2/")
             cls.qbittorrent = wrap_with_retry(cls.qbittorrent)

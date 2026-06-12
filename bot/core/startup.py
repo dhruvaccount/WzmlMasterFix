@@ -1,4 +1,4 @@
-from asyncio import create_subprocess_exec, create_subprocess_shell, sleep
+from asyncio import create_subprocess_exec, create_subprocess_shell, gather, sleep
 from importlib import import_module
 from os import environ, path as ospath, getenv
 
@@ -141,39 +141,47 @@ async def load_settings():
             )
 
         LOGGER.info("Updating.. Saved Config imported from MongoDB")
-        config_dict = (
-            await database.db.settings.config.find_one(deploy_filter, {"_id": 0})
-            or {}
+
+        qb_task = None
+        if not Config.DISABLE_TORRENTS:
+            qb_task = database.db.settings.qbittorrent.find_one(
+                deploy_filter, {"_id": 0}
+            )
+
+        results = await gather(
+            database.db.settings.config.find_one(deploy_filter, {"_id": 0}) or {},
+            database.db.settings.files.find_one(deploy_filter, {"_id": 0}),
+            database.db.settings.aria2c.find_one(deploy_filter, {"_id": 0}),
+            qb_task,
+            database.db.settings.nzb.find_one(deploy_filter, {"_id": 0}),
+            database.db.users[PART].find_one(),
+            database.db.rss[PART].find_one(),
         )
+
+        config_dict, pf_dict, a2c_options, qbit_opt, nzb_opt, user_exists, rss_exists = results
+
+        if config_dict is None:
+            config_dict = {}
         for k, v in config_file.items():
             if v is not None:
                 config_dict[k] = v
         if config_dict:
             Config.load_dict(config_dict)
 
-        if pf_dict := await database.db.settings.files.find_one(
-            deploy_filter, {"_id": 0}
-        ):
+        if pf_dict:
             for key, value in pf_dict.items():
                 if value:
                     file_ = key.replace("__", ".")
                     async with aiopen(file_, "wb+") as f:
                         await f.write(value)
 
-        if a2c_options := await database.db.settings.aria2c.find_one(
-            deploy_filter, {"_id": 0}
-        ):
+        if a2c_options:
             aria2_options.update(a2c_options)
 
-        if not Config.DISABLE_TORRENTS:
-            if qbit_opt := await database.db.settings.qbittorrent.find_one(
-                deploy_filter, {"_id": 0}
-            ):
-                qbit_options.update(qbit_opt)
+        if qbit_opt:
+            qbit_options.update(qbit_opt)
 
-        if nzb_opt := await database.db.settings.nzb.find_one(
-            deploy_filter, {"_id": 0}
-        ):
+        if nzb_opt:
             if await aiopath.exists("sabnzbd/SABnzbd.ini.bak"):
                 await remove("sabnzbd/SABnzbd.ini.bak")
             for key, value in nzb_opt.items():
@@ -183,7 +191,7 @@ async def load_settings():
                         await f.write(value)
             LOGGER.info("Loaded.. Sabnzbd Data from MongoDB")
 
-        if await database.db.users[PART].find_one():
+        if user_exists:
             rows = database.db.users[PART].find({})
             async for row in rows:
                 uid = row["_id"]
@@ -217,7 +225,7 @@ async def load_settings():
                 user_data[uid] = row
             LOGGER.info("Users Data has been imported from MongoDB")
 
-        if await database.db.rss[PART].find_one():
+        if rss_exists:
             rows = database.db.rss[PART].find({})
             async for row in rows:
                 user_id = row["_id"]
