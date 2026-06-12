@@ -236,7 +236,6 @@ class AsyncMega:
         export_future = None
         export_event = None
         if ml:
-            ml._imported_node = None
             ml._export_link = None
             ml._auto_export = auto_export
             if auto_export:
@@ -252,10 +251,13 @@ class AsyncMega:
                 LOGGER.warning("import_link: no node returned for link")
                 return None
             if auto_export and export_event:
+                LOGGER.info("Mega: awaiting export event")
                 exp_ok = await sync_to_async(export_event.wait, timeout=_REQUEST_TIMEOUT_SECONDS)
+                LOGGER.info(f"Mega: export event done exp_ok={exp_ok}")
                 if not exp_ok:
                     LOGGER.error("Mega: export event TIMEOUT")
                 elink = getattr(ml, "_export_link", None) if ml else None
+                LOGGER.info(f"Mega: returning from import_link has_elink={bool(elink)}")
                 return True, elink
             return True
         except AsyncTimeoutError:
@@ -405,7 +407,6 @@ class MegaAppListener(MegaListener):
         self._target_handle = None
         self._uploaded_node_handle = None
         self._created_folder_node = None
-        self._imported_node = None
         self._import_success = False
         self._imported_node_name = None
         self._imported_node_size = 0
@@ -453,8 +454,10 @@ class MegaAppListener(MegaListener):
             LOGGER.error(f"Mega export future resolve failed: {e}")
         try:
             evt = self._async_api._export_event
+            LOGGER.info(f"Mega: _set_export_done has_evt={evt is not None}")
             if evt is not None:
                 evt.set()
+                LOGGER.info("Mega: _set_export_done evt.set() done")
         except Exception as e:
             LOGGER.error(f"Mega export event set failed: {e}")
 
@@ -586,16 +589,18 @@ class MegaAppListener(MegaListener):
                     handle = request.getNodeHandle()
                     node = api.getNodeByHandle(handle) if handle else None
                     if node:
-                        self._imported_node = node
+                        name = node.getName()
+                        size = node.getSize()
+                        is_folder = node.isFolder()
+                        self._imported_node_name = name
+                        self._imported_node_size = size
+                        self._imported_node_is_folder = is_folder
                         self._import_success = True
-                        self._imported_node_name = node.getName()
-                        self._imported_node_size = node.getSize()
-                        self._imported_node_is_folder = node.isFolder()
                         if self._auto_export:
                             self._auto_export = False
                             api.exportNode(node, 0, False, False, None)
-                except Exception:
-                    pass
+                except Exception as e:
+                    LOGGER.error(f"Mega import link callback error: {e}")
 
             if self._is_expected_request(request_type) and self._is_expected_source(source):
                 self._set_request_event()

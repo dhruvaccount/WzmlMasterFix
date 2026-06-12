@@ -63,6 +63,7 @@ async def add_mega_clone(listener, link, mega_email, mega_password, gid):
             return None, 0, 0
 
         result = await async_api.import_link(link, root_node, auto_export=True)
+        LOGGER.info(f"MegaClone: import_link returned result={result}")
         if result is None:
             if mega_listener.error:
                 await listener.on_upload_error(
