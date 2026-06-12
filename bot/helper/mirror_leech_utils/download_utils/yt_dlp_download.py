@@ -73,33 +73,24 @@ class YoutubeDLHelper:
             "trim_file_name": 220,
             "ffmpeg_location": f"/bin/{BinConfig.FFMPEG_NAME}",
             "concurrent_fragments": 8,
-            "throttled_rate": 500000,
             "impersonate": ImpersonateTarget.from_str("chrome"),
             "socket_timeout": 30,
+            "downloader": {
+                "http": f"/bin/{BinConfig.ARIA2_NAME}",
+                "https": f"/bin/{BinConfig.ARIA2_NAME}",
+            },
+            "downloader_args": {
+                BinConfig.ARIA2_NAME: [
+                    "-x16", "-k1M", "-s16",
+                    "--max-tries=5", "--retry-wait=3",
+                ],
+            },
             "extractor_args": {
                 "youtube": {
                     "player_client": ["mweb"],
                     "skip": ["webpage", "configs"],
                 },
                 "youtubetab": {"skip": ["webpage"]},
-            },
-            "downloader": {
-                "http": f"/bin/{BinConfig.ARIA2_NAME}",
-                "https": f"/bin/{BinConfig.ARIA2_NAME}",
-                "dash": "native",
-                "m3u8": "native",
-                "default": f"/bin/{BinConfig.FFMPEG_NAME}",
-            },
-            "downloader_args": {
-                BinConfig.ARIA2_NAME: [
-                    "-x16",
-                    "-k1M",
-                    "-s16",
-                    "--max-tries=5",
-                    "--retry-wait=3",
-                    "--http-accept-gzip=true",
-                    "--uri-selector=inverse",
-                ],
             },
             "hls_use_mpegts": True,
             "fragment_retries": 10,
