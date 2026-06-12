@@ -102,7 +102,7 @@ def verify_pin(gid, pin, bot_id):
 
 COMMAND_USAGE = {}
 
-THREAD_POOL = ThreadPoolExecutor(max_workers=500)
+THREAD_POOL = ThreadPoolExecutor(max_workers=70)
 
 
 class SetInterval:
