@@ -458,6 +458,7 @@ async def search_images():
     if not Config.USE_IMAGES:
         return
 
+    LOGGER.info("IMG_SEARCH: Starting background image fetch...")
     sources = Config.IMG_SOURCES if isinstance(Config.IMG_SOURCES, list) else ["wallpaperflare"]
     query_list = []
     if Config.IMG_SEARCH:

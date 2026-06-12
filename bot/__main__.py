@@ -105,8 +105,8 @@ async def main():
         restart_notification(),
         telegraph.create_account(),
         rclone_serve_booter(),
-        search_images(),
     )
+    bot_loop.create_task(search_images())
 
 
 bot_loop.run_until_complete(main())
