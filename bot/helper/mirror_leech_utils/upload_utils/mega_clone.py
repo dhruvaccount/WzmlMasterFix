@@ -8,31 +8,7 @@ from mega import MegaApi
 from .... import LOGGER, task_dict, task_dict_lock
 from ...telegram_helper.message_utils import update_status_message
 from ...listeners.mega_listener import AsyncMega, MegaAppListener, _mega_error_format
-from ...ext_utils.bot_utils import sync_to_async
 from ...mirror_leech_utils.status_utils.mega_status import MegaDownloadStatus
-
-
-async def _count_mega_children(api, node):
-    count_files = 0
-    count_folders = 0
-    try:
-        children = await sync_to_async(api.getChildren, node)
-        if children:
-            for i in range(children.size()):
-                child = children.get(i)
-                try:
-                    if child.isFolder():
-                        count_folders += 1
-                        f, d = await _count_mega_children(api, child)
-                        count_files += f
-                        count_folders += d
-                    else:
-                        count_files += 1
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    return count_files, count_folders
 
 
 async def add_mega_clone(listener, link, mega_email, mega_password, gid):
@@ -104,13 +80,8 @@ async def add_mega_clone(listener, link, mega_email, mega_password, gid):
         files = 1
         folders = 0
         if mega_listener._imported_node_is_folder:
-            handle = mega_listener._imported_node_handle
-            if handle:
-                imported_folder = await sync_to_async(api.getNodeByHandle, handle)
-                if imported_folder:
-                    file_count, folder_count = await _count_mega_children(api, imported_folder)
-                    files = file_count
-                    folders = folder_count + 1
+            folders = 1
+            files = 0
         if mega_listener._imported_node_name:
             listener.name = mega_listener._imported_node_name
         if mega_listener._imported_node_size:

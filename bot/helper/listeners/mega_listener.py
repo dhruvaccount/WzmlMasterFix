@@ -405,7 +405,6 @@ class MegaAppListener(MegaListener):
         self._uploaded_node_handle = None
         self._created_folder_node = None
         self._import_success = False
-        self._imported_node_handle = None
         self._imported_node_name = None
         self._imported_node_size = 0
         self._imported_node_is_folder = False
@@ -585,7 +584,6 @@ class MegaAppListener(MegaListener):
                     handle = request.getNodeHandle()
                     node = api.getNodeByHandle(handle) if handle else None
                     if node:
-                        self._imported_node_handle = handle
                         name = node.getName()
                         size = node.getSize()
                         is_folder = node.isFolder()
