@@ -371,7 +371,9 @@ async def load_configurations():
         async with aiopen(".netrc", "w"):
             pass
 
-    cmd = f"chmod 600 .netrc && cp .netrc /root/.netrc && chmod +x setpkgs.sh && ./setpkgs.sh {BinConfig.ARIA2_NAME}"
+    from bot import service_cores
+
+    cmd = f"chmod 600 .netrc && cp .netrc /root/.netrc && chmod +x setpkgs.sh && ./setpkgs.sh {BinConfig.ARIA2_NAME} \"{service_cores}\" {Config.CPU_LIMIT}"
     if not Config.DISABLE_NZB:
         cmd += f" {BinConfig.SABNZBD_NAME}"
     await (

@@ -16,7 +16,6 @@ from .. import (
     LOGGER,
     categories_dict,
     cores,
-    ff_lock,
     excluded_extensions,
     intervals,
     multi_tags,
@@ -26,6 +25,7 @@ from .. import (
 )
 from ..core.config_manager import Config, BinConfig
 from ..core.tg_client import TgClient
+from ..helper.ext_utils.bot_lock import ff_lock
 from .ext_utils.bot_utils import (
     fetch_drive_cat,
     get_size_bytes,
@@ -927,7 +927,7 @@ class TaskConfig:
                                         await move(res[0], newres)
         finally:
             if checked:
-                ff_lock.release()
+                await ff_lock.release()
         return dl_path
 
     async def substitute(self, dl_path):

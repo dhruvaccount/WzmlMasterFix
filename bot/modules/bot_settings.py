@@ -203,8 +203,10 @@ DEFAULT_DESP = {
     "MEDIA_GROUP": "Upload split parts as media group. Default: False.",
     "HYBRID_LEECH": "Use both premium and normal upload methods for speed. Default: True.",
     "HYPER_THREADS": "Number of parallel download parts (clients). 0 = auto.",
-    "HYPER_PIPELINE": "Concurrent GetFile requests per HyperDL part. Default: 64.",
+    "HYPER_PIPELINE": "Concurrent GetFile requests per HyperDL part. Default: 128.",
     "HYPER_CHUNK": "HyperDL working chunk size in bytes. Default: 512 * 1024 (512KB).",
+    "CPU_LIMIT": "CPU limit percentage for background services (SABnzbd, JDownloader). Default: 20.",
+    "THROTTLE_SERVICES": "Pause services during heavy ops (FFmpeg). auto=low-end only, always, never.",
     "HYDRA_IP": "Hydra API IP address for search.",
     "HYDRA_API_KEY": "Hydra API key for search.",
     "NAME_SWAP": "Rename files using pattern. Format: old:new|old2:new2.",
@@ -697,7 +699,7 @@ async def _handle_service_toggle(key, disabled):
         else:
             try:
                 from ..core.startup import load_configurations
-                load_configurations()
+                await load_configurations()
             except Exception:
                 pass
             bot_loop.create_task(jdownloader.boot())
@@ -1169,7 +1171,7 @@ async def edit_bot_settings(client, query):
         await database.update_aria2(data[2], "")
     elif data[1] == "emptyqbit":
         await query.answer()
-        await TorrentManager.qbittorrent.app.set_preferences({data[2]: value})
+        await TorrentManager.qbittorrent.app.set_preferences({data[2]: ""})
         qbit_options[data[2]] = ""
         await update_buttons(message, "qbit")
         await database.update_qbittorrent(data[2], "")

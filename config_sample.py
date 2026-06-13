@@ -69,6 +69,12 @@ EXTRACT_LIMIT = 0
 ARCHIVE_LIMIT = 0
 STORAGE_LIMIT = 0
 
+# CPU limit for background services (SABnzbd, JDownloader). Default: 20
+CPU_LIMIT = 20
+
+# Throttle services during heavy ops (FFmpeg). auto=low-end only, always, never
+THROTTLE_SERVICES = "auto"
+
 # Image Search
 USE_IMAGES = False
 IMG_SEARCH = ""

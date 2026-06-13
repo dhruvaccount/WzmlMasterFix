@@ -75,8 +75,11 @@ async def _send_msg(cid, msg):
 
 async def restart_notification():
     if await aiopath.isfile(".restartmsg"):
-        with open(".restartmsg") as f:
-            chat_id, msg_id = map(int, f)
+        try:
+            with open(".restartmsg") as f:
+                chat_id, msg_id = map(int, f)
+        except Exception:
+            chat_id, msg_id = 0, 0
     else:
         chat_id, msg_id = 0, 0
 
@@ -84,11 +87,13 @@ async def restart_notification():
 
     if Config.DATABASE_URL and (Config.INC_TASK_NOTIFY or Config.INC_TASK_RESUME):
         if notifier_dict := await database.get_incomplete_tasks():
-            if Config.INC_TASK_RESUME:
-                await _resume_tasks(notifier_dict)
-            if Config.INC_TASK_NOTIFY:
-                await _notify_tasks(notifier_dict, chat_id, now)
-            await database.drop_incomplete_tasks()
+            try:
+                if Config.INC_TASK_RESUME:
+                    await _resume_tasks(notifier_dict)
+                if Config.INC_TASK_NOTIFY:
+                    await _notify_tasks(notifier_dict, chat_id, now)
+            finally:
+                await database.drop_incomplete_tasks()
 
     if await aiopath.isfile(".restartmsg"):
         try:

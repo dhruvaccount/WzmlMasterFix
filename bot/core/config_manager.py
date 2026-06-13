@@ -91,8 +91,10 @@ class Config:
     MEDIA_GROUP = False
     HYBRID_LEECH = True
     HYPER_THREADS = 0
-    HYPER_PIPELINE = 64
+    HYPER_PIPELINE = 128
     HYPER_CHUNK = 512 * 1024
+    CPU_LIMIT = 20
+    THROTTLE_SERVICES = "auto"
     HYDRA_IP = ""
     HYDRA_API_KEY = ""
     NAME_SWAP = ""

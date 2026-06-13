@@ -135,7 +135,11 @@ add_handlers()
 
 from .modules import restart_notification
 
-bot_loop.run_until_complete(_clean_task)
+if _clean_task is not None:
+    try:
+        bot_loop.run_until_complete(_clean_task)
+    except Exception as e:
+        LOGGER.error(f"clean_all error: {e}")
 bot_loop.run_until_complete(restart_notification())
 
 from .core.plugin_manager import get_plugin_manager
