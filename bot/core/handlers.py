@@ -133,7 +133,7 @@ def add_handlers():
     TgClient.bot.add_handler(
         MessageHandler(
             select,
-            filters=command(BotCommands.SelectCommand, case_sensitive=True)
+            filters=regex(rf"^/{BotCommands.SelectCommand[1]}?(?:_\w+).*$")
             & CustomFilters.authorized,
         )
     )
