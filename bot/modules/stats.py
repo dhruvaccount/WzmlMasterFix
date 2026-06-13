@@ -91,7 +91,7 @@ async def get_stats(event, key="home"):
         bot_ram_total = bot_ram_mb * 1024 * 1024
         bot_ram_used = min(memory.used, bot_ram_total)
         bot_ram_free = max(0, bot_ram_total - bot_ram_used)
-        bot_ram_pct = (bot_ram_used / bot_ram_total * 100) if bot_ram_total > 0 else 0
+        bot_ram_pct = round((bot_ram_used / bot_ram_total * 100), 2) if bot_ram_total > 0 else 0
         instance_cpu = res["cpu_count"]
         sys_cpu = cpu_count(logical=True)
         p_cores = cpu_count(logical=False)

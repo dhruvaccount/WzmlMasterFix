@@ -143,14 +143,12 @@ async def load_settings():
 
         LOGGER.info("Updating.. Saved Config imported from MongoDB")
 
-        qb_task = None
-        if not Config.DISABLE_TORRENTS:
-            qb_task = database.db.settings.qbittorrent.find_one(
-                deploy_filter, {"_id": 0}
-            )
+        qb_task = database.db.settings.qbittorrent.find_one(
+            deploy_filter, {"_id": 0}
+        ) if not Config.DISABLE_TORRENTS else await sleep(0)
 
         results = await gather(
-            database.db.settings.config.find_one(deploy_filter, {"_id": 0}) or {},
+            database.db.settings.config.find_one(deploy_filter, {"_id": 0}),
             database.db.settings.files.find_one(deploy_filter, {"_id": 0}),
             database.db.settings.aria2c.find_one(deploy_filter, {"_id": 0}),
             qb_task,
