@@ -37,6 +37,17 @@ def wrap_with_retry(obj, max_retries=3):
     return obj
 
 
+async def _connect_aria2(retries=5, delay=2):
+    from aioaria2.exceptions import Aria2rpcException
+    for i in range(retries):
+        try:
+            return await Aria2WebsocketClient.new("http://localhost:6800/jsonrpc")
+        except Aria2rpcException:
+            if i == retries - 1:
+                raise
+            await sleep(delay)
+
+
 class TorrentManager:
     aria2 = None
     qbittorrent = None
@@ -46,7 +57,7 @@ class TorrentManager:
         if cls.aria2:
             return
         try:
-            cls.aria2 = await Aria2WebsocketClient.new("http://localhost:6800/jsonrpc")
+            cls.aria2 = await _connect_aria2()
             LOGGER.info("Aria2 initialized successfully.")
 
             if Config.DISABLE_TORRENTS:
