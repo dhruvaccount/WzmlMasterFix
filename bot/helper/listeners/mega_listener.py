@@ -1,4 +1,4 @@
-from asyncio import Event, sleep as asleep, wait_for, wrap_future, TimeoutError as AsyncTimeoutError
+from asyncio import Event, Lock as AsyncLock, sleep as asleep, wait_for, wrap_future, TimeoutError as AsyncTimeoutError
 from threading import Event as ThreadEvent
 from concurrent.futures import Future
 from re import match as rematch
@@ -32,6 +32,7 @@ async def mega_cleanup():
             pass
 
 
+_MEGA_SDK_LOCK = AsyncLock()
 _REQUEST_TIMEOUT_SECONDS = 300
 _LOGOUT_TIMEOUT_SECONDS = 30
 
