@@ -25,6 +25,8 @@ services:
 
   app:
     build: .
+    environment:
+      - TZ=${TZ:-UTC}
     command: bash start.sh
     restart: unless-stopped
     volumes:
@@ -32,8 +34,6 @@ services:
       - ./accounts:/usr/src/app/accounts
       - ./downloads:/usr/src/app/downloads
       - ./sabnzbd:/usr/src/app/sabnzbd
-      - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
     expose:
       - "8080"
 
