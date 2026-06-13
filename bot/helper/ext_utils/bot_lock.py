@@ -2,7 +2,7 @@ from asyncio import Lock, Semaphore
 from os import sched_getaffinity
 from pathlib import Path
 
-from ..core.config_manager import Config
+from ...core.config_manager import Config
 
 
 def _read_cgroup_file(path):
