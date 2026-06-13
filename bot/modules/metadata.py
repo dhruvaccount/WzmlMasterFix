@@ -59,10 +59,12 @@ async def apply_metadata_title(
     async with task_dict_lock:
         task_dict[self.mid] = MetadataStatus(self, ffmpeg, gid, "up")
     self.progress = False
-    await ff_lock.acquire()
-    self.progress = True
 
+    lock_acquired = False
     try:
+        await ff_lock.acquire()
+        lock_acquired = True
+        self.progress = True
         for file_path, is_video, is_audio in files:
             if self.is_cancelled:
                 break
@@ -184,5 +186,6 @@ async def apply_metadata_title(
                 if await aiopath.exists(temp_out):
                     await remove(temp_out)
     finally:
-        await ff_lock.release()
+        if lock_acquired:
+            await ff_lock.release()
     return dl_path

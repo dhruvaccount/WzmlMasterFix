@@ -791,6 +791,7 @@ class TaskConfig:
 
     async def proceed_ffmpeg(self, dl_path, gid):
         checked = False
+        lock_acquired = False
         cmds = [
             [part.strip() for part in split(item) if part.strip()]
             for item in self.ffmpeg_cmds
@@ -854,6 +855,7 @@ class TaskConfig:
                             )
                         self.progress = False
                         await ff_lock.acquire()
+                        lock_acquired = True
                         self.progress = True
                     LOGGER.info(f"Running ffmpeg cmd for: {file_path}")
                     var_cmd = cmd.copy()
@@ -912,6 +914,7 @@ class TaskConfig:
                                     )
                                 self.progress = False
                                 await ff_lock.acquire()
+                                lock_acquired = True
                                 self.progress = True
                             LOGGER.info(f"Running ffmpeg cmd for: {f_path}")
                             self.subsize = await get_path_size(f_path)
@@ -926,7 +929,7 @@ class TaskConfig:
                                         newres = ospath.join(dirpath, newname)
                                         await move(res[0], newres)
         finally:
-            if checked:
+            if lock_acquired:
                 await ff_lock.release()
         return dl_path
 
