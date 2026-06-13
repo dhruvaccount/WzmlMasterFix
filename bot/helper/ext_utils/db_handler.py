@@ -118,7 +118,7 @@ class DbManager:
     async def update_nzb_config(self):
         if self._return:
             return
-        async with aiopen("sabnzbd/SABnzbd.ini", "rb+") as pf:
+        async with aiopen("configs/sabnzbd/SABnzbd.ini", "rb+") as pf:
             nzb_conf = await pf.read()
         await self.db.settings.nzb.replace_one(
             {"_id": _part()}, {"SABnzbd__ini": nzb_conf}, upsert=True

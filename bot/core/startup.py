@@ -183,12 +183,12 @@ async def load_settings():
             qbit_options.update(qbit_opt)
 
         if nzb_opt:
-            if await aiopath.exists("sabnzbd/SABnzbd.ini.bak"):
-                await remove("sabnzbd/SABnzbd.ini.bak")
+            if await aiopath.exists("configs/sabnzbd/SABnzbd.ini.bak"):
+                await remove("configs/sabnzbd/SABnzbd.ini.bak")
             for key, value in nzb_opt.items():
                 if value:
                     file_ = key.replace("__", ".")
-                    async with aiopen(f"sabnzbd/{file_}", "wb+") as f:
+                    async with aiopen(f"configs/sabnzbd/{file_}", "wb+") as f:
                         await f.write(value)
             LOGGER.info("Loaded.. Sabnzbd Data from MongoDB")
 
@@ -255,7 +255,7 @@ async def save_settings():
     if await database.db.settings.qbittorrent.find_one(deploy_filter) is None:
         await database.save_qbit_settings()
     if await database.db.settings.nzb.find_one(deploy_filter) is None:
-        async with aiopen("sabnzbd/SABnzbd.ini", "rb+") as pf:
+        async with aiopen("configs/sabnzbd/SABnzbd.ini", "rb+") as pf:
             nzb_conf = await pf.read()
         await database.db.settings.nzb.update_one(
             deploy_filter, {"$set": {"SABnzbd__ini": nzb_conf}}, upsert=True

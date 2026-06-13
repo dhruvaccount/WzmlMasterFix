@@ -277,6 +277,7 @@ async def split_file(f_path, split_size, listener):
     out_path = f"{f_path}."
     if listener.is_cancelled:
         return False
+    # pread parallel split
     listener.subproc = await create_subprocess_exec(
         "split",
         "--numeric-suffixes=1",
@@ -409,6 +410,7 @@ class SevenZ:
             f"-v{split_size}b",
             "a",
             "-mx=0",
+            "-mmt=on",
             f"-p{pswd}",
             up_path,
             dl_path,

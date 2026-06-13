@@ -54,7 +54,7 @@ class TorrentManager:
                 return
 
             proc = await create_subprocess_exec(
-                BinConfig.QBIT_NAME, "-d", f"--profile={getcwd()}"
+                BinConfig.QBIT_NAME, "-d", f"--profile={getcwd()}/configs/qbittorrent"
             )
             await sleep(2)
             LOGGER.info(f"qBittorrent started (PID: {proc.pid})")

@@ -117,7 +117,7 @@ def _update_sabnzbd_ini(api_key):
     pat_key = _re(r"^api_key\s*=.*$", MULTILINE)
     pat_pwd = _re(r'^password\s*=.*$', MULTILINE)
     try:
-        with open("sabnzbd/SABnzbd.ini", "r+") as f:
+        with open("configs/sabnzbd/SABnzbd.ini", "r+") as f:
             content = f.read()
             new = content
             new = pat_key.sub(f"api_key = {api_key}", new)
