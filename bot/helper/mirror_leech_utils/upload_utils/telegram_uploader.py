@@ -75,7 +75,7 @@ class TelegramUploader:
         self._is_private = False
         self._sent_msg = None
         self._log_msg = None
-        self._user_session = self._listener.user_transmission
+        self._user_session = self._listener.transmission_mode in ("user", "both")
         self._error = ""
 
     async def _upload_progress(self, current, _):
@@ -299,7 +299,7 @@ class TelegramUploader:
 
     async def _send_media_group(self, subkey, key, msgs):
         for index, msg in enumerate(msgs):
-            if self._listener.hybrid_leech or not self._user_session:
+            if self._listener.transmission_mode == "both" or not self._user_session:
                 msgs[index] = await self._listener.client.get_messages(
                     chat_id=msg[0], message_ids=msg[1]
                 )
@@ -378,7 +378,7 @@ class TelegramUploader:
                                 for subkey, msgs in list(value.items()):
                                     if len(msgs) > 1:
                                         await self._send_media_group(subkey, key, msgs)
-                    if self._listener.hybrid_leech and self._listener.user_transmission:
+                    if self._listener.transmission_mode == "both":
                         self._user_session = f_size > 2097152000
                         if self._user_session:
                             self._sent_msg = await TgClient.user.get_messages(

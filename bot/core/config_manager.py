@@ -89,7 +89,6 @@ class Config:
     LEECH_FONT = ""
     LEECH_SPLIT_SIZE = 2097152000
     MEDIA_GROUP = False
-    HYBRID_LEECH = True
     HYPER_THREADS = 0
     HYPER_PIPELINE = 128
     HYPER_CHUNK = 512 * 1024
@@ -139,7 +138,7 @@ class Config:
     UPDATE_PKGS = True
     USENET_SERVERS = []
     USER_SESSION_STRING = ""
-    USER_TRANSMISSION = True
+    TRANSMISSION_MODE = "both"
     USE_SERVICE_ACCOUNTS = False
     WEB_ACCESS_PASSWORD = ""
     WEB_PINCODE = True
