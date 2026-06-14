@@ -112,21 +112,25 @@ class HyperTGUpload:
                     try:
                         parser = target_client.parser
                         if parser is not None:
-                            text, entities = parser.parse(caption, pm)
+                            text, entities = await parser.parse(caption, pm)
                     except Exception:
                         pass
 
             if isinstance(doc, raw.types.Document):
                 send_media = raw.types.InputMediaDocument(
-                    id=doc.id,
-                    access_hash=doc.access_hash,
-                    file_reference=doc.file_reference,
+                    id=raw.types.InputDocument(
+                        id=doc.id,
+                        access_hash=doc.access_hash,
+                        file_reference=doc.file_reference,
+                    ),
                 )
             elif isinstance(doc, raw.types.Photo):
                 send_media = raw.types.InputMediaPhoto(
-                    id=doc.id,
-                    access_hash=doc.access_hash,
-                    file_reference=doc.file_reference,
+                    id=raw.types.InputPhoto(
+                        id=doc.id,
+                        access_hash=doc.access_hash,
+                        file_reference=doc.file_reference,
+                    ),
                 )
             else:
                 raise ValueError(f"Unexpected doc type: {type(doc)}")
