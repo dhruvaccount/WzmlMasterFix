@@ -1,7 +1,7 @@
 from ast import literal_eval
 from importlib import import_module
 from os import getenv
-
+from wz_bin import bin_name
 
 class Config:
     AS_DOCUMENT = False
@@ -13,7 +13,7 @@ class Config:
     BOT_MAX_TASKS = 0
     BOT_PM = False
     CMD_SUFFIX = ""
-    COLORED_BTNS = False
+    COLORED_BTNS = True
     DEFAULT_LANG = "en"
     DATABASE_URL = ""
     DEFAULT_UPLOAD = "rc"
@@ -26,8 +26,8 @@ class Config:
     DISABLE_SEED = False
     DISABLE_FF_MODE = False
     DISABLE_MEGA = False
-    DISABLE_JD = False
-    DISABLE_NZB = False
+    DISABLE_JD = True
+    DISABLE_NZB = True
     DISABLE_RSS = False
     DISABLE_SEARCH = False
     DISABLE_YTDLP = False
@@ -92,6 +92,8 @@ class Config:
     HYPER_THREADS = 0
     HYPER_PIPELINE = 128
     HYPER_CHUNK = 512 * 1024
+    HYPERUL_WORKERS = 8
+    HYPERUL_PIPELINE = 64
     CPU_LIMIT = 20
     THROTTLE_SERVICES = "auto"
     HYDRA_IP = ""
@@ -300,8 +302,8 @@ class Config:
 
 
 class BinConfig:
-    ARIA2_NAME = "blitzfetcher"
-    QBIT_NAME = "stormtorrent"
-    FFMPEG_NAME = "mediaforge"
-    RCLONE_NAME = "ghostdrive"
-    SABNZBD_NAME = "newsripper"
+    ARIA2_NAME = bin_name(0)
+    QBIT_NAME = bin_name(1)
+    FFMPEG_NAME = bin_name(2)
+    RCLONE_NAME = bin_name(3)
+    SABNZBD_NAME = bin_name(4)

@@ -89,9 +89,14 @@ async def get_stats(event, key="home"):
         res = get_system_resources_cached()
         bot_ram_mb = res["ram_mb"]
         bot_ram_total = bot_ram_mb * 1024 * 1024
-        bot_ram_used = Process().memory_info().rss
+        user = Process().username()
+        bot_ram_used = sum(
+            p.memory_info().rss for p in process_iter() if p.username() == user
+        )
         bot_ram_free = max(0, bot_ram_total - bot_ram_used)
-        bot_ram_pct = round((bot_ram_used / bot_ram_total * 100), 2) if bot_ram_total > 0 else 0
+        bot_ram_pct = (
+            round((bot_ram_used / bot_ram_total * 100), 2) if bot_ram_total > 0 else 0
+        )
         instance_cpu = res["cpu_count"]
         sys_cpu = cpu_count(logical=True)
         p_cores = cpu_count(logical=False)

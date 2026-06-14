@@ -138,7 +138,7 @@ async def load_settings():
             database.db.settings.aria2c.find_one(deploy_filter, {"_id": 0}),
             database.db.settings.qbittorrent.find_one(
                 deploy_filter, {"_id": 0}
-            ) if not Config.DISABLE_TORRENTS else await sleep(0),
+            ) if not Config.DISABLE_TORRENTS else sleep(0),
             database.db.settings.nzb.find_one(deploy_filter, {"_id": 0}),
             database.db.users[PART].find_one(),
             database.db.rss[PART].find_one(),

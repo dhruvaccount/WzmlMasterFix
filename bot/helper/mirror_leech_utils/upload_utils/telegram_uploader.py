@@ -7,12 +7,12 @@ from time import time
 from aioshutil import rmtree
 from natsort import natsorted
 from PIL import Image
-from pyrogram.errors import BadRequest, FloodWait, RPCError
-
-try:
-    from pyrogram.errors import FloodPremiumWait
-except ImportError:
-    FloodPremiumWait = FloodWait
+from pyrogram.errors import RPCError
+from pyrogram.raw.types import (
+    DocumentAttributeAudio,
+    DocumentAttributeFilename,
+    DocumentAttributeVideo,
+)
 from aiofiles.os import (
     path as aiopath,
     remove,
@@ -23,16 +23,10 @@ from pyrogram.types import (
     InputMediaPhoto,
     InputMediaVideo,
 )
-from tenacity import (
-    RetryError,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
 
 from ....core.config_manager import Config
 from ....core.tg_client import TgClient
+from ...ext_utils.hyperul_utils import HyperTGUpload
 from ...ext_utils.bot_utils import sync_to_async
 from ...ext_utils.files_utils import get_base_name, is_archive
 from ...ext_utils.status_utils import get_readable_file_size, get_readable_time
@@ -350,6 +344,7 @@ class TelegramUploader:
                 await self._send_screenshots(dirpath, files)
                 await rmtree(dirpath, ignore_errors=True)
                 continue
+            self._hu = HyperTGUpload()
             for file_ in natsorted(files):
                 self._error = ""
                 self._up_path = f_path = ospath.join(dirpath, file_)
@@ -406,11 +401,6 @@ class TelegramUploader:
                         self._msgs_dict[self._sent_msg.link] = file_
                     await sleep(1)
                 except Exception as err:
-                    if isinstance(err, RetryError):
-                        LOGGER.info(
-                            f"Total Attempts: {err.last_attempt.attempt_number}"
-                        )
-                        err = err.last_attempt.exception()
                     LOGGER.error(f"{err}. Path: {self._up_path}", exc_info=True)
                     self._error = str(err)
                     self._corrupted += 1
@@ -447,11 +437,47 @@ class TelegramUploader:
         )
         return
 
-    @retry(
-        wait=wait_exponential(multiplier=2, min=4, max=8),
-        stop=stop_after_attempt(3),
-        retry=retry_if_exception_type(Exception),
-    )
+    async def _hyperul_upload(self, cap_mono, file, thumb, key, duration=0, width=0, height=0, artist="", title=""):
+        attr_base = [DocumentAttributeFilename(file_name=file)]
+        if key == "videos":
+            attrs = [
+                DocumentAttributeVideo(
+                    duration=duration or 0, w=width or 480, h=height or 320, supports_streaming=True
+                ),
+                *attr_base,
+            ]
+            mtype = "video"
+        elif key == "audios":
+            attrs = [
+                DocumentAttributeAudio(
+                    duration=duration or 0, performer=artist or "", title=title or ""
+                ),
+                *attr_base,
+            ]
+            mtype = "audio"
+        elif key == "documents":
+            attrs = attr_base
+            mtype = "document"
+        else:
+            mtype = "photo"
+            attrs = None
+        target_client = TgClient.user if self._user_session else self._listener.client
+        return await self._hu.upload(
+            target_client=target_client,
+            target_chat_id=self._sent_msg.chat.id,
+            file_path=self._up_path,
+            dump_chat_id=Config.LEECH_DUMP_CHAT,
+            media_type=mtype,
+            attributes=attrs,
+            thumb_path=thumb if thumb and thumb != "none" else None,
+            caption=cap_mono,
+            parse_mode=self._listener.parse_mode,
+            reply_to_message_id=self._sent_msg.id,
+            disable_notification=True,
+            progress=self._upload_progress,
+            cancel=lambda: self._listener.is_cancelled,
+        )
+
     async def _upload_file(self, cap_mono, file, o_path, force_document=False):
         if self._sent_msg is None:
             LOGGER.error("Cannot upload: _sent_msg is None")
@@ -501,15 +527,7 @@ class TelegramUploader:
                     return
                 if thumb == "none":
                     thumb = None
-                self._sent_msg = await self._sent_msg.reply_document(
-                    document=self._up_path,
-                    quote=True,
-                    thumb=thumb,
-                    caption=cap_mono,
-                    disable_content_type_detection=True,
-                    disable_notification=True,
-                    progress=self._upload_progress,
-                )
+                self._sent_msg = await self._hyperul_upload(cap_mono, file, thumb, key)
             elif is_video:
                 key = "videos"
                 duration = (await get_media_info(self._up_path))[0]
@@ -531,18 +549,7 @@ class TelegramUploader:
                     return
                 if thumb == "none":
                     thumb = None
-                self._sent_msg = await self._sent_msg.reply_video(
-                    video=self._up_path,
-                    quote=True,
-                    caption=cap_mono,
-                    duration=duration,
-                    width=width,
-                    height=height,
-                    thumb=thumb,
-                    supports_streaming=True,
-                    disable_notification=True,
-                    progress=self._upload_progress,
-                )
+                self._sent_msg = await self._hyperul_upload(cap_mono, file, thumb, key, duration, width, height)
             elif is_audio:
                 key = "audios"
                 duration, artist, title = await get_media_info(self._up_path)
@@ -550,28 +557,12 @@ class TelegramUploader:
                     return
                 if thumb == "none":
                     thumb = None
-                self._sent_msg = await self._sent_msg.reply_audio(
-                    audio=self._up_path,
-                    quote=True,
-                    caption=cap_mono,
-                    duration=duration,
-                    performer=artist,
-                    title=title,
-                    thumb=thumb,
-                    disable_notification=True,
-                    progress=self._upload_progress,
-                )
+                self._sent_msg = await self._hyperul_upload(cap_mono, file, thumb, key, duration, artist=artist, title=title)
             else:
                 key = "photos"
                 if self._listener.is_cancelled:
                     return
-                self._sent_msg = await self._sent_msg.reply_photo(
-                    photo=self._up_path,
-                    quote=True,
-                    caption=cap_mono,
-                    disable_notification=True,
-                    progress=self._upload_progress,
-                )
+                self._sent_msg = await self._hyperul_upload(cap_mono, file, thumb, key)
 
             if (
                 not self._listener.is_cancelled
@@ -626,16 +617,6 @@ class TelegramUploader:
                 and await aiopath.exists(thumb)
             ):
                 await remove(thumb)
-        except (FloodWait, FloodPremiumWait) as f:
-            LOGGER.warning(str(f))
-            await sleep(f.value * 1.3)
-            if (
-                self._thumb is None
-                and thumb is not None
-                and await aiopath.exists(thumb)
-            ):
-                await remove(thumb)
-            return await self._upload_file(cap_mono, file, o_path)
         except Exception as err:
             if (
                 self._thumb is None
@@ -645,9 +626,6 @@ class TelegramUploader:
                 await remove(thumb)
             err_type = "RPCError: " if isinstance(err, RPCError) else ""
             LOGGER.error(f"{err_type}{err}. Path: {self._up_path}", exc_info=True)
-            if isinstance(err, BadRequest) and key != "documents":
-                LOGGER.error(f"Retrying As Document. Path: {self._up_path}")
-                return await self._upload_file(cap_mono, file, o_path, True)
             raise err
 
     @property

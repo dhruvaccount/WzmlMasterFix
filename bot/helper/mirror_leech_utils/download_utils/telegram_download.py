@@ -50,7 +50,7 @@ class TelegramDownloadHelper:
         self._id = file_id
         async with task_dict_lock:
             task_dict[self._listener.mid] = TelegramStatus(
-                self._listener, self, gid, "dl", self._hyper_dl
+                self._listener, self, gid, "dl", "hdl" if self._hyper_dl else ""
             )
         if not from_queue:
             await self._listener.on_download_start()

@@ -202,6 +202,8 @@ DEFAULT_DESP = {
     "HYPER_THREADS": "Number of parallel download parts (clients). 0 = auto.",
     "HYPER_PIPELINE": "Concurrent GetFile requests per HyperDL part. Default: 128.",
     "HYPER_CHUNK": "HyperDL working chunk size in bytes. Default: 512 * 1024 (512KB).",
+    "HYPERUL_WORKERS": "HyperUL session pool per upload. Default: 8.",
+    "HYPERUL_PIPELINE": "HyperUL upload pipeline depth. Default: 64.",
     "CPU_LIMIT": "CPU limit percentage for background services (SABnzbd, JDownloader). Default: 20.",
     "THROTTLE_SERVICES": "Pause services during heavy ops (FFmpeg). auto=low-end only, always, never.",
     "HYDRA_IP": "Hydra API IP address for search.",
@@ -258,14 +260,12 @@ DEFAULT_DESP = {
 }
 
 PROTECTED_VARS = {
-    "TELEGRAM_HASH", "TELEGRAM_API", "OWNER_ID", "BOT_TOKEN",
-    "AUTHORIZED_CHATS", "DATABASE_URL", "DOWNLOAD_DIR",
-    "SUDO_USERS", "CMD_SUFFIX", "USER_SESSION_STRING", "TG_PROXY",
+    "TELEGRAM_HASH", "TELEGRAM_API", "OWNER_ID", "BOT_TOKEN", "AUTHORIZED_CHATS", "DATABASE_URL",
+    "SUDO_USERS", "USER_SESSION_STRING", "TG_PROXY",
 }
 RESTART_VARS = {
-    "CMD_SUFFIX", "OWNER_ID", "USER_SESSION_STRING",
-    "TELEGRAM_HASH", "TELEGRAM_API", "BOT_TOKEN",
-    "TG_PROXY", "AUTHORIZED_CHATS", "DATABASE_URL", "DOWNLOAD_DIR",
+    "CMD_SUFFIX", "OWNER_ID", "USER_SESSION_STRING", "TELEGRAM_HASH", "TELEGRAM_API", "BOT_TOKEN",
+    "TG_PROXY", "AUTHORIZED_CHATS", "DATABASE_URL"
 }
 
 ONOFF_VARS = [
