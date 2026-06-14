@@ -154,7 +154,11 @@ class HyperTGUpload:
                     raise
                 await sleep(getattr(e, "value", 5) + 1)
         for u in r_updates.updates:
-            if isinstance(u, raw.types.UpdateNewMessage):
+            if isinstance(u, (
+                raw.types.UpdateNewMessage,
+                raw.types.UpdateNewChannelMessage,
+                raw.types.UpdateNewScheduledMessage,
+            )):
                 msg_id = u.message.id
                 break
         else:
