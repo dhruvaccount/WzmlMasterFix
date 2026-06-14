@@ -131,27 +131,14 @@ async def load_settings():
         old_config = await database.db.settings.deployConfig.find_one(
             deploy_filter, {"_id": 0}
         )
-        if old_config is None:
-            await database.db.settings.deployConfig.replace_one(
-                deploy_filter, config_file, upsert=True
-            )
-        elif old_config != config_file:
-            LOGGER.info("Saving.. Deploy Config imported from Bot")
-            await database.db.settings.deployConfig.replace_one(
-                deploy_filter, config_file, upsert=True
-            )
-
-        LOGGER.info("Updating.. Saved Config imported from MongoDB")
-
-        qb_task = database.db.settings.qbittorrent.find_one(
-            deploy_filter, {"_id": 0}
-        ) if not Config.DISABLE_TORRENTS else await sleep(0)
 
         results = await gather(
             database.db.settings.config.find_one(deploy_filter, {"_id": 0}),
             database.db.settings.files.find_one(deploy_filter, {"_id": 0}),
             database.db.settings.aria2c.find_one(deploy_filter, {"_id": 0}),
-            qb_task,
+            database.db.settings.qbittorrent.find_one(
+                deploy_filter, {"_id": 0}
+            ) if not Config.DISABLE_TORRENTS else await sleep(0),
             database.db.settings.nzb.find_one(deploy_filter, {"_id": 0}),
             database.db.users[PART].find_one(),
             database.db.rss[PART].find_one(),
@@ -159,11 +146,28 @@ async def load_settings():
 
         config_dict, pf_dict, a2c_options, qbit_opt, nzb_opt, user_exists, rss_exists = results
 
-        if config_dict is None:
-            config_dict = {}
-        for k, v in config_file.items():
-            if v is not None:
-                config_dict[k] = v
+        if old_config is None:
+            await database.db.settings.deployConfig.replace_one(
+                deploy_filter, config_file, upsert=True
+            )
+            config_dict = config_dict or {}
+            for k, v in config_file.items():
+                if v is not None:
+                    config_dict.setdefault(k, v)
+        elif old_config != config_file:
+            LOGGER.info("Updating.. Deploy Config changed, merging new config.py values")
+            config_dict = config_dict or {}
+            for k, v in config_file.items():
+                if k not in old_config or old_config.get(k) != v:
+                    if v is not None:
+                        config_dict[k] = v
+            await database.db.settings.deployConfig.replace_one(
+                deploy_filter, config_file, upsert=True
+            )
+        else:
+            LOGGER.info("Updating.. Saved Config imported from MongoDB")
+            config_dict = config_dict or {}
+
         if config_dict:
             Config.load_dict(config_dict)
 
@@ -267,9 +271,6 @@ async def update_variables():
         or not Config.LEECH_SPLIT_SIZE
     ):
         Config.LEECH_SPLIT_SIZE = TgClient.MAX_SPLIT_SIZE
-
-    if not TgClient.IS_PREMIUM_USER:
-        Config.TRANSMISSION_MODE = "bot"
 
     if Config.AUTHORIZED_CHATS:
         aid = Config.AUTHORIZED_CHATS.split()

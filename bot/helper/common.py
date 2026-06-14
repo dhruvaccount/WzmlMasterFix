@@ -440,7 +440,7 @@ class TaskConfig:
                     raise ValueError("You must use the same config to clone!")
         else:
             self.leech_dest = self.up_dest or self.user_dict.get("LEECH_DUMP_CHAT")
-            self.up_dest = Config.LEECH_DUMP_CHAT
+            self.up_dest = self.leech_dest or Config.LEECH_DUMP_CHAT
             self.transmission_mode = Config.TRANSMISSION_MODE
             if self.bot_trans:
                 self.transmission_mode = "bot"
