@@ -1,4 +1,4 @@
-from asyncio import BoundedSemaphore, CancelledError, Queue, ensure_future, gather, sleep
+from asyncio import BoundedSemaphore, CancelledError, Lock, Queue, ensure_future, gather, sleep
 from hashlib import md5
 from math import ceil
 from mimetypes import guess_type
@@ -21,18 +21,20 @@ class HyperTGUpload:
     POOL_SIZE = Config.HYPERUL_WORKERS
     PIPE = Config.HYPERUL_PIPELINE
     _rr = 0
+    _rr_lock = Lock()
 
     def __init__(self, obj):
         self._sem = BoundedSemaphore(self.POOL_SIZE)
         self._obj = obj
         self._listener = self._obj._listener
 
-    def _pick_client(self, fallback):
+    async def _pick_client(self, fallback):
         if TgClient.helper_bots:
             keys = list(TgClient.helper_bots.keys())
             if keys:
-                i = self._rr % len(keys)
-                type(self)._rr = i + 1
+                async with self._rr_lock:
+                    i = self._rr % len(keys)
+                    type(self)._rr = i + 1
                 return keys[i], TgClient.helper_bots[keys[i]]
         return -1, fallback
 
@@ -49,7 +51,7 @@ class HyperTGUpload:
     async def _upload_one(self, target_client, target_chat_id, file_path, dump_chat_id,
                           media_type, attributes, thumb_path=None,
                           caption="", reply_to_message_id=None):
-        _, client = self._pick_client(target_client)
+        _, client = await self._pick_client(target_client)
         file_size = ospath.getsize(file_path)
         if file_size > self.BIG_FILE:
             input_file = await self._upload_file(client, file_path)
@@ -103,10 +105,10 @@ class HyperTGUpload:
         text = caption or ""
         entities = None
         if caption:
-            pm = target_client.parse_mode
+            pm = client.parse_mode
             if pm is not None:
                 try:
-                    parser = target_client.parser
+                    parser = client.parser
                     if parser is not None:
                         parsed = await parser.parse(caption, pm)
                         text = parsed['message']
@@ -133,25 +135,25 @@ class HyperTGUpload:
         else:
             raise ValueError(f"Unexpected doc type: {type(doc)}")
 
-        peer = await target_client.resolve_peer(target_chat_id)
+        peer = await client.resolve_peer(target_chat_id)
         rpc = raw.functions.messages.SendMedia(
             peer=peer,
             media=send_media,
             message=text,
-            random_id=target_client.rnd_id(),
+            random_id=client.rnd_id(),
             reply_to=raw.types.InputReplyToMessage(reply_to_msg_id=reply_to_message_id) if reply_to_message_id else None,
             silent=True,
             entities=entities,
         )
         for attempt in range(3):
             try:
-                r_updates = await target_client.invoke(rpc)
+                r_updates = await client.invoke(rpc)
                 break
             except (FloodWait, FloodPremiumWait) as e:
                 if attempt == 2:
                     raise
                 await sleep(getattr(e, "value", 5) + 1)
-        parsed = await utils.parse_messages(target_client, r_updates)
+        parsed = await utils.parse_messages(client, r_updates)
         if isinstance(parsed, list):
             if parsed:
                 return parsed[0]

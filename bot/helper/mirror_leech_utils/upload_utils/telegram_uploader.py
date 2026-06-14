@@ -1,4 +1,4 @@
-from asyncio import sleep
+from asyncio import ensure_future, gather, sleep
 from logging import getLogger
 from os import path as ospath, walk
 from re import match as re_match, sub as re_sub
@@ -319,12 +319,33 @@ class TelegramUploader:
             if not self._listener.is_cancelled:
                 LOGGER.error(f"Failed To Send in BotPM:\n{str(err)}")
 
+    async def _upload_file_task(self, cap_mono, file_, f_path):
+        saved_path = self._up_path
+        self._up_path = f_path
+        try:
+            sent = await self._upload_file(cap_mono, file_, f_path)
+            if sent and not self._is_corrupted:
+                if self._listener.is_super_chat or self._listener.up_dest:
+                    if not self._is_private:
+                        self._msgs_dict[sent.link] = file_
+            return sent
+        except Exception as err:
+            LOGGER.error(f"{err}. Path: {f_path}", exc_info=True)
+            self._error = str(err)
+            self._corrupted += 1
+            return None
+        finally:
+            self._up_path = saved_path
+            if not self._listener.is_cancelled and await aiopath.exists(f_path):
+                await remove(f_path)
+
     async def upload(self):
         await self._user_settings()
         res = await self._msg_to_reply()
         if not res:
             return
         is_log_del = False
+        upload_tasks = []
         for dirpath, _, files in natsorted(await sync_to_async(walk, self._path)):
             if dirpath.strip().endswith("/yt-dlp-thumb"):
                 continue
@@ -373,29 +394,27 @@ class TelegramUploader:
                                 message_ids=self._sent_msg.id,
                             )
                     self._last_msg_in_group = False
-                    await self._upload_file(cap_mono, file_, f_path)
+                    task = ensure_future(
+                        self._upload_file_task(cap_mono, file_, f_path)
+                    )
+                    upload_tasks.append(task)
                     if self._log_msg and not is_log_del and Config.CLEAN_LOG_MSG:
                         await delete_message(self._log_msg)
                         is_log_del = True
                     if self._listener.is_cancelled:
                         return
-                    if (
-                        not self._is_corrupted
-                        and (self._listener.is_super_chat or self._listener.up_dest)
-                        and not self._is_private
-                    ):
-                        self._msgs_dict[self._sent_msg.link] = file_
-                    await sleep(1)
                 except Exception as err:
                     LOGGER.error(f"{err}. Path: {self._up_path}", exc_info=True)
                     self._error = str(err)
                     self._corrupted += 1
                     if self._listener.is_cancelled:
                         return
-                if not self._listener.is_cancelled and await aiopath.exists(
-                    self._up_path
-                ):
-                    await remove(self._up_path)
+        if upload_tasks:
+            results = await gather(*upload_tasks, return_exceptions=True)
+            for r in results:
+                if isinstance(r, Exception):
+                    LOGGER.error(f"Upload task error: {r}")
+            await sleep(1)
         for key, value in list(self._media_dict.items()):
             for subkey, msgs in list(value.items()):
                 if len(msgs) > 1:
@@ -599,6 +618,7 @@ class TelegramUploader:
                 and await aiopath.exists(thumb)
             ):
                 await remove(thumb)
+            return self._sent_msg
         except Exception as err:
             if (
                 self._thumb is None
