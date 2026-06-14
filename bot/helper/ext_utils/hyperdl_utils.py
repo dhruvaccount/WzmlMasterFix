@@ -212,9 +212,9 @@ class HyperTGDownload:
         first_chunk_off = start - (start % _chunk_size())
         first_trim = start - first_chunk_off
         last_byte = end - 1
-        window = self.pipeline_depth * 2
+        window = self.pipeline_depth
         min_window = 2
-        max_window = self.pipeline_depth * 10
+        max_window = window * 4
         inflight = set()
         cur_off = first_chunk_off
         seq = 0
@@ -260,7 +260,7 @@ class HyperTGDownload:
                 done_set, inflight = await wait(inflight, return_when=FIRST_COMPLETED)
                 consecutive_ok += len(done_set)
                 if consecutive_ok >= window:
-                    window = min(window + max(8, window // 4), max_window)
+                    window = min(window + 2, max_window)
                     consecutive_ok = 0
                 for f in done_set:
                     s, roff, chunk = f.result()
