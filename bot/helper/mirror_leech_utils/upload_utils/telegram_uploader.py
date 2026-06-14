@@ -103,7 +103,6 @@ class TelegramUploader:
 ┠ <b>User :</b> {self._listener.user.mention} ( #ID{self._listener.user_id} ){f"\n┠ <b>Message Link :</b> <a href='{msg_link}'>Click Here</a>" if msg_link else ""}
 ┖ <b>Source :</b> <a href='{self._listener.source_url}'>Click Here</a>"""
             try:
-                await TgClient.bot.resolve_peer(self._listener.up_dest)
                 self._log_msg = await TgClient.bot.send_message(
                     chat_id=self._listener.up_dest,
                     text=msg,
@@ -525,7 +524,7 @@ class TelegramUploader:
                     return
                 if thumb == "none":
                     thumb = None
-                self._sent_msg = await self._hyperul_upload(cap_mono, file, thumb, key, f_path=o_path)
+                sent_msg = await self._hyperul_upload(cap_mono, file, thumb, key, f_path=o_path)
             elif is_video:
                 key = "videos"
                 duration = (await get_media_info(o_path))[0]
@@ -547,7 +546,7 @@ class TelegramUploader:
                     return
                 if thumb == "none":
                     thumb = None
-                self._sent_msg = await self._hyperul_upload(cap_mono, file, thumb, key, f_path=o_path, duration=duration, width=width, height=height)
+                sent_msg = await self._hyperul_upload(cap_mono, file, thumb, key, f_path=o_path, duration=duration, width=width, height=height)
             elif is_audio:
                 key = "audios"
                 duration, artist, title = await get_media_info(o_path)
@@ -555,34 +554,38 @@ class TelegramUploader:
                     return
                 if thumb == "none":
                     thumb = None
-                self._sent_msg = await self._hyperul_upload(cap_mono, file, thumb, key, f_path=o_path, duration=duration, artist=artist, title=title)
+                sent_msg = await self._hyperul_upload(cap_mono, file, thumb, key, f_path=o_path, duration=duration, artist=artist, title=title)
             else:
                 key = "photos"
                 if self._listener.is_cancelled:
                     return
-                self._sent_msg = await self._hyperul_upload(cap_mono, file, thumb, key, f_path=o_path)
+                sent_msg = await self._hyperul_upload(cap_mono, file, thumb, key, f_path=o_path)
+
+            self._sent_msg = sent_msg
 
             if (
                 not self._listener.is_cancelled
                 and self._media_group
-                and (self._sent_msg.video or self._sent_msg.document)
+                and (sent_msg.video or sent_msg.document)
             ):
-                key = "documents" if self._sent_msg.document else "videos"
+                key = "documents" if sent_msg.document else "videos"
                 if match := re_match(r".+(?=\.0*\d+$)|.+(?=\.part\d+\..+$)", o_path):
                     pname = match.group(0)
                     if pname in self._media_dict[key].keys():
                         self._media_dict[key][pname].append(
-                            [self._sent_msg.chat.id, self._sent_msg.id]
+                            [sent_msg.chat.id, sent_msg.id]
                         )
                     else:
                         self._media_dict[key][pname] = [
-                            [self._sent_msg.chat.id, self._sent_msg.id]
+                            [sent_msg.chat.id, sent_msg.id]
                         ]
                     msgs = self._media_dict[key][pname]
                     if len(msgs) == 10:
                         await self._send_media_group(pname, key, msgs)
                     else:
                         self._last_msg_in_group = True
+
+            self._sent_msg = sent_msg
 
             if self._sent_msg:
                 await self._copy_media()
@@ -596,8 +599,8 @@ class TelegramUploader:
                                 leech_dest = int(leech_dest)
                         await TgClient.bot.copy_message(
                             chat_id=leech_dest,
-                            from_chat_id=self._sent_msg.chat.id,
-                            message_id=self._sent_msg.id,
+                            from_chat_id=sent_msg.chat.id,
+                            message_id=sent_msg.id,
                         )
                     except Exception as e:
                         if not self._listener.is_cancelled:
@@ -615,7 +618,7 @@ class TelegramUploader:
                 and await aiopath.exists(thumb)
             ):
                 await remove(thumb)
-            return self._sent_msg
+            return sent_msg
         except Exception as err:
             if (
                 self._thumb is None

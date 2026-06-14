@@ -4,7 +4,7 @@ from math import ceil
 from mimetypes import guess_type
 from os import path as ospath
 
-from pyrogram import StopTransmission, raw, utils
+from pyrogram import StopTransmission, raw
 from pyrogram.errors import BadRequest, FloodPremiumWait, FloodWait
 from pyrogram.raw.types import DocumentAttributeFilename
 from pyrogram.session import Session
@@ -153,12 +153,13 @@ class HyperTGUpload:
                 if attempt == 2:
                     raise
                 await sleep(getattr(e, "value", 5) + 1)
-        parsed = await utils.parse_messages(client, r_updates)
-        if isinstance(parsed, list):
-            if parsed:
-                return parsed[0]
-            raise ValueError("parse_messages returned empty list")
-        return parsed
+        for u in r_updates.updates:
+            if isinstance(u, raw.types.UpdateNewMessage):
+                msg_id = u.message.id
+                break
+        else:
+            raise ValueError("No UpdateNewMessage in SendMedia response")
+        return await client.get_messages(chat_id=target_chat_id, message_ids=msg_id)
 
     async def _upload_file(self, client, file_path):
         fp = open(file_path, "rb")
