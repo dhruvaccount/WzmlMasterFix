@@ -1,7 +1,5 @@
 from asyncio import BoundedSemaphore, CancelledError, Queue, ensure_future, gather, sleep
-from functools import partial
 from hashlib import md5
-from inspect import iscoroutinefunction
 from math import ceil
 from mimetypes import guess_type
 from os import path as ospath
@@ -20,9 +18,14 @@ class HyperTGUpload:
 
     PART_SIZE = 512 * 1024
     BIG_FILE = 10 * 1024 * 1024
+    POOL_SIZE = Config.HYPERUL_WORKERS
+    PIPE = Config.HYPERUL_PIPELINE
+    WORKERS_PER = 4
 
-    def __init__(self):
-        self._sem = BoundedSemaphore(getattr(Config, "HYPERUL_WORKERS", 8))
+    def __init__(self, obj):
+        self._sem = BoundedSemaphore(self.POOL_SIZE)
+        self._obj = obj
+        self._listener = self._obj._listener
 
     def _pick_client(self, fallback):
         if TgClient.helper_bots:
@@ -36,24 +39,23 @@ class HyperTGUpload:
 
     async def upload(self, target_client, target_chat_id, file_path, dump_chat_id,
                      media_type, attributes, thumb_path=None,
-                     caption="", parse_mode=None, reply_to_message_id=None,
-                     disable_notification=True, progress=None, cancel=None):
+                     caption="", reply_to_message_id=None):
         async with self._sem:
+            self._obj._last_uploaded = 0
             return await self._upload_one(
                 target_client, target_chat_id, file_path, dump_chat_id,
-                media_type, attributes, thumb_path, caption, parse_mode,
-                reply_to_message_id, disable_notification, progress, cancel,
+                media_type, attributes, thumb_path, caption,
+                reply_to_message_id,
             )
 
     async def _upload_one(self, target_client, target_chat_id, file_path, dump_chat_id,
                           media_type, attributes, thumb_path=None,
-                          caption="", parse_mode=None, reply_to_message_id=None,
-                          disable_notification=True, progress=None, cancel=None):
+                          caption="", reply_to_message_id=None):
         ci, client = self._pick_client(target_client)
         try:
             file_size = ospath.getsize(file_path)
             if file_size > self.BIG_FILE:
-                input_file = await self._upload_file(client, file_path, progress, (), cancel)
+                input_file = await self._upload_file(client, file_path)
             else:
                 input_file = await self._upload_small(client, file_path)
 
@@ -105,7 +107,7 @@ class HyperTGUpload:
             text = caption or ""
             entities = None
             if caption:
-                pm = parse_mode or target_client.parse_mode
+                pm = target_client.parse_mode
                 if pm is not None:
                     try:
                         parser = target_client.parser
@@ -136,7 +138,7 @@ class HyperTGUpload:
                 message=text,
                 random_id=target_client.rnd_id(),
                 reply_to=raw.types.InputReplyToMessage(id=reply_to_message_id) if reply_to_message_id else None,
-                silent=disable_notification,
+                silent=True,
                 entities=entities,
             )
             for attempt in range(3):
@@ -158,7 +160,7 @@ class HyperTGUpload:
             if ci >= 0:
                 TgClient.helper_loads[ci] = max(0, TgClient.helper_loads.get(ci, 0) - 1)
 
-    async def _upload_file(self, client, file_path, progress=None, progress_args=(), cancel=None):
+    async def _upload_file(self, client, file_path):
         fp = open(file_path, "rb")
         fp.seek(0, 2)
         file_size = fp.tell()
@@ -169,21 +171,17 @@ class HyperTGUpload:
         file_id = client.rnd_id()
         file_name = ospath.basename(file_path)
 
-        pool_size = getattr(Config, "HYPERUL_WORKERS", 8)
-        pipe = getattr(Config, "HYPERUL_PIPELINE", 64)
-        workers_per = 4
-
         auth_key = await client.storage.auth_key()
         dc_id = await client.storage.dc_id()
         test_mode = await client.storage.test_mode()
 
         sessions = []
-        for _ in range(pool_size):
+        for _ in range(self.POOL_SIZE):
             s = Session(client, dc_id, auth_key, test_mode, is_media=True)
             await s.start()
             sessions.append(s)
 
-        q = Queue(pipe)
+        q = Queue(self.PIPE)
 
         async def _worker(sesh):
             while True:
@@ -205,12 +203,12 @@ class HyperTGUpload:
 
         workers = []
         for s in sessions:
-            for _ in range(workers_per):
+            for _ in range(self.WORKERS_PER):
                 workers.append(ensure_future(_worker(s)))
 
         try:
             for part in range(file_total_parts):
-                if cancel and cancel():
+                if self._listener.is_cancelled:
                     raise StopTransmission()
                 chunk = fp.read(part_size)
                 if not chunk:
@@ -221,13 +219,8 @@ class HyperTGUpload:
                     file_total_parts=file_total_parts,
                     bytes=chunk,
                 ))
-                if progress:
-                    cur = min((part + 1) * part_size, file_size)
-                    fn = partial(progress, cur, file_size, *progress_args)
-                    if iscoroutinefunction(progress):
-                        await fn()
-                    else:
-                        await client.loop.run_in_executor(client.executor, fn)
+                self._obj._last_uploaded += len(chunk)
+                self._obj._processed_bytes += len(chunk)
 
             for _ in workers:
                 await q.put(None)

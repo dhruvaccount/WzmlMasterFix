@@ -202,6 +202,7 @@ DEFAULT_DESP = {
     "HYPER_THREADS": "Number of parallel download parts (clients). 0 = auto.",
     "HYPER_PIPELINE": "Concurrent GetFile requests per HyperDL part. Default: 32.",
     "HYPER_CHUNK": "HyperDL working chunk size in bytes. Default: 512 * 1024 (512KB).",
+    "HYPER_TIMEOUT": "Timeout in seconds for each HyperDL GetFile request. Default: 90.",
     "HYPERUL_WORKERS": "HyperUL session pool per upload. Default: 8.",
     "HYPERUL_PIPELINE": "HyperUL upload pipeline depth. Default: 64.",
     "CPU_LIMIT": "CPU limit percentage for background services (SABnzbd, JDownloader). Default: 20.",

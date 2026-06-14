@@ -71,19 +71,7 @@ class TelegramUploader:
         self._log_msg = None
         self._user_session = self._listener.transmission_mode in ("user", "both")
         self._error = ""
-
-    async def _upload_progress(self, current, _):
-        if self._listener.is_cancelled:
-            try:
-                if self._user_session:
-                    TgClient.user.stop_transmission()
-                else:
-                    self._listener.client.stop_transmission()
-            except ConnectionError:
-                pass
-        chunk_size = current - self._last_uploaded
-        self._last_uploaded = current
-        self._processed_bytes += chunk_size
+        self._hu = HyperTGUpload(self)
 
     async def _user_settings(self):
         settings_map = {
@@ -344,7 +332,6 @@ class TelegramUploader:
                 await self._send_screenshots(dirpath, files)
                 await rmtree(dirpath, ignore_errors=True)
                 continue
-            self._hu = HyperTGUpload()
             for file_ in natsorted(files):
                 self._error = ""
                 self._up_path = f_path = ospath.join(dirpath, file_)
@@ -386,7 +373,6 @@ class TelegramUploader:
                                 message_ids=self._sent_msg.id,
                             )
                     self._last_msg_in_group = False
-                    self._last_uploaded = 0
                     await self._upload_file(cap_mono, file_, f_path)
                     if self._log_msg and not is_log_del and Config.CLEAN_LOG_MSG:
                         await delete_message(self._log_msg)
@@ -471,11 +457,7 @@ class TelegramUploader:
             attributes=attrs,
             thumb_path=thumb if thumb and thumb != "none" else None,
             caption=cap_mono,
-            parse_mode=self._listener.parse_mode,
             reply_to_message_id=self._sent_msg.id,
-            disable_notification=True,
-            progress=self._upload_progress,
-            cancel=lambda: self._listener.is_cancelled,
         )
 
     async def _upload_file(self, cap_mono, file, o_path, force_document=False):

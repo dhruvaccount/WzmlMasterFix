@@ -38,7 +38,7 @@ from ...core.config_manager import Config
 from ...core.tg_client import TgClient
 
 def _chunk_size():
-    return max(getattr(Config, "HYPER_CHUNK", 256 * 1024), 64 * 1024)
+    return max(Config.HYPER_CHUNK, 64 * 1024)
 
 
 def _pick_clients(wl, clients, count):
@@ -53,7 +53,7 @@ class HyperTGDownload:
         self.work_loads = TgClient.helper_loads
         self.num_clients = len(self.clients)
         self.num_parts = Config.HYPER_THREADS or max(8, self.num_clients)
-        self.pipeline_depth = max(getattr(Config, "HYPER_PIPELINE", 32), 16)
+        self.pipeline_depth = max(Config.HYPER_PIPELINE, 16)
         self.message = None
         self.dump_chat = None
         self.directory = None
@@ -191,7 +191,7 @@ class HyperTGDownload:
                     precise=True, cdn_supported=False,
                     location=location, offset=off, limit=_chunk_size(),
                 )),
-                timeout=30,
+                timeout=Config.HYPER_TIMEOUT,
             )
             if isinstance(r, raw.types.upload.File):
                 return r.bytes

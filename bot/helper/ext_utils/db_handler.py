@@ -15,8 +15,7 @@ from ...core.tg_client import TgClient, db_partition_id
 def _bot_id():
     if TgClient.ID:
         return str(TgClient.ID)
-    token = getattr(Config, "BOT_TOKEN", "") or ""
-    return token.split(":", 1)[0] or "0"
+    return Config.BOT_TOKEN.split(":", 1)[0]
 
 
 def _part():
