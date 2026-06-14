@@ -269,6 +269,8 @@ class HyperTGUpload:
 
         try:
             for part in range(file_total_parts):
+                if self._listener.is_cancelled:
+                    raise StopTransmission()
                 chunk = fp.read(part_size)
                 if not chunk:
                     break
@@ -277,6 +279,7 @@ class HyperTGUpload:
                     file_part=part,
                     bytes=chunk,
                 ))
+                self._obj._processed_bytes += len(chunk)
             fp.seek(0)
             md5_sum = md5(fp.read()).hexdigest()
             return raw.types.InputFile(
@@ -285,6 +288,8 @@ class HyperTGUpload:
                 name=file_name,
                 md5_checksum=md5_sum,
             )
+        except StopTransmission:
+            raise
         finally:
             try:
                 if s.is_connected:
