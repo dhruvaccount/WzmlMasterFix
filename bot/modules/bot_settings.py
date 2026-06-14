@@ -200,7 +200,7 @@ DEFAULT_DESP = {
     "LEECH_SPLIT_SIZE": "Split size for Telegram uploads in bytes. Default: 2GB (4GB for premium).",
     "MEDIA_GROUP": "Upload split parts as media group. Default: False.",
     "HYPER_THREADS": "Number of parallel download parts (clients). 0 = auto.",
-    "HYPER_PIPELINE": "Concurrent GetFile requests per HyperDL part. Default: 128.",
+    "HYPER_PIPELINE": "Concurrent GetFile requests per HyperDL part. Default: 32.",
     "HYPER_CHUNK": "HyperDL working chunk size in bytes. Default: 512 * 1024 (512KB).",
     "HYPERUL_WORKERS": "HyperUL session pool per upload. Default: 8.",
     "HYPERUL_PIPELINE": "HyperUL upload pipeline depth. Default: 64.",

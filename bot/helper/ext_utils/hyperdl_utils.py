@@ -279,7 +279,7 @@ class HyperTGDownload:
             if "FloodWait" in type(e).__name__ or "Flood" in str(type(e).__name__):
                 window = max(min_window, window // 2)
                 consecutive_ok = 0
-            LOGGER.error(f"HyperDL pipeline err: {e}")
+            LOGGER.error(f"HyperDL pipeline err: {type(e).__name__}: {e}")
             raise
         finally:
             for f in inflight:
@@ -416,7 +416,7 @@ class HyperTGDownload:
         except (CancelledError, StopTransmission):
             return None
         except Exception as e:
-            LOGGER.error(f"HyperDL: {e}")
+            LOGGER.error(f"HyperDL: {type(e).__name__}: {e}")
             return None
         finally:
             self._cancel.set()
