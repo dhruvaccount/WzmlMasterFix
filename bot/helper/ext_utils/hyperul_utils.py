@@ -20,7 +20,6 @@ class HyperTGUpload:
     BIG_FILE = 10 * 1024 * 1024
     POOL_SIZE = Config.HYPERUL_WORKERS
     PIPE = Config.HYPERUL_PIPELINE
-    WORKERS_PER = 4
 
     def __init__(self, obj):
         self._sem = BoundedSemaphore(self.POOL_SIZE)
@@ -41,7 +40,6 @@ class HyperTGUpload:
                      media_type, attributes, thumb_path=None,
                      caption="", reply_to_message_id=None):
         async with self._sem:
-            self._obj._last_uploaded = 0
             return await self._upload_one(
                 target_client, target_chat_id, file_path, dump_chat_id,
                 media_type, attributes, thumb_path, caption,
@@ -141,7 +139,7 @@ class HyperTGUpload:
                 media=send_media,
                 message=text,
                 random_id=target_client.rnd_id(),
-                reply_to=raw.types.InputReplyToMessage(id=reply_to_message_id) if reply_to_message_id else None,
+                reply_to=raw.types.InputReplyToMessage(reply_to_msg_id=reply_to_message_id) if reply_to_message_id else None,
                 silent=True,
                 entities=entities,
             )
@@ -179,8 +177,18 @@ class HyperTGUpload:
         dc_id = await client.storage.dc_id()
         test_mode = await client.storage.test_mode()
 
+        if file_size < 50 * 1024 * 1024:
+            n_sessions = max(2, self.POOL_SIZE // 2)
+            n_workers = 2
+        elif file_size < 500 * 1024 * 1024:
+            n_sessions = self.POOL_SIZE
+            n_workers = 4
+        else:
+            n_sessions = self.POOL_SIZE
+            n_workers = 6
+
         sessions = []
-        for _ in range(self.POOL_SIZE):
+        for _ in range(n_sessions):
             s = Session(client, dc_id, auth_key, test_mode, is_media=True)
             await s.start()
             sessions.append(s)
@@ -207,7 +215,7 @@ class HyperTGUpload:
 
         workers = []
         for s in sessions:
-            for _ in range(self.WORKERS_PER):
+            for _ in range(n_workers):
                 workers.append(ensure_future(_worker(s)))
 
         try:
@@ -223,7 +231,6 @@ class HyperTGUpload:
                     file_total_parts=file_total_parts,
                     bytes=chunk,
                 ))
-                self._obj._last_uploaded += len(chunk)
                 self._obj._processed_bytes += len(chunk)
 
             for _ in workers:
