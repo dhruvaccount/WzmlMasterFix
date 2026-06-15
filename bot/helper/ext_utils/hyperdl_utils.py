@@ -212,27 +212,18 @@ class HyperTGDownload:
         await s.start()
         return s
 
-    async def _get_session(self, idx, dc_id, force=False):
-        s = self._sessions.get(idx)
-        if s and not force:
-            if s.is_connected and s.dc_id == dc_id:
-                return s
-            try:
-                await s.stop()
-            except Exception:
-                pass
-        LOGGER.info(
-            f"HyperDL _get_session idx={idx} dc={dc_id} force={force} "
-            f"client={self.clients[idx].me.username}"
-        )
-        s = await self._mk_session(self.clients[idx], dc_id)
-        self._sessions[idx] = s
-        return s
-
     async def _close_all(self):
         sessions = list(self._sessions.values())
         self._sessions.clear()
         await gather(*[s.stop() for s in sessions], return_exceptions=True)
+
+    @staticmethod
+    async def _close_session(sess):
+        try:
+            if sess.is_connected:
+                await sess.stop()
+        except Exception:
+            pass
 
     @staticmethod
     def _location(fid):
@@ -314,7 +305,8 @@ class HyperTGDownload:
 
     async def _pipeline_fetch(self, idx, location, start, end, fid, queue):
         csz = _chunk_size()
-        sess = await self._get_session(idx, fid.dc_id)
+        sess = await self._mk_session(self.clients[idx], fid.dc_id)
+        self._sessions[id(sess)] = sess
         loc = location
         first_chunk_off = start - (start % csz)
         first_trim = start - first_chunk_off
@@ -371,14 +363,30 @@ class HyperTGDownload:
                             LOGGER.info(
                                 f"HyperDL reconnect idx={idx} dc={sess.dc_id} off={off}"
                             )
-                            sess = await self._get_session(idx, sess.dc_id, force=True)
+                            try:
+                                await sess.stop()
+                            except Exception:
+                                pass
+                            self._sessions.pop(id(sess), None)
+                            sess = await self._mk_session(
+                                self.clients[idx], sess.dc_id
+                            )
+                            self._sessions[id(sess)] = sess
                             await sleep(attempt + 1)
                         else:
                             LOGGER.info(
                                 f"HyperDL migrate idx={idx} "
                                 f"dc={sess.dc_id}->{dc_or_ref} off={off}"
                             )
-                            sess = await self._get_session(idx, dc_or_ref, force=True)
+                            try:
+                                await sess.stop()
+                            except Exception:
+                                pass
+                            self._sessions.pop(id(sess), None)
+                            sess = await self._mk_session(
+                                self.clients[idx], dc_or_ref
+                            )
+                            self._sessions[id(sess)] = sess
                             await sleep(1)
                         continue
                     return s, off, result
@@ -450,6 +458,8 @@ class HyperTGDownload:
             for f in inflight:
                 if not f.done():
                     f.cancel()
+            self._sessions.pop(id(sess), None)
+            await self._close_session(sess)
 
     async def _part(self, start, end, final_path, ci, fid, loc):
         q = Queue(maxsize=self.pipeline_depth + 1)
@@ -556,9 +566,8 @@ class HyperTGDownload:
         for _ in range(n_parts):
             ci = _pick_client(self.work_loads, client_keys)
             assigns.append(ci)
+            self.work_loads[ci] = self.work_loads.get(ci, 0) + 1
             load_map[ci] = load_map.get(ci, 0) + 1
-        for ci, cnt in load_map.items():
-            self.work_loads[ci] = self.work_loads.get(ci, 0) + cnt
 
         unique_clients = set(assigns)
         fid_map = {}
