@@ -41,11 +41,24 @@ from ...core.tg_client import TgClient
 
 _hyper_part_sem = Semaphore(10)
 _dc_semaphores = {}
+_dc_cooldowns = {}
 _dc_sem_lock = Lock()
 
 
 def _get_dc_sem(dc_id):
-    return _dc_semaphores.setdefault(dc_id, Semaphore(8))
+    return _dc_semaphores.setdefault(dc_id, Semaphore(4))
+
+
+def _dc_cooldown(dc_id, seconds=10):
+    _dc_cooldowns[dc_id] = time() + seconds
+
+
+def _dc_wait_cooldown(dc_id):
+    until = _dc_cooldowns.get(dc_id, 0)
+    remaining = until - time()
+    if remaining > 0:
+        return remaining
+    return 0
 
 
 def _chunk_size():
@@ -69,7 +82,7 @@ class HyperTGDownload:
         self.work_loads = TgClient.helper_loads
         self.num_clients = len(self.clients)
         self.num_parts = Config.HYPER_THREADS or max(8, self.num_clients)
-        self.pipeline_depth = max(Config.HYPER_PIPELINE, 16)
+        self.pipeline_depth = Config.HYPER_PIPELINE
         self.message = None
         self.dump_chat = None
         self.directory = None
@@ -268,6 +281,9 @@ class HyperTGDownload:
 
     async def _do_req(self, sess, location, off, csz, attempt=0):
         dc_sem = _get_dc_sem(sess.dc_id)
+        wait = _dc_wait_cooldown(sess.dc_id)
+        if wait > 0:
+            await sleep(wait)
         await dc_sem.acquire()
         try:
             r = await wait_for(
@@ -309,6 +325,12 @@ class HyperTGDownload:
             )
             if attempt < 3:
                 return None, -2
+            raise
+        except TimeoutError:
+            _dc_cooldown(sess.dc_id, 15)
+            LOGGER.info(
+                f"HyperDL DC cooldown 15s sess_dc={sess.dc_id} off={off}"
+            )
             raise
         finally:
             dc_sem.release()
@@ -610,6 +632,8 @@ class HyperTGDownload:
                         self._part(s, e, final, ci, fid, part_loc)
                     )
                 )
+                if i < len(ranges) - 1:
+                    await sleep(0.5)
             if progress:
                 self._prog_task = create_task(self._progress(progress, progress_args))
             await gather(*self._tasks)
