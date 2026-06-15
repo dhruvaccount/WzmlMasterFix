@@ -1,9 +1,7 @@
 import os
 from asyncio import (
-    FIRST_COMPLETED,
     CancelledError,
     Event,
-    Lock,
     Queue,
     Semaphore,
     create_task,
@@ -11,8 +9,6 @@ from asyncio import (
     gather,
     sleep,
     to_thread,
-    wait,
-    wait_for,
 )
 from datetime import datetime
 from mimetypes import guess_extension
@@ -39,30 +35,9 @@ from ... import LOGGER
 from ...core.config_manager import Config
 from ...core.tg_client import TgClient
 
-_hyper_part_sem = Semaphore(10)
-_dc_semaphores = {}
-_dc_cooldowns = {}
-_dc_sem_lock = Lock()
+_hyper_part_sem = Semaphore(8)
 
-
-def _get_dc_sem(dc_id):
-    return _dc_semaphores.setdefault(dc_id, Semaphore(4))
-
-
-def _dc_cooldown(dc_id, seconds=10):
-    _dc_cooldowns[dc_id] = time() + seconds
-
-
-def _dc_wait_cooldown(dc_id):
-    until = _dc_cooldowns.get(dc_id, 0)
-    remaining = until - time()
-    if remaining > 0:
-        return remaining
-    return 0
-
-
-def _chunk_size():
-    return max(Config.HYPER_CHUNK, 64 * 1024)
+MB = 1024 * 1024
 
 
 def _pick_client(work_loads, client_keys):
@@ -73,16 +48,12 @@ def _pick_client(work_loads, client_keys):
 
 class HyperTGDownload:
     _ref_cache_max = 100
-    _ref_cache_ttl = 45 * 60
-    _ref_cache_clean_interval = 15 * 60
-    _clean_task = None
 
     def __init__(self):
         self.clients = TgClient.helper_bots
         self.work_loads = TgClient.helper_loads
         self.num_clients = len(self.clients)
         self.num_parts = Config.HYPER_THREADS or max(8, self.num_clients)
-        self.pipeline_depth = Config.HYPER_PIPELINE
         self.message = None
         self.dump_chat = None
         self.directory = None
@@ -90,15 +61,11 @@ class HyperTGDownload:
         self.file_size = 0
         self.download_dir = "downloads/"
         self._ref_cache = {}
-        self._ref_cache_access = {}
-        self._ref_fetch_locks = {}
         self._sessions = {}
         self._cancel = Event()
         self._tasks = []
         self._prog_task = None
         self._processed_bytes = 0
-        if HyperTGDownload._clean_task is None or HyperTGDownload._clean_task.done():
-            HyperTGDownload._clean_task = create_task(self._clean_ref_cache())
 
     @staticmethod
     def _media_of(message):
@@ -117,132 +84,45 @@ class HyperTGDownload:
                 return m
         raise ValueError("No downloadable media")
 
-    def _ref_cache_hit(self, idx):
-        self._ref_cache_access[idx] = time()
+    def _ref_cache_get(self, idx):
+        return self._ref_cache.get(idx)
 
-    def _ref_cache_put(self, idx, fid):
-        self._ref_cache[idx] = fid
-        self._ref_cache_access[idx] = time()
+    def _ref_cache_put(self, idx, data):
         if len(self._ref_cache) > self._ref_cache_max:
-            oldest = min(self._ref_cache_access, key=self._ref_cache_access.get)
+            oldest = next(iter(self._ref_cache))
             self._ref_cache.pop(oldest, None)
-            self._ref_cache_access.pop(oldest, None)
+        self._ref_cache[idx] = data
 
-    async def _clean_ref_cache(self):
-        while True:
-            await sleep(self._ref_cache_clean_interval)
-            now = time()
-            expired = [
-                k
-                for k, v in self._ref_cache_access.items()
-                if now - v > self._ref_cache_ttl
-            ]
-            for k in expired:
-                self._ref_cache.pop(k, None)
-                self._ref_cache_access.pop(k, None)
-            if expired:
-                LOGGER.info(f"HyperDL ref cache cleaned {len(expired)} expired entries")
-
-    async def _fetch_ref(self, idx, client, max_retries=3, force=False):
+    async def _fetch_ref(self, idx, client, force=False):
         if not force:
-            cached = self._ref_cache.get(idx)
+            cached = self._ref_cache_get(idx)
             if cached is not None:
-                self._ref_cache_hit(idx)
                 return cached
-        if idx not in self._ref_fetch_locks:
-            self._ref_fetch_locks[idx] = Lock()
-        async with self._ref_fetch_locks[idx]:
-            if not force:
-                cached = self._ref_cache.get(idx)
-                if cached is not None:
-                    self._ref_cache_hit(idx)
-                    return cached
-            LOGGER.info(
-                f"HyperDL _fetch_ref client={client.me.username} "
-                f"idx={idx} dump={self.dump_chat} msg={self.message.id} "
-                f"force={force}"
-            )
-            last_error = None
-            for attempt in range(max_retries):
-                try:
-                    msg = await client.get_messages(self.dump_chat, self.message.id)
-                    if msg is None:
-                        raise ValueError(
-                            f"msg {self.message.id} not found in {self.dump_chat}"
-                        )
-                    media = self._media_of(msg)
-                    fid_str = getattr(media, "file_id", None)
-                    if not fid_str:
-                        raise ValueError(
-                            f"no file_id in media from msg {self.message.id}"
-                        )
-                    fid = FileId.decode(fid_str)
-                    ref_hex = (
-                        fid.file_reference.hex()[:32]
-                        if fid.file_reference
-                        else "EMPTY"
+        for attempt in range(3):
+            try:
+                msg = await client.get_messages(self.dump_chat, self.message.id)
+                if msg is None:
+                    raise ValueError(
+                        f"msg {self.message.id} not found in {self.dump_chat}"
                     )
-                    LOGGER.info(
-                        f"HyperDL _fetch_ref client={client.me.username} "
-                        f"idx={idx} got ref={ref_hex}... dc={fid.dc_id} "
-                        f"type={fid.file_type}"
+                media = self._media_of(msg)
+                fid_str = getattr(media, "file_id", None)
+                if not fid_str:
+                    raise ValueError(
+                        f"no file_id in media from msg {self.message.id}"
                     )
-                    self._ref_cache_put(idx, fid)
-                    return fid
-                except Exception as e:
-                    last_error = e
+                fid = FileId.decode(fid_str)
+                self._ref_cache_put(idx, fid)
+                return fid
+            except Exception as e:
+                if attempt < 2:
                     LOGGER.warning(
-                        f"HyperDL _fetch_ref attempt {attempt + 1}/{max_retries} "
-                        f"fail: {e} (client={client.me.username} "
-                        f"chat={self.dump_chat} msg={self.message.id})"
+                        f"HyperDL _fetch_ref attempt {attempt + 1} "
+                        f"fail: {e} (client={client.me.username})"
                     )
-                    if attempt < max_retries - 1:
-                        await sleep(attempt * 2)
-            raise ValueError(
-                f"Failed to get file ref from {self.dump_chat} msg "
-                f"{self.message.id} with {client.me.username}: {last_error}"
-            )
-
-    async def _mk_session(self, client, dc_id):
-        tm = await client.storage.test_mode()
-        if dc_id != await client.storage.dc_id():
-            ak = await Auth(client, dc_id, tm).create()
-            s = Session(client, dc_id, ak, tm, is_media=True)
-            await s.start()
-            for attempt in range(6):
-                try:
-                    e = await client.invoke(
-                        raw.functions.auth.ExportAuthorization(dc_id=dc_id)
-                    )
-                    await s.invoke(
-                        raw.functions.auth.ImportAuthorization(id=e.id, bytes=e.bytes)
-                    )
-                    return s
-                except AuthBytesInvalid:
-                    LOGGER.warning(
-                        f"HyperDL _mk_session AuthBytesInvalid attempt {attempt + 1}/6 "
-                        f"client={client.me.username} dc={dc_id}"
-                    )
-                    await sleep(1)
-            await s.stop()
-            raise AuthBytesInvalid
-        ak = await client.storage.auth_key()
-        s = Session(client, dc_id, ak, tm, is_media=True)
-        await s.start()
-        return s
-
-    async def _close_all(self):
-        sessions = list(self._sessions.values())
-        self._sessions.clear()
-        await gather(*[s.stop() for s in sessions], return_exceptions=True)
-
-    @staticmethod
-    async def _close_session(sess):
-        try:
-            if sess.is_connected:
-                await sess.stop()
-        except Exception:
-            pass
+                    await sleep(attempt * 2)
+                else:
+                    raise
 
     @staticmethod
     def _location(fid):
@@ -279,22 +159,76 @@ class HyperTGDownload:
             thumb_size=fid.thumbnail_size,
         )
 
-    async def _do_req(self, sess, location, off, csz, attempt=0):
-        dc_sem = _get_dc_sem(sess.dc_id)
-        wait = _dc_wait_cooldown(sess.dc_id)
-        if wait > 0:
-            await sleep(wait)
-        await dc_sem.acquire()
+    async def _mk_session(self, client, dc_id):
+        existing = client.media_sessions.get(dc_id)
+        if existing and existing.is_connected:
+            return existing
+        tm = await client.storage.test_mode()
+        if dc_id != await client.storage.dc_id():
+            ak = await Auth(client, dc_id, tm).create()
+            s = Session(client, dc_id, ak, tm, is_media=True)
+            await s.start()
+            for attempt in range(3):
+                try:
+                    e = await client.invoke(
+                        raw.functions.auth.ExportAuthorization(dc_id=dc_id)
+                    )
+                    await s.invoke(
+                        raw.functions.auth.ImportAuthorization(
+                            id=e.id, bytes=e.bytes
+                        )
+                    )
+                    client.media_sessions[dc_id] = s
+                    return s
+                except AuthBytesInvalid:
+                    LOGGER.warning(
+                        f"HyperDL _mk_session AuthBytesInvalid "
+                        f"attempt {attempt + 1}/3 "
+                        f"client={client.me.username} dc={dc_id}"
+                    )
+                    await sleep(1 + attempt)
+            await s.stop()
+            raise AuthBytesInvalid
+        ak = await client.storage.auth_key()
+        s = Session(client, dc_id, ak, tm, is_media=True)
+        await s.start()
+        client.media_sessions[dc_id] = s
+        return s
+
+    async def _close_all(self):
+        sessions = list(self._sessions.values())
+        self._sessions.clear()
+        for s in sessions:
+            try:
+                for client in self.clients.values():
+                    if s in client.media_sessions.values():
+                        break
+                else:
+                    if s.is_connected:
+                        await s.stop()
+            except Exception:
+                pass
+
+    async def _close_session(self, sess):
+        try:
+            for client in self.clients.values():
+                if sess in client.media_sessions.values():
+                    return
+            if sess.is_connected:
+                await sess.stop()
+        except Exception:
+            pass
+
+    async def _do_req(self, sess, client, location, off, csz, attempt=0):
         try:
             r = await wait_for(
                 sess.invoke(
                     raw.functions.upload.GetFile(
-                        precise=True,
-                        cdn_supported=False,
                         location=location,
                         offset=off,
                         limit=csz,
-                    )
+                    ),
+                    sleep_threshold=client.sleep_threshold,
                 ),
                 timeout=Config.HYPER_TIMEOUT,
             )
@@ -327,179 +261,125 @@ class HyperTGDownload:
                 return None, -2
             raise
         except TimeoutError:
-            _dc_cooldown(sess.dc_id, 15)
             LOGGER.info(
-                f"HyperDL DC cooldown 15s sess_dc={sess.dc_id} off={off}"
+                f"HyperDL TimeoutError attempt={attempt} "
+                f"off={off} sess_dc={sess.dc_id}"
             )
             raise
-        finally:
-            dc_sem.release()
 
-    async def _pipeline_fetch(self, idx, location, start, end, fid, queue):
-        csz = _chunk_size()
+    async def _sequential_fetch(self, idx, location, start, end, fid, queue):
+        csz = max(Config.HYPER_CHUNK, 64 * 1024)
         sess = await self._mk_session(self.clients[idx], fid.dc_id)
         self._sessions[id(sess)] = sess
         loc = location
-        first_chunk_off = start - (start % csz)
-        first_trim = start - first_chunk_off
+        cur_off = start - (start % csz)
         last_byte = end - 1
-        window = self.pipeline_depth
-        min_window = 2
-        max_window = window * 4
-        inflight = set()
-        cur_off = first_chunk_off
-        seq = 0
-        consecutive_ok = 0
-        flood_count = 0
+        bytes_to_skip = start - cur_off
 
         LOGGER.info(
-            f"HyperDL pipeline idx={idx} dc={fid.dc_id} "
-            f"range={start}-{end} ({(end - start) / 1048576:.1f}MB) "
-            f"pipe={window} csz={csz / 1024:.0f}KB"
+            f"HyperDL sequential idx={idx} dc={fid.dc_id} "
+            f"range={start}-{end} ({(end - start) / MB:.1f}MB) "
+            f"csz={csz / 1024:.0f}KB"
         )
 
-        async def _req(off, s):
-            nonlocal sess, loc, window, consecutive_ok, flood_count
-            last_err = None
-            for attempt in range(3):
-                try:
-                    result = await self._do_req(sess, loc, off, csz, attempt)
-                    if isinstance(result, tuple):
-                        _, dc_or_ref = result
-                        last_err = dc_or_ref
-                        if dc_or_ref == -1:
-                            ref_hex = (
-                                loc.file_reference.hex()[:16]
-                                if hasattr(loc, "file_reference") and loc.file_reference
-                                else "N/A"
-                            )
-                            LOGGER.info(
-                                f"HyperDL ref refresh idx={idx} "
-                                f"old_ref={ref_hex}... off={off}"
-                            )
-                            fid_new = await self._fetch_ref(
-                                idx, self.clients[idx], force=True
-                            )
-                            loc = self._location(fid_new)
-                            new_hex = (
-                                loc.file_reference.hex()[:16]
-                                if hasattr(loc, "file_reference") and loc.file_reference
-                                else "N/A"
-                            )
-                            LOGGER.info(
-                                f"HyperDL ref refreshed idx={idx} "
-                                f"new_ref={new_hex}... off={off}"
-                            )
-                            await sleep(attempt + 1)
-                        elif dc_or_ref == -2:
-                            LOGGER.info(
-                                f"HyperDL reconnect idx={idx} dc={sess.dc_id} off={off}"
-                            )
-                            try:
-                                await sess.stop()
-                            except Exception:
-                                pass
-                            self._sessions.pop(id(sess), None)
-                            sess = await self._mk_session(
-                                self.clients[idx], sess.dc_id
-                            )
-                            self._sessions[id(sess)] = sess
-                            await sleep(attempt + 1)
-                        else:
-                            LOGGER.info(
-                                f"HyperDL migrate idx={idx} "
-                                f"dc={sess.dc_id}->{dc_or_ref} off={off}"
-                            )
-                            try:
-                                await sess.stop()
-                            except Exception:
-                                pass
-                            self._sessions.pop(id(sess), None)
-                            sess = await self._mk_session(
-                                self.clients[idx], dc_or_ref
-                            )
-                            self._sessions[id(sess)] = sess
-                            await sleep(1)
-                        continue
-                    return s, off, result
-                except (FloodWait, FloodPremiumWait) as e:
-                    last_err = f"flood:{e.value if hasattr(e, 'value') else 5}"
-                    flood_count += 1
-                    wait_val = e.value if hasattr(e, "value") else 5
-                    if wait_val > 10 or flood_count >= 3:
-                        window = max(min_window, window - max(1, window // 4))
-                        consecutive_ok = 0
-                        flood_count = 0
-                        LOGGER.info(
-                            f"HyperDL flood shrink idx={idx} "
-                            f"window={window} wait={wait_val}s off={off}"
-                        )
-                    await sleep(wait_val + attempt * 2)
-                except CancelledError:
-                    raise
-            raise RuntimeError(
-                f"Failed after 3 attempts at offset {off} (err={last_err})"
-            )
-
         try:
-            consecutive_fail = 0
-            while cur_off <= last_byte or inflight:
-                while len(inflight) < window and cur_off <= last_byte:
-                    if self._cancel.is_set():
-                        raise CancelledError
-                    inflight.add(ensure_future(_req(cur_off, seq)))
-                    cur_off += csz
-                    seq += 1
-                if not inflight:
-                    break
-                try:
-                    done_set, inflight = await wait_for(
-                        wait(inflight, return_when=FIRST_COMPLETED),
-                        timeout=90,
-                    )
-                    consecutive_ok += len(done_set)
-                    consecutive_fail = 0
-                    if consecutive_ok >= window:
-                        window = min(window + 2, max_window)
-                        consecutive_ok = 0
-                except TimeoutError:
-                    consecutive_fail += 1
-                    if consecutive_fail >= 3:
-                        raise RuntimeError(
-                            "Pipeline stalled: no progress for 3 consecutive rounds"
+            while cur_off <= last_byte:
+                if self._cancel.is_set():
+                    return
+
+                for attempt in range(3):
+                    try:
+                        result = await self._do_req(
+                            sess, self.clients[idx], loc, cur_off, csz, attempt
                         )
-                    window = max(min_window, window // 2)
-                    continue
-                for f in done_set:
-                    s, roff, chunk = f.result()
-                    if not chunk:
-                        continue
-                    if roff == first_chunk_off and roff + csz >= end:
-                        chunk = chunk[first_trim : last_byte - roff + 1]
-                    elif roff == first_chunk_off:
-                        chunk = chunk[first_trim:]
-                    elif roff + csz > end:
-                        chunk = chunk[: end - roff]
-                    await queue.put((roff, chunk))
+                        if isinstance(result, tuple):
+                            _, dc_or_ref = result
+                            if dc_or_ref == -1:
+                                fid_new = await self._fetch_ref(
+                                    idx, self.clients[idx], force=True
+                                )
+                                loc = self._location(fid_new)
+                                await sleep(attempt + 1)
+                            elif dc_or_ref == -2:
+                                try:
+                                    await sess.stop()
+                                except Exception:
+                                    pass
+                                self._sessions.pop(id(sess), None)
+                                sess = await self._mk_session(
+                                    self.clients[idx], sess.dc_id
+                                )
+                                self._sessions[id(sess)] = sess
+                                await sleep(attempt + 1)
+                            else:
+                                try:
+                                    await sess.stop()
+                                except Exception:
+                                    pass
+                                self._sessions.pop(id(sess), None)
+                                sess = await self._mk_session(
+                                    self.clients[idx], dc_or_ref
+                                )
+                                self._sessions[id(sess)] = sess
+                                await sleep(1)
+                            continue
+
+                        chunk = result
+                        if not chunk:
+                            break
+
+                        if bytes_to_skip > 0:
+                            if len(chunk) <= bytes_to_skip:
+                                bytes_to_skip -= len(chunk)
+                                cur_off += csz
+                                break
+                            chunk = chunk[bytes_to_skip:]
+                            bytes_to_skip = 0
+
+                        remaining = last_byte - cur_off + 1
+                        if len(chunk) > remaining:
+                            chunk = chunk[:remaining]
+
+                        if chunk:
+                            await queue.put((cur_off, chunk))
+                            self._processed_bytes += len(chunk)
+
+                        cur_off += csz
+                        break
+                    except (FloodWait, FloodPremiumWait) as e:
+                        wait_val = e.value if hasattr(e, "value") else 5
+                        LOGGER.info(
+                            f"HyperDL FloodWait idx={idx} "
+                            f"sleep={wait_val}s off={cur_off}"
+                        )
+                        await sleep(wait_val + 1)
+                    except CancelledError:
+                        raise
+                    except Exception as e:
+                        LOGGER.warning(
+                            f"HyperDL req error idx={idx} "
+                            f"attempt={attempt} off={cur_off}: {e}"
+                        )
+                        if attempt < 2:
+                            await sleep(1 + attempt)
+                        else:
+                            raise
         except CancelledError:
             raise
         except Exception as e:
-            LOGGER.error(f"HyperDL pipeline err: {type(e).__name__}: {e}")
+            LOGGER.error(f"HyperDL sequential err: {type(e).__name__}: {e}")
             raise
         finally:
-            for f in inflight:
-                if not f.done():
-                    f.cancel()
             self._sessions.pop(id(sess), None)
             await self._close_session(sess)
 
     async def _part(self, start, end, final_path, ci, fid, loc):
-        q = Queue(maxsize=self.pipeline_depth + 1)
+        q = Queue(maxsize=4)
         error_holder = [None]
 
         async def _producer():
             try:
-                await self._pipeline_fetch(ci, loc, start, end, fid, q)
+                await self._sequential_fetch(ci, loc, start, end, fid, q)
             except CancelledError:
                 pass
             except Exception as e:
@@ -514,9 +394,8 @@ class HyperTGDownload:
                     item = await q.get()
                     if item is None:
                         break
-                    roff, chunk = item
-                    await self._async_pwrite(fd, chunk, roff)
-                    self._processed_bytes += len(chunk)
+                    off, chunk = item
+                    await self._async_pwrite(fd, chunk, off)
             finally:
                 await to_thread(os.close, fd)
 
@@ -582,19 +461,21 @@ class HyperTGDownload:
         )
 
         n_use = min(self.num_parts, self.num_clients)
-        client_keys = list(self.clients.keys())
 
-        min_part = 1 * 1024 * 1024
+        min_part = 1 * MB
         n_parts = (
             min(n_use, max(1, self.file_size // min_part))
             if self.file_size >= min_part
             else 1
         )
         psz = self.file_size // n_parts if n_parts > 0 else self.file_size
-        ranges = [(i * psz, min((i + 1) * psz, self.file_size)) for i in range(n_parts)]
+        ranges = [
+            (i * psz, min((i + 1) * psz, self.file_size)) for i in range(n_parts)
+        ]
 
         load_map = {}
         assigns = []
+        client_keys = list(self.clients.keys())
         for _ in range(n_parts):
             ci = _pick_client(self.work_loads, client_keys)
             assigns.append(ci)
@@ -624,7 +505,7 @@ class HyperTGDownload:
                 part_loc = self._location(fid)
                 LOGGER.info(
                     f"HyperDL part {i}: client={ci} "
-                    f"range={s}-{e} ({(e - s) / 1048576:.1f}MB) "
+                    f"range={s}-{e} ({(e - s) / MB:.1f}MB) "
                     f"dc={fid.dc_id}"
                 )
                 self._tasks.append(
@@ -634,16 +515,23 @@ class HyperTGDownload:
                 )
                 if i < len(ranges) - 1:
                     await sleep(0.5)
+
             if progress:
-                self._prog_task = create_task(self._progress(progress, progress_args))
+                self._prog_task = create_task(
+                    self._progress(progress, progress_args)
+                )
             await gather(*self._tasks)
             dl_elapsed = time() - dl_start
-            dl_speed = self.file_size / dl_elapsed / 1048576 if dl_elapsed > 0 else 0
-            wl_str = " ".join(f"c{k}:{v}" for k, v in sorted(self.work_loads.items()))
+            dl_speed = (
+                self.file_size / dl_elapsed / MB if dl_elapsed > 0 else 0
+            )
+            wl_str = " ".join(
+                f"c{k}:{v}" for k, v in sorted(self.work_loads.items())
+            )
             LOGGER.info(
                 f"HyperDL done {self.file_name} "
-                f"({self.file_size / 1048576:.1f}MB {n_parts}p {n_use}c "
-                f"pipe={self.pipeline_depth} wl=[{wl_str}] {dl_speed:.1f}MB/s)"
+                f"({self.file_size / MB:.1f}MB {n_parts}p {n_use}c "
+                f"wl=[{wl_str}] {dl_speed:.1f}MB/s)"
             )
             return final
         except FloodWait as e:
@@ -755,4 +643,3 @@ class HyperTGDownload:
         to_cancel.extend(t for t in self._tasks if not t.done())
         if to_cancel:
             await gather(*to_cancel, return_exceptions=True)
-        await self._close_all()
