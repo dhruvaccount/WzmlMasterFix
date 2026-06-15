@@ -88,11 +88,7 @@ class HyperTGDownload:
                 return m
         raise ValueError("No downloadable media")
 
-    async def _fetch_ref(self, idx, client, max_retries=3, force=False):
-        if not force:
-            cached = self._ref_cache.get(idx)
-            if cached is not None:
-                return cached
+    async def _fetch_ref(self, idx, client, max_retries=3):
         last_error = None
         for attempt in range(max_retries):
             try:
@@ -258,7 +254,7 @@ class HyperTGDownload:
                     if isinstance(result, tuple):
                         _, dc_or_ref = result
                         if dc_or_ref == -1:
-                            fid_new = await self._fetch_ref(idx, self.clients[idx], force=True)
+                            fid_new = await self._fetch_ref(idx, self.clients[idx])
                             loc = self._location(fid_new)
                         elif dc_or_ref == -2:
                             sess = await self._get_session(idx, sess.dc_id, force=True)
@@ -451,27 +447,23 @@ class HyperTGDownload:
                 self.work_loads[ci] = max(0, self.work_loads.get(ci, 1) - cnt)
             return None
 
+        first_fid = fid_map[assigns[0]]
         try:
-            unique_dcs = {fid_map[ci].dc_id for ci in unique_clients}
-            for dc in unique_dcs:
-                await self._warmup(
-                    [ci for ci in unique_clients if fid_map[ci].dc_id == dc], dc
-                )
+            await self._warmup(unique_clients, first_fid.dc_id)
         except Exception as e:
             LOGGER.warning(f"HyperDL warmup err: {e}")
 
         self._tasks = []
         self._prog_task = None
+        loc = self._location(first_fid)
 
         try:
             await to_thread(self._create_file_sync, final, self.file_size)
 
             for i, (s, e) in enumerate(ranges):
-                ci = assigns[i]
-                part_loc = self._location(fid_map[ci])
                 self._tasks.append(
                     create_task(
-                        self._part(s, e, final, ci, fid_map[ci], part_loc)
+                        self._part(s, e, final, assigns[i], fid_map[assigns[i]], loc)
                     )
                 )
             if progress:
