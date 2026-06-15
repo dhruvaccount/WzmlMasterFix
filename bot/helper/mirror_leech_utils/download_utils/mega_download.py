@@ -161,24 +161,27 @@ async def add_mega_download(listener, path):
                 LOGGER.info("Mega: looking up subfolder handle=%s", subfolder_handle)
                 target_int = _mega_base64_to_int(subfolder_handle)
                 LOGGER.info("Mega: subfolder target_int=%s", target_int)
-                node = None
-                if target_int is not None:
+                node = _find_child_in_list(dl_listener._children, subfolder_handle)
+                if not node and target_int is not None:
                     try:
-                        node = await sync_to_async(folder_api.getNodeByHandle, target_int)
+                        node = folder_api.getNodeByHandle(target_int)
                     except Exception as e:
                         LOGGER.error("Mega: getNodeByHandle failed: %s", e)
-                LOGGER.info("Mega: getNodeByHandle found=%s", node is not None)
+                LOGGER.info("Mega: subfolder node found=%s", node is not None)
                 if not node:
                     await listener.on_download_error("Subfolder not found in the MEGA link")
                     return
                 dl_listener.node = node
                 dl_listener._cache_node_data(node)
                 LOGGER.info("Mega: subfolder name=%s", dl_listener._name)
-                try:
-                    dl_listener._size = await sync_to_async(folder_api.getSize, node)
-                    LOGGER.info("Mega: subfolder size=%s", dl_listener._size)
-                except Exception:
-                    pass
+
+                dl_listener._size = listener.size
+                if not dl_listener._size:
+                    try:
+                        dl_listener._size = folder_api.getSize(node)
+                    except Exception:
+                        pass
+                LOGGER.info("Mega: subfolder size=%s", dl_listener._size)
             else:
                 node = dl_listener.node
         else:
