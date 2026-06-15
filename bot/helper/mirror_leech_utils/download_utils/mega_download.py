@@ -175,12 +175,21 @@ async def add_mega_download(listener, path):
                 dl_listener._cache_node_data(node)
                 LOGGER.info("Mega: subfolder name=%s", dl_listener._name)
 
+                LOGGER.info("Mega: getting size, listener.size=%s", listener.size)
                 dl_listener._size = listener.size
+                LOGGER.info("Mega: dl_listener._size after listener.size=%s", dl_listener._size)
                 if not dl_listener._size:
+                    LOGGER.info("Mega: calling node.getSize() directly")
                     try:
-                        dl_listener._size = folder_api.getSize(node)
-                    except Exception:
-                        pass
+                        if hasattr(node, "getSize"):
+                            dl_listener._size = node.getSize()
+                            LOGGER.info("Mega: node.getSize() OK=%s", dl_listener._size)
+                        else:
+                            s = folder_api.getSize(node)
+                            LOGGER.info("Mega: folder_api.getSize OK=%s", s)
+                            dl_listener._size = s
+                    except Exception as e:
+                        LOGGER.error("Mega: getSize exception=%s", e)
                 LOGGER.info("Mega: subfolder size=%s", dl_listener._size)
             else:
                 node = dl_listener.node
@@ -211,10 +220,14 @@ async def add_mega_download(listener, path):
         listener.size = dl_listener._size
         if not listener.size and node:
             try:
-                correct_api = folder_api if node == dl_listener.node and is_folder else api
-                listener.size = await sync_to_async(correct_api.getSize, node)
+                if hasattr(node, "getSize"):
+                    listener.size = node.getSize()
+                    LOGGER.info("Mega: fallback node.getSize()=%s", listener.size)
+                else:
+                    LOGGER.info("Mega: has no getSize, trying sync_to_async")
+                    listener.size = await sync_to_async(folder_api.getSize, node)
             except Exception as e:
-                LOGGER.info("Mega: correct_api getSize exception: %s", e)
+                LOGGER.info("Mega: fallback getSize exception: %s", e)
         gid = token_hex(5)
         msg, button = await stop_duplicate_check(listener)
         if msg:
