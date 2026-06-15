@@ -25,6 +25,23 @@ from ...mirror_leech_utils.status_utils.queue_status import QueueStatus
 _ACTIVE_MEGA_LINKS = set()
 _ACTIVE_MEGA_LINKS_LOCK = AsyncLock()
 
+_MEGA_BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+
+def _mega_base64_to_int(handle_str: str) -> int | None:
+    if not handle_str:
+        return None
+    try:
+        val = 0
+        for c in handle_str:
+            idx = _MEGA_BASE64_ALPHABET.find(c)
+            if idx < 0:
+                return None
+            val = (val << 6) | idx
+        return val & ((1 << 64) - 1)
+    except Exception:
+        return None
+
 
 def _find_child_by_handle(api, parent_node, target_handle):
     if not parent_node or not target_handle:
@@ -128,28 +145,38 @@ async def add_mega_download(listener, path):
             await async_api.fetchNodes(api=folder_api)
             await asleep(0)
             if listener.is_cancelled or dl_listener.is_cancelled:
+                LOGGER.info("Mega: cancelled after fetchNodes")
                 return
             if dl_listener.error:
+                LOGGER.info("Mega: error after fetchNodes: %s", dl_listener.error)
                 await listener.on_download_error(_mega_error_format(dl_listener.error))
                 return
             if not dl_listener.node:
+                LOGGER.info("Mega: no root node after fetchNodes")
                 await listener.on_download_error("Failed to get root node for MEGA folder")
                 return
+            LOGGER.info("Mega: fetchNodes OK, subfolder_handle=%s", subfolder_handle)
 
             if subfolder_handle:
-                try:
-                    target_int = await sync_to_async(MegaApi.base64ToHandle, subfolder_handle)
-                    node = await sync_to_async(folder_api.getNodeByHandle, target_int)
-                except Exception as e:
-                    LOGGER.error("Mega: subfolder handle lookup failed: %s", e)
-                    node = None
+                LOGGER.info("Mega: looking up subfolder handle=%s", subfolder_handle)
+                target_int = _mega_base64_to_int(subfolder_handle)
+                LOGGER.info("Mega: subfolder target_int=%s", target_int)
+                node = None
+                if target_int is not None:
+                    try:
+                        node = await sync_to_async(folder_api.getNodeByHandle, target_int)
+                    except Exception as e:
+                        LOGGER.error("Mega: getNodeByHandle failed: %s", e)
+                LOGGER.info("Mega: getNodeByHandle found=%s", node is not None)
                 if not node:
                     await listener.on_download_error("Subfolder not found in the MEGA link")
                     return
                 dl_listener.node = node
                 dl_listener._cache_node_data(node)
+                LOGGER.info("Mega: subfolder name=%s", dl_listener._name)
                 try:
                     dl_listener._size = await sync_to_async(folder_api.getSize, node)
+                    LOGGER.info("Mega: subfolder size=%s", dl_listener._size)
                 except Exception:
                     pass
             else:
