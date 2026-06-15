@@ -40,6 +40,12 @@ from ...core.config_manager import Config
 from ...core.tg_client import TgClient
 
 _hyper_part_sem = Semaphore(10)
+_dc_semaphores = {}
+_dc_sem_lock = Lock()
+
+
+def _get_dc_sem(dc_id):
+    return _dc_semaphores.setdefault(dc_id, Semaphore(8))
 
 
 def _chunk_size():
@@ -261,6 +267,8 @@ class HyperTGDownload:
         )
 
     async def _do_req(self, sess, location, off, csz, attempt=0):
+        dc_sem = _get_dc_sem(sess.dc_id)
+        await dc_sem.acquire()
         try:
             r = await wait_for(
                 sess.invoke(
@@ -302,6 +310,8 @@ class HyperTGDownload:
             if attempt < 3:
                 return None, -2
             raise
+        finally:
+            dc_sem.release()
 
     async def _pipeline_fetch(self, idx, location, start, end, fid, queue):
         csz = _chunk_size()
