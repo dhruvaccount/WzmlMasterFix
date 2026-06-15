@@ -205,6 +205,10 @@ class HyperTGDownload:
             if attempt < 3:
                 return None, -1
             raise
+        except (ConnectionError, OSError):
+            if attempt < 3:
+                return None, -2
+            raise
 
     async def _pipeline_fetch(self, idx, location, start, end, fid, queue):
         sess = await self._get_session(idx, fid.dc_id)
@@ -231,6 +235,8 @@ class HyperTGDownload:
                         if dc_or_ref == -1:
                             fid_new = await self._fetch_ref(idx, self.clients[idx])
                             loc = self._location(fid_new)
+                        elif dc_or_ref == -2:
+                            sess = await self._get_session(idx, sess.dc_id, force=True)
                         else:
                             sess = await self._get_session(idx, dc_or_ref, force=True)
                         continue
@@ -248,6 +254,7 @@ class HyperTGDownload:
             raise RuntimeError(f"Failed after 3 attempts at offset {off}")
 
         try:
+            consecutive_fail = 0
             while cur_off <= last_byte or inflight:
                 while len(inflight) < window and cur_off <= last_byte:
                     if self._cancel.is_set():
@@ -257,8 +264,21 @@ class HyperTGDownload:
                     seq += 1
                 if not inflight:
                     break
-                done_set, inflight = await wait(inflight, return_when=FIRST_COMPLETED)
+                try:
+                    done_set, inflight = await wait_for(
+                        wait(inflight, return_when=FIRST_COMPLETED),
+                        timeout=90,
+                    )
+                except TimeoutError:
+                    consecutive_fail += 1
+                    if consecutive_fail >= 3:
+                        raise RuntimeError(
+                            "Pipeline stalled: no progress for 3 consecutive rounds"
+                        )
+                    window = max(min_window, window // 2)
+                    continue
                 consecutive_ok += len(done_set)
+                consecutive_fail = 0
                 if consecutive_ok >= window:
                     window = min(window + 2, max_window)
                     consecutive_ok = 0

@@ -7,6 +7,7 @@ from time import time
 from aioshutil import rmtree
 from natsort import natsorted
 from PIL import Image
+from pyrogram import StopTransmission
 from pyrogram.errors import RPCError
 from pyrogram.raw.types import (
     DocumentAttributeAudio,
@@ -331,6 +332,8 @@ class TelegramUploader:
                     if not self._is_private:
                         self._msgs_dict[sent.link] = file_
             return sent
+        except StopTransmission:
+            return None
         except Exception as err:
             LOGGER.error(f"{err}. Path: {f_path}", exc_info=True)
             self._error = str(err)
@@ -624,6 +627,8 @@ class TelegramUploader:
             ):
                 await remove(thumb)
             return sent_msg
+        except StopTransmission:
+            raise
         except Exception as err:
             if (
                 self._thumb is None
