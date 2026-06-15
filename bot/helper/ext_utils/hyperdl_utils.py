@@ -4,6 +4,7 @@ from asyncio import (
     CancelledError,
     Event,
     Queue,
+    Semaphore,
     create_task,
     ensure_future,
     gather,
@@ -37,13 +38,17 @@ from ... import LOGGER
 from ...core.config_manager import Config
 from ...core.tg_client import TgClient
 
+_hyper_part_sem = Semaphore(10)
+
 def _chunk_size():
     return max(Config.HYPER_CHUNK, 64 * 1024)
 
 
-def _pick_clients(wl, clients, count):
+def _pick_client(work_loads, clients):
     keys = list(clients.keys())
-    return sorted(keys, key=lambda i: wl.get(i, 0))[:count]
+    if not keys:
+        return None
+    return min(keys, key=lambda i: work_loads.get(i, 0))
 
 
 class HyperTGDownload:
@@ -333,20 +338,25 @@ class HyperTGDownload:
             finally:
                 await to_thread(os.close, fd)
 
-        prod = ensure_future(_producer())
+        await _hyper_part_sem.acquire()
         try:
-            await _consumer()
-            if error_holder[0] is not None:
-                raise error_holder[0]
-        except CancelledError:
-            prod.cancel()
-            raise
-        except Exception:
-            prod.cancel()
-            raise
-        finally:
-            if not prod.done():
+            prod = ensure_future(_producer())
+            try:
+                await _consumer()
+                if error_holder[0] is not None:
+                    raise error_holder[0]
+            except CancelledError:
                 prod.cancel()
+                raise
+            except Exception:
+                prod.cancel()
+                raise
+            finally:
+                if not prod.done():
+                    prod.cancel()
+        finally:
+            _hyper_part_sem.release()
+            self.work_loads[ci] = max(0, self.work_loads.get(ci, 1) - 1)
 
     @staticmethod
     async def _async_pwrite(fd, data, offset):
@@ -382,13 +392,17 @@ class HyperTGDownload:
         final = os.path.abspath(sub("\\\\", "/", os.path.join(self.directory, self.file_name)))
 
         n_use = min(self.num_parts, self.num_clients)
-        cidx = _pick_clients(self.work_loads, self.clients, n_use)
 
         min_part = 1 * 1024 * 1024
         n_parts = min(n_use, max(1, self.file_size // min_part)) if self.file_size >= min_part else 1
         psz = self.file_size // n_parts if n_parts > 0 else self.file_size
         ranges = [(i * psz, min((i + 1) * psz, self.file_size)) for i in range(n_parts)]
-        assigns = [cidx[i % n_use] for i in range(n_parts)]
+
+        assigns = []
+        for _ in range(n_parts):
+            ci = _pick_client(self.work_loads, self.clients)
+            assigns.append(ci)
+            self.work_loads[ci] = self.work_loads.get(ci, 0) + 1
 
         unique_clients = set(assigns)
         fid_map = {}
@@ -397,6 +411,8 @@ class HyperTGDownload:
                 fid_map[ci] = await self._fetch_ref(ci, self.clients[ci])
         except Exception as e:
             LOGGER.error(f"HyperDL ref fail: {e}")
+            for ci in unique_clients:
+                self.work_loads[ci] = max(0, self.work_loads.get(ci, 1) - assigns.count(ci))
             return None
 
         first_fid = fid_map[assigns[0]]
@@ -431,8 +447,11 @@ class HyperTGDownload:
                 f"pipe={self.pipeline_depth} wl=[{wl_str}] {dl_speed:.1f}MB/s)"
             )
             return final
-        except FloodWait:
-            raise
+        except FloodWait as e:
+            wait_val = e.value if hasattr(e, "value") else 5
+            LOGGER.warning(f"HyperDL FloodWait: sleeping {wait_val}s")
+            await sleep(wait_val + 1)
+            return None
         except (CancelledError, StopTransmission):
             return None
         except Exception as e:

@@ -7,19 +7,64 @@ from os import path as ospath
 import aiofiles
 from aiofiles.os import path as aiopath
 
+import socket
+
 from pyrogram import StopTransmission, raw
+from pyrogram.connection.transport.tcp.tcp import TCP
 from pyrogram.errors import BadRequest, FloodPremiumWait, FloodWait
 from pyrogram.raw.types import DocumentAttributeFilename
 from pyrogram.session import Session
+from pyrogram.session.internals import DataCenter
 
 from ... import LOGGER
 from ...core.config_manager import Config
 from ...core.tg_client import TgClient
 
 
+_orig_tcp_connect = TCP.connect
+
+
+async def _tcp_tuned_connect(self, address):
+    await _orig_tcp_connect(self, address)
+    sock = None
+    if self.writer:
+        try:
+            sock = self.writer.get_extra_info("socket")
+        except Exception:
+            pass
+    if sock:
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+            except OSError:
+                pass
+        except OSError:
+            pass
+
+
+TCP.connect = _tcp_tuned_connect
+
+
+_orig_dc_new = DataCenter.__new__
+
+
+def _dc_alt_port(cls, dc_id, test_mode, ipv6, media):
+    ip, port = _orig_dc_new(cls, dc_id, test_mode, ipv6, media)
+    if media and not test_mode:
+        port = 5222
+    return ip, port
+
+
+DataCenter.__new__ = staticmethod(_dc_alt_port)
+
+
 class HyperTGUpload:
 
     PART_SIZE = 512 * 1024
+    READ_BUFFER = 4 * 1024 * 1024
     BIG_FILE = 10 * 1024 * 1024
     POOL_SIZE = Config.HYPERUL_WORKERS
     PIPE = Config.HYPERUL_PIPELINE
@@ -239,10 +284,12 @@ class HyperTGUpload:
         else:
             n_sessions = self.POOL_SIZE
             n_workers = 8
+        n_workers = min(n_workers, file_total_parts)
 
         fp = None
         sessions = None
         workers = []
+        next_buf_task = None
 
         try:
             fp = await aiofiles.open(file_path, "rb")
@@ -255,7 +302,7 @@ class HyperTGUpload:
                     rpc = await q.get()
                     if rpc is None:
                         break
-                    for attempt in range(3):
+                    for attempt in range(5):
                         try:
                             await sesh.invoke(rpc)
                             break
@@ -264,7 +311,7 @@ class HyperTGUpload:
                         except CancelledError:
                             raise
                         except Exception:
-                            if attempt == 2:
+                            if attempt == 4:
                                 raise
                             await sleep(2 ** attempt)
 
@@ -275,19 +322,36 @@ class HyperTGUpload:
             obj = self._obj
             listener = self._listener
 
-            for part in range(file_total_parts):
+            parts_per_buffer = self.READ_BUFFER // self.PART_SIZE
+            part = 0
+            next_buf_task = ensure_future(fp.read(self.READ_BUFFER))
+
+            while part < file_total_parts:
                 if listener.is_cancelled:
                     raise StopTransmission()
-                chunk = await fp.read(part_size)
-                if not chunk:
+                buffer = await next_buf_task
+                if not buffer:
                     break
-                await q.put(raw.functions.upload.SaveBigFilePart(
-                    file_id=file_id,
-                    file_part=part,
-                    file_total_parts=file_total_parts,
-                    bytes=chunk,
-                ))
-                obj._processed_bytes += len(chunk)
+                if part + parts_per_buffer < file_total_parts:
+                    next_buf_task = ensure_future(fp.read(self.READ_BUFFER))
+                for offset in range(0, len(buffer), self.PART_SIZE):
+                    chunk = buffer[offset:offset + self.PART_SIZE]
+                    if not chunk:
+                        break
+                    if all(t.done() for t in workers):
+                        for t in workers:
+                            exc = t.exception()
+                            if exc is not None:
+                                raise exc
+                        raise RuntimeError("All upload workers exited")
+                    await q.put(raw.functions.upload.SaveBigFilePart(
+                        file_id=file_id,
+                        file_part=part,
+                        file_total_parts=file_total_parts,
+                        bytes=chunk,
+                    ))
+                    obj._processed_bytes += len(chunk)
+                    part += 1
 
             for _ in workers:
                 await q.put(None)
@@ -308,6 +372,11 @@ class HyperTGUpload:
                 if not w.done():
                     w.cancel()
             await gather(*workers, return_exceptions=True)
+            try:
+                if next_buf_task is not None and not next_buf_task.done():
+                    next_buf_task.cancel()
+            except Exception:
+                pass
             if sessions:
                 good = [s for s in sessions if s.is_connected]
                 bad = [s for s in sessions if not s.is_connected]

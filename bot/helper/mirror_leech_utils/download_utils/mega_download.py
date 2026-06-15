@@ -14,7 +14,6 @@ from ...ext_utils.task_manager import (
     limit_checker,
     stop_duplicate_check,
 )
-from ...ext_utils.bot_utils import sync_to_async
 from ...ext_utils.files_utils import clean_download
 from ...ext_utils.links_utils import get_mega_subfolder_handle, is_mega_folder_link
 from ...listeners.mega_listener import AsyncMega, MegaAppListener, MegaFolderListener, _mega_error_format, _MEGA_SDK_LOCK
