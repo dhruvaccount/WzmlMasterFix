@@ -154,6 +154,15 @@ class HyperTGDownload:
         self._sessions[idx] = s
         return s
 
+    async def _warmup(self, indices, dc_id):
+        async def _w(i):
+            try:
+                await self._get_session(i, dc_id)
+            except Exception as e:
+                LOGGER.warning(f"HyperDL warmup fail client {i}: {e}")
+
+        await gather(*[_w(i) for i in indices])
+
     async def _close_all(self):
         sessions = list(self._sessions.values())
         self._sessions.clear()
@@ -243,27 +252,21 @@ class HyperTGDownload:
 
         async def _req(off, s):
             nonlocal sess, loc, window, consecutive_ok, flood_count
-            last_err = None
             for attempt in range(3):
                 try:
                     result = await self._do_req(sess, loc, off, csz, attempt)
                     if isinstance(result, tuple):
                         _, dc_or_ref = result
-                        last_err = dc_or_ref
                         if dc_or_ref == -1:
                             fid_new = await self._fetch_ref(idx, self.clients[idx], force=True)
                             loc = self._location(fid_new)
-                            await sleep(1)
                         elif dc_or_ref == -2:
                             sess = await self._get_session(idx, sess.dc_id, force=True)
-                            await sleep(1)
                         else:
                             sess = await self._get_session(idx, dc_or_ref, force=True)
-                            await sleep(1)
                         continue
                     return s, off, result
                 except (FloodWait, FloodPremiumWait) as e:
-                    last_err = f"flood:{e.value if hasattr(e, 'value') else 5}"
                     flood_count += 1
                     wait_val = e.value if hasattr(e, "value") else 5
                     if wait_val > 10 or flood_count >= 3:
@@ -273,7 +276,7 @@ class HyperTGDownload:
                     await sleep(wait_val + 1)
                 except CancelledError:
                     raise
-            raise RuntimeError(f"Failed after 3 attempts at offset {off} (err={last_err})")
+            raise RuntimeError(f"Failed after 3 attempts at offset {off}")
 
         try:
             consecutive_fail = 0
@@ -447,6 +450,15 @@ class HyperTGDownload:
             for ci, cnt in load_map.items():
                 self.work_loads[ci] = max(0, self.work_loads.get(ci, 1) - cnt)
             return None
+
+        try:
+            unique_dcs = {fid_map[ci].dc_id for ci in unique_clients}
+            for dc in unique_dcs:
+                await self._warmup(
+                    [ci for ci in unique_clients if fid_map[ci].dc_id == dc], dc
+                )
+        except Exception as e:
+            LOGGER.warning(f"HyperDL warmup err: {e}")
 
         self._tasks = []
         self._prog_task = None
