@@ -637,10 +637,14 @@ class TaskConfig:
             msg = [s.strip() for s in input_list]
             index = msg.index("-i")
             msg[index + 1] = f"{self.multi - 1}"
-            nextmsg = await self.client.get_messages(
-                chat_id=self.message.chat.id,
-                message_ids=self.message.reply_to_message_id + 1,
-            )
+            reply_id = self.message.reply_to_message_id
+            if reply_id is not None:
+                nextmsg = await self.client.get_messages(
+                    chat_id=self.message.chat.id,
+                    message_ids=reply_id + 1,
+                )
+            else:
+                nextmsg = self.message
             if not isinstance(nextmsg, Message):
                 nextmsg = self.message
             msgts = " ".join(msg)
