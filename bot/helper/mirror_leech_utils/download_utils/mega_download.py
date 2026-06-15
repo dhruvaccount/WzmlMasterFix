@@ -137,7 +137,12 @@ async def add_mega_download(listener, path):
                 return
 
             if subfolder_handle:
-                node = _find_child_in_list(dl_listener._children, subfolder_handle)
+                try:
+                    target_int = await sync_to_async(MegaApi.base64ToHandle, subfolder_handle)
+                    node = await sync_to_async(folder_api.getNodeByHandle, target_int)
+                except Exception as e:
+                    LOGGER.error("Mega: subfolder handle lookup failed: %s", e)
+                    node = None
                 if not node:
                     await listener.on_download_error("Subfolder not found in the MEGA link")
                     return

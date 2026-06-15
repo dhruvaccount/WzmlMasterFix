@@ -4,6 +4,9 @@ from math import ceil
 from mimetypes import guess_type
 from os import path as ospath
 
+import aiofiles
+from aiofiles.os import path as aiopath
+
 from pyrogram import StopTransmission, raw
 from pyrogram.errors import BadRequest, FloodPremiumWait, FloodWait
 from pyrogram.raw.types import DocumentAttributeFilename
@@ -22,6 +25,49 @@ class HyperTGUpload:
     PIPE = Config.HYPERUL_PIPELINE
     _rr = 0
     _rr_lock = Lock()
+    _session_pool: dict = {}
+    _session_pool_lock = Lock()
+
+    @classmethod
+    async def _acquire_sessions(cls, client, n_sessions, dc_id, auth_key, test_mode):
+        key = (id(client), dc_id)
+        sessions = []
+        stale = []
+        async with cls._session_pool_lock:
+            pool = cls._session_pool.setdefault(key, [])
+            while pool and len(sessions) < n_sessions:
+                s = pool.pop()
+                if s.is_connected:
+                    sessions.append(s)
+                else:
+                    stale.append(s)
+            needed = n_sessions - len(sessions)
+        for s in stale:
+            try:
+                await s.stop()
+            except Exception:
+                pass
+        if needed > 0:
+            new = [Session(client, dc_id, auth_key, test_mode, is_media=True) for _ in range(needed)]
+            results = await gather(*[s.start() for s in new], return_exceptions=True)
+            for s, r in zip(new, results):
+                if isinstance(r, Exception):
+                    LOGGER.warning(f"Session start failed: {r}")
+                else:
+                    sessions.append(s)
+        if not sessions:
+            raise RuntimeError("No sessions available for upload")
+        return sessions
+
+    @classmethod
+    async def _release_sessions(cls, client, sessions, dc_id=None):
+        if not sessions:
+            return
+        if dc_id is None:
+            dc_id = await sessions[0].storage.dc_id()
+        key = (id(client), dc_id)
+        async with cls._session_pool_lock:
+            cls._session_pool.setdefault(key, []).extend(sessions)
 
     def __init__(self, obj):
         self._sem = BoundedSemaphore(self.POOL_SIZE)
@@ -62,7 +108,7 @@ class HyperTGUpload:
         if thumb_path and ospath.exists(thumb_path):
             tsz = ospath.getsize(thumb_path)
             if tsz > 0:
-                thumb_file = await self._upload_small(client, thumb_path)
+                thumb_file = await self._upload_thumb(client, thumb_path)
 
         mime_type = self._mime(file_path)
         input_media = self._build_media(input_file, mime_type, media_type, attributes, thumb_file)
@@ -166,11 +212,7 @@ class HyperTGUpload:
         return await client.get_messages(chat_id=target_chat_id, message_ids=msg_id)
 
     async def _upload_file(self, client, file_path):
-        fp = open(file_path, "rb")
-        fp.seek(0, 2)
-        file_size = fp.tell()
-        fp.seek(0)
-
+        file_size = await aiopath.getsize(file_path)
         part_size = self.PART_SIZE
         file_total_parts = ceil(file_size / part_size)
         file_id = client.rnd_id()
@@ -179,55 +221,64 @@ class HyperTGUpload:
         dc_id = await client.storage.dc_id()
         test_mode = await client.storage.test_mode()
 
-        if file_size < 50 * 1024 * 1024:
-            n_sessions = max(2, self.POOL_SIZE // 2)
+        if file_size < 5 * 1024 * 1024:
+            n_sessions = 1
+            n_workers = 2
+        elif file_size < 100 * 1024 * 1024:
+            n_sessions = min(2, self.POOL_SIZE)
             n_workers = 3
+        elif file_size < 300 * 1024 * 1024:
+            n_sessions = min(3, self.POOL_SIZE)
+            n_workers = 4
         elif file_size < 500 * 1024 * 1024:
-            n_sessions = self.POOL_SIZE
+            n_sessions = min(4, self.POOL_SIZE)
+            n_workers = 5
+        elif file_size < 1024 * 1024 * 1024:
+            n_sessions = min(6, self.POOL_SIZE)
             n_workers = 6
         else:
             n_sessions = self.POOL_SIZE
             n_workers = 8
 
-        sessions = []
-        for _ in range(n_sessions):
-            s = Session(client, dc_id, auth_key, test_mode, is_media=True)
-            await s.start()
-            sessions.append(s)
-
-        q = Queue(self.PIPE)
-
-        async def _worker(sesh):
-            while True:
-                rpc = await q.get()
-                if rpc is None:
-                    break
-                for attempt in range(3):
-                    try:
-                        await sesh.invoke(rpc)
-                        break
-                    except (FloodWait, FloodPremiumWait) as e:
-                        await sleep(getattr(e, "value", 5) + 1)
-                    except CancelledError:
-                        raise
-                    except Exception:
-                        if attempt == 2:
-                            raise
-                        await sleep(1 * (attempt + 1))
-
+        fp = None
+        sessions = None
         workers = []
-        for s in sessions:
-            for _ in range(n_workers):
-                workers.append(ensure_future(_worker(s)))
-
-        obj = self._obj
-        listener = self._listener
 
         try:
+            fp = await aiofiles.open(file_path, "rb")
+            sessions = await self._acquire_sessions(client, n_sessions, dc_id, auth_key, test_mode)
+
+            q = Queue(self.PIPE)
+
+            async def _worker(sesh):
+                while True:
+                    rpc = await q.get()
+                    if rpc is None:
+                        break
+                    for attempt in range(3):
+                        try:
+                            await sesh.invoke(rpc)
+                            break
+                        except (FloodWait, FloodPremiumWait) as e:
+                            await sleep(getattr(e, "value", 5) + 1)
+                        except CancelledError:
+                            raise
+                        except Exception:
+                            if attempt == 2:
+                                raise
+                            await sleep(2 ** attempt)
+
+            for s in sessions:
+                for _ in range(n_workers):
+                    workers.append(ensure_future(_worker(s)))
+
+            obj = self._obj
+            listener = self._listener
+
             for part in range(file_total_parts):
                 if listener.is_cancelled:
                     raise StopTransmission()
-                chunk = fp.read(part_size)
+                chunk = await fp.read(part_size)
                 if not chunk:
                     break
                 await q.put(raw.functions.upload.SaveBigFilePart(
@@ -257,20 +308,20 @@ class HyperTGUpload:
                 if not w.done():
                     w.cancel()
             await gather(*workers, return_exceptions=True)
-            for s in sessions:
-                try:
-                    if s.is_connected:
+            if sessions:
+                good = [s for s in sessions if s.is_connected]
+                bad = [s for s in sessions if not s.is_connected]
+                await self._release_sessions(client, good, dc_id)
+                for s in bad:
+                    try:
                         await s.stop()
-                except Exception:
-                    pass
-            fp.close()
+                    except Exception:
+                        pass
+            if fp:
+                await fp.close()
 
     async def _upload_small(self, client, file_path):
-        fp = open(file_path, "rb")
-        fp.seek(0, 2)
-        file_size = fp.tell()
-        fp.seek(0)
-
+        file_size = await aiopath.getsize(file_path)
         part_size = self.PART_SIZE
         file_total_parts = ceil(file_size / part_size)
         file_id = client.rnd_id()
@@ -280,31 +331,33 @@ class HyperTGUpload:
         test_mode = await client.storage.test_mode()
 
         s = Session(client, dc_id, auth_key, test_mode, is_media=False)
-        await s.start()
-
-        obj = self._obj
-        listener = self._listener
+        fp = await aiofiles.open(file_path, "rb")
+        md5_hash = md5()
 
         try:
+            await s.start()
+
+            obj = self._obj
+            listener = self._listener
+
             for part in range(file_total_parts):
                 if listener.is_cancelled:
                     raise StopTransmission()
-                chunk = fp.read(part_size)
+                chunk = await fp.read(part_size)
                 if not chunk:
                     break
+                md5_hash.update(chunk)
                 await s.invoke(raw.functions.upload.SaveFilePart(
                     file_id=file_id,
                     file_part=part,
                     bytes=chunk,
                 ))
                 obj._processed_bytes += len(chunk)
-            fp.seek(0)
-            md5_sum = md5(fp.read()).hexdigest()
             return raw.types.InputFile(
                 id=file_id,
                 parts=file_total_parts,
                 name=ospath.basename(file_path),
-                md5_checksum=md5_sum,
+                md5_checksum=md5_hash.hexdigest(),
             )
         finally:
             try:
@@ -312,7 +365,40 @@ class HyperTGUpload:
                     await s.stop()
             except Exception:
                 pass
-            fp.close()
+            await fp.close()
+
+    async def _upload_thumb(self, client, file_path):
+        file_size = await aiopath.getsize(file_path)
+        file_id = client.rnd_id()
+        file_total_parts = ceil(file_size / self.PART_SIZE)
+
+        obj = self._obj
+        listener = self._listener
+        fp = await aiofiles.open(file_path, "rb")
+        md5_hash = md5()
+
+        try:
+            for part in range(file_total_parts):
+                if listener.is_cancelled:
+                    raise StopTransmission()
+                chunk = await fp.read(self.PART_SIZE)
+                if not chunk:
+                    break
+                md5_hash.update(chunk)
+                await client.invoke(raw.functions.upload.SaveFilePart(
+                    file_id=file_id,
+                    file_part=part,
+                    bytes=chunk,
+                ))
+                obj._processed_bytes += len(chunk)
+            return raw.types.InputFile(
+                id=file_id,
+                parts=file_total_parts,
+                name=ospath.basename(file_path),
+                md5_checksum=md5_hash.hexdigest(),
+            )
+        finally:
+            await fp.close()
 
     def _mime(self, path):
         m, _ = guess_type(path)

@@ -157,33 +157,36 @@ class TelegramUploader:
 
     async def _prepare_file(self, pre_file_, dirpath):
         cap_file_ = file_ = pre_file_
+        lprefix = self._lprefix
+        lsuffix = self._lsuffix
+        lcaption = self._lcaption
 
-        if self._lprefix:
-            cap_file_ = self._lprefix.replace(r"\s", " ") + file_
-            self._lprefix = re_sub(r"<.*?>", "", self._lprefix).replace(r"\s", " ")
-            if not file_.startswith(self._lprefix):
-                file_ = f"{self._lprefix}{file_}"
+        if lprefix:
+            cap_file_ = lprefix.replace(r"\s", " ") + file_
+            lprefix = re_sub(r"<.*?>", "", lprefix).replace(r"\s", " ")
+            if not file_.startswith(lprefix):
+                file_ = f"{lprefix}{file_}"
 
-        if self._lsuffix:
+        if lsuffix:
             name, ext = ospath.splitext(cap_file_)
-            cap_file_ = name + self._lsuffix.replace(r"\s", " ") + ext
-            self._lsuffix = re_sub(r"<.*?>", "", self._lsuffix).replace(r"\s", " ")
+            cap_file_ = name + lsuffix.replace(r"\s", " ") + ext
+            lsuffix = re_sub(r"<.*?>", "", lsuffix).replace(r"\s", " ")
 
         cap_mono = (
             f"<{Config.LEECH_FONT}>{cap_file_}</{Config.LEECH_FONT}>"
             if Config.LEECH_FONT
             else cap_file_
         )
-        if self._lcaption:
-            self._lcaption = re_sub(
+        if lcaption:
+            lcaption = re_sub(
                 r"(\\\||\\\{|\\\}|\\s)",
                 lambda m: {r"\|": "%%", r"\{": "&%&", r"\}": "$%$", r"\s": " "}[
                     m.group(0)
                 ],
-                self._lcaption,
+                lcaption,
             )
 
-            parts = self._lcaption.split("|")
+            parts = lcaption.split("|")
             parts[0] = re_sub(
                 r"\{([^}]+)\}", lambda m: f"{{{m.group(1).lower()}}}", parts[0]
             )
@@ -228,20 +231,20 @@ class TelegramUploader:
             else:
                 name = file_
                 ext = ""
-            if self._lsuffix:
-                ext = f"{self._lsuffix}{ext}"
+            if lsuffix:
+                ext = f"{lsuffix}{ext}"
             name = name[: 64 - len(ext)]
             file_ = f"{name}{ext}"
-        elif self._lsuffix:
+        elif lsuffix:
             name, ext = ospath.splitext(file_)
-            file_ = f"{name}{self._lsuffix}{ext}"
+            file_ = f"{name}{lsuffix}{ext}"
 
-        if pre_file_ != file_:
-            new_path = ospath.join(dirpath, file_)
-            await rename(self._up_path, new_path)
-            self._up_path = new_path
+        old_path = ospath.join(dirpath, pre_file_)
+        new_path = ospath.join(dirpath, file_)
+        if old_path != new_path:
+            await rename(old_path, new_path)
 
-        return cap_mono
+        return new_path, cap_mono
 
     def _get_input_media(self, subkey, key):
         rlist = []
@@ -318,9 +321,11 @@ class TelegramUploader:
             if not self._listener.is_cancelled:
                 LOGGER.error(f"Failed To Send in BotPM:\n{str(err)}")
 
-    async def _upload_file_task(self, cap_mono, file_, f_path):
+    async def _upload_file_task(self, file_, f_path, dirpath):
+        up_path = None
         try:
-            sent = await self._upload_file(cap_mono, file_, f_path)
+            up_path, cap_mono = await self._prepare_file(file_, dirpath)
+            sent = await self._upload_file(cap_mono, file_, up_path)
             if sent and not self._is_corrupted:
                 if self._listener.is_super_chat or self._listener.up_dest:
                     if not self._is_private:
@@ -332,8 +337,9 @@ class TelegramUploader:
             self._corrupted += 1
             return None
         finally:
-            if not self._listener.is_cancelled and await aiopath.exists(f_path):
-                await remove(f_path)
+            path_to_clean = up_path or f_path
+            if not self._listener.is_cancelled and await aiopath.exists(path_to_clean):
+                await remove(path_to_clean)
 
     async def upload(self):
         await self._user_settings()
@@ -351,22 +357,21 @@ class TelegramUploader:
                 continue
             for file_ in natsorted(files):
                 self._error = ""
-                self._up_path = f_path = ospath.join(dirpath, file_)
-                if not await aiopath.exists(self._up_path):
-                    LOGGER.error(f"{self._up_path} not exists! Continue uploading!")
+                f_path = ospath.join(dirpath, file_)
+                if not await aiopath.exists(f_path):
+                    LOGGER.error(f"{f_path} not exists! Continue uploading!")
                     continue
                 try:
-                    f_size = await aiopath.getsize(self._up_path)
+                    f_size = await aiopath.getsize(f_path)
                     self._total_files += 1
                     if f_size == 0:
                         LOGGER.error(
-                            f"{self._up_path} size is zero, telegram don't upload zero size files"
+                            f"{f_path} size is zero, telegram don't upload zero size files"
                         )
                         self._corrupted += 1
                         continue
                     if self._listener.is_cancelled:
                         return
-                    cap_mono = await self._prepare_file(file_, dirpath)
                     if self._last_msg_in_group:
                         group_lists = [
                             x for v in self._media_dict.values() for x in v.keys()
@@ -391,7 +396,7 @@ class TelegramUploader:
                             )
                     self._last_msg_in_group = False
                     task = ensure_future(
-                        self._upload_file_task(cap_mono, file_, self._up_path)
+                        self._upload_file_task(file_, f_path, dirpath)
                     )
                     upload_tasks.append(task)
                     if self._log_msg and not is_log_del and Config.CLEAN_LOG_MSG:
@@ -400,7 +405,7 @@ class TelegramUploader:
                     if self._listener.is_cancelled:
                         return
                 except Exception as err:
-                    LOGGER.error(f"{err}. Path: {self._up_path}", exc_info=True)
+                    LOGGER.error(f"{err}. Path: {f_path}", exc_info=True)
                     self._error = str(err)
                     self._corrupted += 1
                     if self._listener.is_cancelled:
