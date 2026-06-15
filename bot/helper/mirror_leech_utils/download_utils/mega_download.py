@@ -155,19 +155,15 @@ async def add_mega_download(listener, path):
                 LOGGER.info("Mega: no root node after fetchNodes")
                 await listener.on_download_error("Failed to get root node for MEGA folder")
                 return
-            LOGGER.info("Mega: fetchNodes OK, subfolder_handle=%s", subfolder_handle)
-
             if subfolder_handle:
                 LOGGER.info("Mega: looking up subfolder handle=%s", subfolder_handle)
                 target_int = _mega_base64_to_int(subfolder_handle)
-                LOGGER.info("Mega: subfolder target_int=%s", target_int)
                 node = _find_child_in_list(dl_listener._children, subfolder_handle)
                 if not node and target_int is not None:
                     try:
                         node = folder_api.getNodeByHandle(target_int)
                     except Exception as e:
                         LOGGER.error("Mega: getNodeByHandle failed: %s", e)
-                LOGGER.info("Mega: subfolder node found=%s", node is not None)
                 if not node:
                     await listener.on_download_error("Subfolder not found in the MEGA link")
                     return
@@ -175,21 +171,12 @@ async def add_mega_download(listener, path):
                 dl_listener._cache_node_data(node)
                 LOGGER.info("Mega: subfolder name=%s", dl_listener._name)
 
-                LOGGER.info("Mega: getting size, listener.size=%s", listener.size)
                 dl_listener._size = listener.size
-                LOGGER.info("Mega: dl_listener._size after listener.size=%s", dl_listener._size)
                 if not dl_listener._size:
-                    LOGGER.info("Mega: calling node.getSize() directly")
                     try:
-                        if hasattr(node, "getSize"):
-                            dl_listener._size = node.getSize()
-                            LOGGER.info("Mega: node.getSize() OK=%s", dl_listener._size)
-                        else:
-                            s = folder_api.getSize(node)
-                            LOGGER.info("Mega: folder_api.getSize OK=%s", s)
-                            dl_listener._size = s
-                    except Exception as e:
-                        LOGGER.error("Mega: getSize exception=%s", e)
+                        dl_listener._size = node.getSize()
+                    except Exception:
+                        pass
                 LOGGER.info("Mega: subfolder size=%s", dl_listener._size)
             else:
                 node = dl_listener.node
@@ -220,14 +207,9 @@ async def add_mega_download(listener, path):
         listener.size = dl_listener._size
         if not listener.size and node:
             try:
-                if hasattr(node, "getSize"):
-                    listener.size = node.getSize()
-                    LOGGER.info("Mega: fallback node.getSize()=%s", listener.size)
-                else:
-                    LOGGER.info("Mega: has no getSize, trying sync_to_async")
-                    listener.size = await sync_to_async(folder_api.getSize, node)
-            except Exception as e:
-                LOGGER.info("Mega: fallback getSize exception: %s", e)
+                listener.size = node.getSize()
+            except Exception:
+                pass
         gid = token_hex(5)
         msg, button = await stop_duplicate_check(listener)
         if msg:
