@@ -119,7 +119,7 @@ class HyperTGDownload:
             ak = await Auth(client, dc_id, tm).create()
             s = Session(client, dc_id, ak, tm, is_media=True)
             await s.start()
-            for _ in range(6):
+            for _ in range(3):
                 try:
                     e = await client.invoke(
                         raw.functions.auth.ExportAuthorization(dc_id=dc_id)
@@ -238,16 +238,15 @@ class HyperTGDownload:
         first_trim = start - first_chunk_off
         last_byte = end - 1
         window = self.pipeline_depth
-        min_window = 2
+        min_window = 4
         max_window = window * 4
         inflight = set()
         cur_off = first_chunk_off
         seq = 0
-        consecutive_ok = 0
-        flood_count = 0
+        successes = 0
 
         async def _req(off, s):
-            nonlocal sess, loc, window, consecutive_ok, flood_count
+            nonlocal sess, loc
             for attempt in range(3):
                 try:
                     result = await self._do_req(sess, loc, off, csz, attempt)
@@ -263,19 +262,14 @@ class HyperTGDownload:
                         continue
                     return s, off, result
                 except (FloodWait, FloodPremiumWait) as e:
-                    flood_count += 1
                     wait_val = e.value if hasattr(e, "value") else 5
-                    if wait_val > 10 or flood_count >= 3:
-                        window = max(min_window, window - max(1, window // 4))
-                        consecutive_ok = 0
-                        flood_count = 0
                     await sleep(wait_val + 1)
                 except CancelledError:
                     raise
             raise RuntimeError(f"Failed after 3 attempts at offset {off}")
 
         try:
-            consecutive_fail = 0
+            stall_count = 0
             while cur_off <= last_byte or inflight:
                 while len(inflight) < window and cur_off <= last_byte:
                     if self._cancel.is_set():
@@ -288,38 +282,33 @@ class HyperTGDownload:
                 try:
                     done_set, inflight = await wait_for(
                         wait(inflight, return_when=FIRST_COMPLETED),
-                        timeout=90,
+                        timeout=60,
                     )
-                    consecutive_fail = 0
+                    stall_count = 0
                 except TimeoutError:
-                    consecutive_fail += 1
-                    if consecutive_fail >= 3:
-                        raise RuntimeError(
-                            "Pipeline stalled: no progress for 3 consecutive rounds"
-                        )
+                    stall_count += 1
+                    if stall_count >= 2:
+                        raise RuntimeError("Pipeline stalled: no progress in 120s")
                     window = max(min_window, window // 2)
                     continue
-                consecutive_ok += len(done_set)
-                if consecutive_ok >= window:
-                    window = min(window + 2, max_window)
-                    consecutive_ok = 0
                 for f in done_set:
                     s, roff, chunk = f.result()
                     if not chunk:
                         continue
+                    successes += 1
+                    if successes >= window:
+                        window = min(window * 2, max_window)
+                        successes = 0
                     if roff == first_chunk_off and roff + csz >= end:
-                        chunk = chunk[first_trim:last_byte - roff + 1]
+                        chunk = chunk[first_trim : last_byte - roff + 1]
                     elif roff == first_chunk_off:
                         chunk = chunk[first_trim:]
                     elif roff + csz > end:
-                        chunk = chunk[:end - roff]
+                        chunk = chunk[: end - roff]
                     await queue.put((roff, chunk))
         except CancelledError:
             raise
         except Exception as e:
-            if "FloodWait" in type(e).__name__ or "Flood" in str(type(e).__name__):
-                window = max(min_window, window // 2)
-                consecutive_ok = 0
             LOGGER.error(f"HyperDL pipeline err: {type(e).__name__}: {e}")
             raise
         finally:
