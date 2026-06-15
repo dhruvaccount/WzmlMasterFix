@@ -9,7 +9,6 @@ from asyncio import (
     gather,
     sleep,
     to_thread,
-    wait_for
 )
 from datetime import datetime
 from mimetypes import guess_extension
@@ -36,7 +35,7 @@ from ... import LOGGER
 from ...core.config_manager import Config
 from ...core.tg_client import TgClient
 
-_hyper_part_sem = Semaphore(8)
+_hyper_part_sem = Semaphore(4)
 
 MB = 1024 * 1024
 
@@ -222,16 +221,13 @@ class HyperTGDownload:
 
     async def _do_req(self, sess, client, location, off, csz, attempt=0):
         try:
-            r = await wait_for(
-                sess.invoke(
-                    raw.functions.upload.GetFile(
-                        location=location,
-                        offset=off,
-                        limit=csz,
-                    ),
-                    sleep_threshold=client.sleep_threshold,
+            r = await sess.invoke(
+                raw.functions.upload.GetFile(
+                    location=location,
+                    offset=off,
+                    limit=csz,
                 ),
-                timeout=Config.HYPER_TIMEOUT,
+                sleep_threshold=client.sleep_threshold,
             )
             if isinstance(r, raw.types.upload.File):
                 return r.bytes
@@ -269,7 +265,7 @@ class HyperTGDownload:
             raise
 
     async def _sequential_fetch(self, idx, location, start, end, fid, queue):
-        csz = max(Config.HYPER_CHUNK, 64 * 1024)
+        csz = 1024 * 1024
         sess = await self._mk_session(self.clients[idx], fid.dc_id)
         self._sessions[id(sess)] = sess
         loc = location
