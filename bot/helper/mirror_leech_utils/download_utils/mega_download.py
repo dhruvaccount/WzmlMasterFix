@@ -174,7 +174,8 @@ async def add_mega_download(listener, path):
                 dl_listener._size = listener.size
                 if not dl_listener._size:
                     try:
-                        dl_listener._size = node.getSize()
+                        s = node.getSize()
+                        dl_listener._size = s if s < (1 << 62) else -1
                     except Exception:
                         pass
                 LOGGER.info("Mega: subfolder size=%s", dl_listener._size)
@@ -204,10 +205,11 @@ async def add_mega_download(listener, path):
                 return
 
         listener.name = listener.name or dl_listener._name or f"MEGA_Download_{token_hex(5)}"
-        listener.size = dl_listener._size
-        if not listener.size and node:
+        listener.size = dl_listener._size if dl_listener._size < (1 << 62) else -1
+        if listener.size <= 0 and node:
             try:
-                listener.size = node.getSize()
+                s = node.getSize()
+                listener.size = s if s < (1 << 62) else -1
             except Exception:
                 pass
         gid = token_hex(5)

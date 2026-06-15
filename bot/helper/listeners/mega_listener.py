@@ -1021,6 +1021,8 @@ class MegaFolderListener(MegaListener):
             total = transfer.getTotalBytes()
             if total > self._total_folder_size:
                 self._total_folder_size = total
+                if total > 0 and hasattr(self, "listener"):
+                    self.listener.size = total
         except Exception as e:
             LOGGER.error(f"MegaFolder transfer update callback exception: {e}", exc_info=True)
 
