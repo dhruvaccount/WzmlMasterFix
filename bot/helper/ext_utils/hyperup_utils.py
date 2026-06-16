@@ -1,6 +1,6 @@
 import os
 import re
-from asyncio import Lock, Semaphore, create_task, gather, sleep
+from asyncio import Lock, Queue, Semaphore, create_task, gather, sleep
 from hashlib import md5
 from math import ceil
 from mimetypes import guess_type
@@ -20,7 +20,8 @@ _ul_slots_lock = Lock()
 _ul_sessions: dict[int, Session] = {}
 _ul_sessions_lock = Lock()
 
-PART_SIZE = 1024 * 1024  # 1MB
+KB = 1024
+PART_SIZE = 512 * KB
 
 
 async def _close_ul_sessions():
@@ -81,7 +82,7 @@ class HypertgUpload(HypertgTransfer):
         file_id = client.rnd_id()
         dc_id = await client.storage.dc_id()
         is_big = file_size > 10 * MB
-        num_workers = min(12, self.num_clients or 1) if is_big else 1
+        num_workers = min(8, self.num_clients or 1) if is_big else 1
 
         _slot_acquired = False
         async with _ul_slots_lock:
@@ -108,51 +109,38 @@ class HypertgUpload(HypertgTransfer):
             f"bot={up_name}"
         )
 
-        fd = os.open(file_path, os.O_RDONLY | getattr(os, 'O_BINARY', 0))
+        fp = open(file_path, "rb")
+        q = Queue(num_workers * 4)
+
         tm = await client.storage.test_mode()
         ak, is_cross = await self.create_auth(client, dc_id, tm)
         ea = None
         if is_cross:
             ea = await client.invoke(raw.functions.auth.ExportAuthorization(dc_id=dc_id))
-        rpc_fn = raw.functions.upload.SaveBigFilePart if is_big else raw.functions.upload.SaveFilePart
 
         async def worker(wid):
             s = Session(up_client, dc_id, ak, tm, is_media=True)
             await self.start_session(s, mode=1)
             if ea is not None:
                 await s.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
-            sent = 0
             try:
-                part = wid
-                while part < file_total_parts:
-                    if self._listener.is_cancelled:
+                while True:
+                    data = await q.get()
+                    if data is None:
                         return
-                    offset = part * PART_SIZE
-                    size = min(PART_SIZE, file_size - offset)
-                    chunk = os.pread(fd, size, offset)
-                    last_err = None
-                    for attempt in range(3):
-                        try:
-                            await s.invoke(rpc_fn(
-                                file_id=file_id, file_part=part,
-                                file_total_parts=file_total_parts, bytes=chunk,
-                            ))
-                            last_err = None
-                            break
-                        except TimeoutError as e:
-                            last_err = e
-                            LOGGER.warning(
-                                f"HypertgUL worker {wid} timeout "
-                                f"part={part} attempt={attempt}"
-                            )
-                            await sleep(2 ** attempt)
-                    if last_err is not None:
-                        raise last_err
-                    self._obj._processed_bytes += len(chunk)
-                    sent += 1
-                    part += num_workers
+                    data2 = None
+                    try:
+                        data2 = q.get_nowait()
+                        if data2 is None:
+                            await q.put(None)
+                            data2 = None
+                    except Queue.Empty:
+                        pass
+                    if data2 is not None:
+                        await gather(s.invoke(data), s.invoke(data2))
+                    else:
+                        await s.invoke(data)
             finally:
-                LOGGER.debug(f"HypertgUL worker {wid} done ({sent} parts)")
                 try:
                     await s.stop()
                 except Exception:
@@ -161,6 +149,27 @@ class HypertgUpload(HypertgTransfer):
         workers = [create_task(worker(wid)) for wid in range(num_workers)]
 
         try:
+            part = 0
+            rpc_fn = raw.functions.upload.SaveBigFilePart if is_big else raw.functions.upload.SaveFilePart
+            LOGGER.info(f"HypertgUL queuing {file_total_parts} parts rpc={rpc_fn.__name__}")
+
+            while True:
+                chunk = fp.read(PART_SIZE)
+                if not chunk:
+                    break
+                rpc = rpc_fn(
+                    file_id=file_id, file_part=part,
+                    file_total_parts=file_total_parts, bytes=chunk,
+                )
+                await q.put(rpc)
+                self._obj._processed_bytes += len(chunk)
+                part += 1
+                if part % 200 == 0 or part == file_total_parts:
+                    LOGGER.info(f"HypertgUL queued {part}/{file_total_parts}")
+
+            LOGGER.info("HypertgUL all parts queued, signaling workers")
+            for _ in workers:
+                await q.put(None)
             await gather(*workers)
 
             up_elapsed = time() - t0
@@ -195,12 +204,11 @@ class HypertgUpload(HypertgTransfer):
                     self.work_loads[ul_ci] = max(0, self.work_loads.get(ul_ci, 0) - 1)
             if _slot_acquired:
                 _ul_slots[0].release()
-            for w in workers:
-                if not w.done():
-                    w.cancel()
+            for _ in workers:
+                await q.put(None)
             await gather(*workers, return_exceptions=True)
             try:
-                os.close(fd)
+                fp.close()
             except Exception:
                 pass
 
