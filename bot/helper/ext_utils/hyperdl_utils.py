@@ -587,65 +587,116 @@ class HypertgDownload(HypertgTransfer):
                 elif isinstance(r, set) and r:
                     all_failed_offsets.update(r)
 
-            max_retries = 3
+            bad_bots = set()
+            max_retries = 4
             for retry_round in range(max_retries):
                 if not all_failed_offsets:
                     break
+
+                if retry_round > 0:
+                    LOGGER.info(
+                        f"HypertgDL retry cooling 3s "
+                        f"before round {retry_round + 1}"
+                    )
+                    await sleep(3)
+
                 LOGGER.warning(
                     f"HypertgDL retry round {retry_round + 1}/{max_retries}: "
                     f"{len(all_failed_offsets)} failed offsets"
+                    f"{' (bad bots: ' + str(bad_bots) + ')' if bad_bots else ''}"
                 )
-                all_client_indices = list(self.clients.keys())
-                retry_tasks = []
-                retry_batch_size = max(1, len(all_failed_offsets) // max(1, len(all_client_indices)))
+
+                good_bots = sorted(
+                    [i for i in self.clients.keys() if i not in bad_bots],
+                    key=lambda i: self.work_loads.get(i, 0),
+                )
+                if not good_bots:
+                    LOGGER.error("HypertgDL retry: no good bots remaining")
+                    break
+
                 sorted_offsets = sorted(all_failed_offsets)
-                for bot_idx in all_client_indices:
+                n_batches = min(
+                    max(2, len(good_bots) // 2),
+                    len(good_bots),
+                    len(all_failed_offsets),
+                )
+                batch_size = max(1, len(sorted_offsets) // n_batches)
+
+                bot_task_map = []
+                for bot_idx in good_bots[:n_batches]:
                     if not sorted_offsets:
                         break
-                    batch = sorted_offsets[:retry_batch_size]
-                    sorted_offsets = sorted_offsets[retry_batch_size:]
+                    batch = sorted_offsets[:batch_size]
+                    sorted_offsets = sorted_offsets[batch_size:]
                     if not batch:
                         continue
                     if bot_idx not in fid_map:
                         try:
-                            fid_map[bot_idx] = await self._fetch_ref(bot_idx, self.clients[bot_idx])
+                            fid_map[bot_idx] = await self._fetch_ref(
+                                bot_idx, self.clients[bot_idx]
+                            )
                         except Exception as e:
-                            LOGGER.warning(f"HypertgDL retry ref fail bot={bot_idx}: {e}")
+                            LOGGER.warning(
+                                f"HypertgDL retry ref fail bot={bot_idx}: {e}"
+                            )
+                            bad_bots.add(bot_idx)
                             continue
                     retry_start = batch[0]
-                    retry_end = min(batch[-1] + self.chunk_size, self.file_size)
+                    retry_end = min(
+                        batch[-1] + self.chunk_size, self.file_size
+                    )
                     LOGGER.info(
                         f"HypertgDL retry ci={bot_idx} "
                         f"client={self.clients[bot_idx].me.username} "
                         f"range={retry_start}-{retry_end} "
                         f"({len(batch)} offsets)"
                     )
-                    retry_tasks.append(
-                        create_task(
-                            self._part(
-                                retry_start, retry_end, final, bot_idx,
-                                fid_map[bot_idx], self.chunk_size
-                            )
+                    task = create_task(
+                        self._part(
+                            retry_start, retry_end, final, bot_idx,
+                            fid_map[bot_idx], self.chunk_size,
                         )
                     )
-                if not retry_tasks:
-                    LOGGER.error("HypertgDL retry: no bots available for retry")
+                    bot_task_map.append((bot_idx, task))
+
+                if not bot_task_map:
+                    LOGGER.error(
+                        "HypertgDL retry: no bots available for retry"
+                    )
                     break
-                retry_results = await gather(*retry_tasks, return_exceptions=True)
+
+                retry_results = await gather(
+                    *[t for _, t in bot_task_map], return_exceptions=True
+                )
                 still_failed = set()
-                for r in retry_results:
+                for (bot_idx, _), r in zip(bot_task_map, retry_results):
                     if isinstance(r, BaseException):
-                        LOGGER.error(f"HypertgDL retry part failed: {r}")
-                        if hasattr(r, "failed_offsets"):
+                        LOGGER.error(
+                            f"HypertgDL retry ci={bot_idx} "
+                            f"client={self.clients[bot_idx].me.username} "
+                            f"failed: {r}"
+                        )
+                        if hasattr(r, "failed_offsets") and r.failed_offsets:
                             still_failed.update(r.failed_offsets)
-                    elif isinstance(r, set) and r:
-                        still_failed.update(r)
+                        bad_bots.add(bot_idx)
+                    elif isinstance(r, set):
+                        if r:
+                            LOGGER.warning(
+                                f"HypertgDL retry ci={bot_idx} "
+                                f"client={self.clients[bot_idx].me.username} "
+                                f"returned {len(r)} failed offsets — marking bad"
+                            )
+                            still_failed.update(r)
+                            bad_bots.add(bot_idx)
                 all_failed_offsets = still_failed
 
             if all_failed_offsets:
+                n_bad = len(bad_bots)
+                bad_detail = f" ({n_bad} bot{'s' if n_bad != 1 else ''} exhausted)" if n_bad else ""
                 LOGGER.error(
                     f"HypertgDL {len(all_failed_offsets)} offsets still failed "
                     f"after {max_retries} retry rounds — file may be incomplete"
+                    f"{bad_detail}"
                 )
 
             dl_elapsed = time() - dl_start
