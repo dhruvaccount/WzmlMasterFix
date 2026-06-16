@@ -60,7 +60,8 @@ class HypertgDownload(HypertgTransfer):
         self.num_parts = Config.HYPER_THREADS or max(
             _LOW_WORKERS, min(_HIGH_WORKERS, self.num_clients)
         )
-        self.pipeline_depth = max(Config.HYPER_PIPELINE or _DEFAULT_PIPELINE, _MIN_PIPELINE)
+        base_pipe = max(Config.HYPER_PIPELINE or _DEFAULT_PIPELINE, _MIN_PIPELINE)
+        self.pipeline_depth = max(base_pipe // max(self.num_parts, 1), _MIN_PIPELINE)
         self.message = None
         self.dump_chat = None
         self.directory = None
@@ -237,9 +238,10 @@ class HypertgDownload(HypertgTransfer):
         seq = 0
         ok_count = 0
         flood_count = 0
+        timeout_count = 0
 
         async def _req(off, s):
-            nonlocal window, ok_count, flood_count
+            nonlocal window, ok_count, flood_count, timeout_count
             my_sess = sess
             my_loc = loc
             for attempt in range(3):
@@ -273,6 +275,7 @@ class HypertgDownload(HypertgTransfer):
                             my_sess = await self._get_session(idx, dc_or_ref, force=True)
                         await sleep(attempt + 1)
                         continue
+                    timeout_count = 0
                     return s, off, result
                 except (FloodWait, FloodPremiumWait) as e:
                     flood_count += 1
@@ -289,6 +292,16 @@ class HypertgDownload(HypertgTransfer):
                     await sleep(val + 1)
                 except CancelledError:
                     raise
+            timeout_count += 1
+            if timeout_count >= 3:
+                old = window
+                window = max(min_win, window - max(1, window // 4))
+                timeout_count = 0
+                ok_count = 0
+                LOGGER.warning(
+                    f"HypertgDL timeout window {old}->{window} "
+                    f"client={self.clients[idx].me.username}"
+                )
             raise RuntimeError(f"Failed after 3 attempts at offset {off}")
 
         try:

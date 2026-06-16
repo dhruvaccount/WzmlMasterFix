@@ -49,12 +49,11 @@ class HypertgUpload(HypertgTransfer):
         tm = await client.storage.test_mode()
 
         is_big = file_size > 10 * MB
-        n_sessions = 3 if is_big else 1
         n_workers = 4 if is_big else 1
         LOGGER.info(
             f"HypertgUL upload {os.path.basename(file_path)} "
             f"({file_size / MB:.1f}MB {file_total_parts}p "
-            f"{n_sessions}x{n_workers} dc={dc_id})"
+            f"workers={n_workers} dc={dc_id})"
         )
 
         fp = open(file_path, "rb")
@@ -63,14 +62,12 @@ class HypertgUpload(HypertgTransfer):
         q = Queue(16)
 
         try:
-            for _ in range(n_sessions):
-                s = Session(client, dc_id, ak, tm, is_media=True)
-                await s.start()
-                sessions.append(s)
+            s = Session(client, dc_id, ak, tm, is_media=True)
+            await s.start()
+            sessions.append(s)
 
-            for s in sessions:
-                for _ in range(n_workers):
-                    workers.append(ensure_future(self._worker(s, q)))
+            for _ in range(n_workers):
+                workers.append(ensure_future(self._worker(s, q)))
 
             part = 0
             rpc_fn = raw.functions.upload.SaveBigFilePart if is_big else raw.functions.upload.SaveFilePart
@@ -99,7 +96,7 @@ class HypertgUpload(HypertgTransfer):
             LOGGER.info(
                 f"HypertgUL file done {os.path.basename(file_path)} "
                 f"({file_size / MB:.1f}MB {file_total_parts}p "
-                f"{n_sessions}x{n_workers} {up_speed:.1f}MB/s {up_elapsed:.1f}s)"
+                f"{n_workers}w {up_speed:.1f}MB/s {up_elapsed:.1f}s)"
             )
 
             if is_big:
@@ -136,22 +133,21 @@ class HypertgUpload(HypertgTransfer):
             rpc = await q.get()
             if rpc is None:
                 break
-            for attempt in range(3):
+            try:
+                await session.send(rpc, wait_response=True)
+            except (FloodWait, FloodPremiumWait) as e:
+                val = e.value if hasattr(e, "value") else 5
+                LOGGER.warning(f"HypertgUL worker flood {val}s dc={session.dc_id}")
+                await sleep(val + 1)
                 try:
                     await session.send(rpc, wait_response=True)
-                    break
-                except (FloodWait, FloodPremiumWait) as e:
-                    val = e.value if hasattr(e, "value") else 5
-                    LOGGER.warning(f"HypertgUL worker flood {val}s dc={session.dc_id}")
-                    await sleep(val + 1)
-                except (TimeoutError, OSError) as e:
-                    if attempt == 2:
-                        LOGGER.warning(f"HypertgUL worker fail: {type(e).__name__}: {e} dc={session.dc_id}")
-                    else:
-                        await sleep(1)
-                except Exception as e:
-                    LOGGER.warning(f"HypertgUL worker err: {type(e).__name__}: {e} dc={session.dc_id}")
-                    break
+                except Exception:
+                    LOGGER.warning(f"HypertgUL worker flood retry fail dc={session.dc_id}")
+            except (TimeoutError, OSError) as e:
+                LOGGER.warning(f"HypertgUL worker {type(e).__name__}: {e} dc={session.dc_id}")
+            except Exception as e:
+                LOGGER.warning(f"HypertgUL worker err: {type(e).__name__}: {e} dc={session.dc_id}")
+                break
 
     async def _upload_small(self, client, file_path):
         file_size = ospath.getsize(file_path)
