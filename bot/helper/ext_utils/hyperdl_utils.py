@@ -20,14 +20,18 @@ from time import time
 
 from aiofiles.os import makedirs
 from pyrogram import StopTransmission, raw
+from pyrogram.crypto.aes import ctr256_decrypt
 from pyrogram.errors import (
     FileMigrate,
     FileReferenceExpired,
     FileReferenceInvalid,
+    FileTokenInvalid,
     FloodPremiumWait,
     FloodWait,
+    RequestTokenInvalid,
 )
 from pyrogram.file_id import PHOTO_TYPES, FileId, FileType
+from pyrogram.session import Auth, Session
 from pyrogram.session.internals import MsgId
 
 from ... import LOGGER
@@ -64,6 +68,8 @@ class HypertgDownload(HypertgTransfer):
         self.file_size = 0
         self.download_dir = "downloads/"
         self._ref_cache = {}
+        self._cdn_info = {}
+        self._cdn_sessions = {}
         LOGGER.info(
             f"HypertgDL init clients={self.num_clients} "
             f"chunk={self.chunk_size // KB}KB parts={self.num_parts} "
@@ -118,13 +124,16 @@ class HypertgDownload(HypertgTransfer):
         try:
             r = await sess.invoke(
                 raw.functions.upload.GetFile(
-                    precise=True, cdn_supported=False,
+                    precise=True, cdn_supported=True,
                     location=location, offset=off, limit=csz,
                 ),
                 sleep_threshold=client.sleep_threshold,
             )
             if isinstance(r, raw.types.upload.File):
                 return r.bytes
+            if isinstance(r, raw.types.upload.FileCdnRedirect):
+                return None, {"cdn_dc": r.dc_id, "file_token": r.file_token,
+                              "key": r.encryption_key, "iv": r.encryption_iv}
             raise ValueError(f"Unexpected response type: {type(r)}")
         except FileMigrate as e:
             dc = e.value if hasattr(e, "value") else int(str(e).split()[-1])
@@ -142,6 +151,77 @@ class HypertgDownload(HypertgTransfer):
             if attempt < 3:
                 return None, -2
             raise
+
+    async def _get_cdn_session(self, idx, cdn_dc, client):
+        key = (idx, cdn_dc)
+        s = self._cdn_sessions.get(key)
+        if s and s.is_connected:
+            return s
+        tm = await client.storage.test_mode()
+        ak = await Auth(client, cdn_dc, tm).create()
+        s = Session(client, cdn_dc, ak, tm, is_media=True, is_cdn=True)
+        await s.start()
+        self._cdn_sessions[key] = s
+        return s
+
+    async def _cdnpull(self, idx, cdn_info, off, csz):
+        client = self.clients[idx]
+        cdn_dc = cdn_info["cdn_dc"]
+        file_token = cdn_info["file_token"]
+        enc_key = cdn_info["key"]
+        enc_iv = cdn_info["iv"]
+        sess = await self._get_cdn_session(idx, cdn_dc, client)
+
+        for attempt in range(3):
+            try:
+                r = await sess.invoke(
+                    raw.functions.upload.GetCdnFile(
+                        file_token=file_token, offset=off, limit=csz,
+                    ),
+                    sleep_threshold=client.sleep_threshold,
+                )
+                if isinstance(r, raw.types.upload.CdnFile):
+                    chunk = r.bytes
+                    iv_mod = bytearray(
+                        enc_iv[:-4] + (off // 16).to_bytes(4, "big")
+                    )
+                    return ctr256_decrypt(chunk, enc_key, iv_mod)
+                if isinstance(r, raw.types.upload.CdnFileReuploadNeeded):
+                    try:
+                        await client.invoke(
+                            raw.functions.upload.ReuploadCdnFile(
+                                file_token=file_token,
+                                request_token=r.request_token,
+                            )
+                        )
+                    except Exception:
+                        pass
+                    await sleep(1)
+                    continue
+                raise ValueError(f"Unexpected CDN response: {type(r)}")
+            except (FloodWait, FloodPremiumWait) as e:
+                val = e.value if hasattr(e, "value") else 5
+                LOGGER.warning(f"HypertgDL CDN flood {val}s dc={cdn_dc}")
+                await sleep(val + 1)
+            except FileTokenInvalid:
+                LOGGER.warning(f"HypertgDL CDN FileTokenInvalid dc={cdn_dc} — fallback to non-CDN")
+                self._cdn_info.pop(idx, None)
+                return None
+            except RequestTokenInvalid:
+                LOGGER.warning(f"HypertgDL CDN RequestTokenInvalid dc={cdn_dc} — fallback to non-CDN")
+                self._cdn_info.pop(idx, None)
+                return None
+            except (ConnectionError, OSError, TimeoutError) as e:
+                LOGGER.warning(f"HypertgDL CDN {type(e).__name__}: {e} dc={cdn_dc}")
+                if attempt < 2:
+                    try:
+                        await sess.stop()
+                    except Exception:
+                        pass
+                    self._cdn_sessions.pop((idx, cdn_dc), None)
+                    sess = await self._get_cdn_session(idx, cdn_dc, client)
+                    await sleep(1)
+        return None
 
     async def _pipeline_fetch(self, idx, location, start, end, fid, queue, csz):
         sess = await self._get_session(idx, fid.dc_id)
@@ -164,9 +244,26 @@ class HypertgDownload(HypertgTransfer):
             my_loc = loc
             for attempt in range(3):
                 try:
+                    cdn = self._cdn_info.get(idx)
+                    if cdn:
+                        chunk = await self._cdnpull(idx, cdn, off, csz)
+                        if chunk is not None:
+                            return s, off, chunk
                     result = await self._do_req(my_sess, self.clients[idx], my_loc, off, csz, attempt)
                     if isinstance(result, tuple):
                         _, dc_or_ref = result
+                        if isinstance(dc_or_ref, dict):
+                            self._cdn_info[idx] = dc_or_ref
+                            LOGGER.info(
+                                f"HypertgDL CDN redirect dc={dc_or_ref['cdn_dc']} "
+                                f"client={self.clients[idx].me.username}"
+                            )
+                            chunk = await self._cdnpull(idx, dc_or_ref, off, csz)
+                            if chunk is not None:
+                                return s, off, chunk
+                            self._cdn_info.pop(idx, None)
+                            await sleep(attempt + 1)
+                            continue
                         if dc_or_ref == -1:
                             fid_new = await self._fetch_ref(idx, self.clients[idx], force=True)
                             my_loc = self._location(fid_new)
@@ -339,10 +436,12 @@ class HypertgDownload(HypertgTransfer):
             dl_elapsed = time() - dl_start
             dl_speed = self.file_size / dl_elapsed / MB if dl_elapsed > 0 else 0
             wl_str = " ".join(f"c{k}:{v}" for k, v in sorted(self.work_loads.items()))
+            cdn_used = list({v["cdn_dc"] for v in self._cdn_info.values()})
+            cdn_str = f" cdn={cdn_used}" if cdn_used else ""
             LOGGER.info(
                 f"HypertgDL done {self.file_name} "
                 f"({self.file_size / MB:.1f}MB {n_parts}p {n_use}c "
-                f"pipe={self.pipeline_depth} wl=[{wl_str}] {dl_speed:.1f}MB/s)"
+                f"pipe={self.pipeline_depth}{cdn_str} wl=[{wl_str}] {dl_speed:.1f}MB/s)"
             )
             return final
         except FloodWait:
@@ -359,6 +458,14 @@ class HypertgDownload(HypertgTransfer):
                     t.cancel()
             if self._tasks:
                 await gather(*self._tasks, return_exceptions=True)
+            for s in self._cdn_sessions.values():
+                try:
+                    if s.is_connected:
+                        await s.stop()
+                except Exception:
+                    pass
+            self._cdn_sessions.clear()
+            self._cdn_info.clear()
             await self._close_all()
 
     async def download_media(self, message, file_name="downloads/", dump_chat=None):
