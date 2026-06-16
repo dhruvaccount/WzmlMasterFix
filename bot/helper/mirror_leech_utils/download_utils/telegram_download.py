@@ -3,7 +3,7 @@ from time import time
 from secrets import token_hex
 from pyrogram.errors import FloodWait, PeerIdInvalid, ChannelInvalid
 
-from bot.helper.ext_utils.hyperdl_utils import HyperTGDownload
+from bot.helper.ext_utils.hyperdl_utils import HypertgDownload
 
 try:
     from pyrogram.errors import FloodPremiumWait
@@ -88,11 +88,10 @@ class TelegramDownloadHelper:
             # TODO : Add support for user session ( Huh ??)
             if self._hyper_dl:
                 try:
-                    self._hyper_dl_instance = HyperTGDownload()
+                    self._hyper_dl_instance = HypertgDownload(self)
                     download = await self._hyper_dl_instance.download_media(
                         message,
                         file_name=path,
-                        progress=self._on_download_progress,
                         dump_chat=Config.LEECH_DUMP_CHAT,
                     )
                     self._hyper_dl_instance = None

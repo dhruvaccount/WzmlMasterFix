@@ -27,7 +27,7 @@ from pyrogram.types import (
 
 from ....core.config_manager import Config
 from ....core.tg_client import TgClient
-from ...ext_utils.hyperul_utils import HyperTGUpload
+from ...ext_utils.hyperup_utils import HypertgUpload
 from ...ext_utils.bot_utils import sync_to_async
 from ...ext_utils.files_utils import get_base_name, is_archive
 from ...ext_utils.status_utils import get_readable_file_size, get_readable_time
@@ -72,7 +72,7 @@ class TelegramUploader:
         self._log_msg = None
         self._user_session = self._listener.transmission_mode in ("user", "both")
         self._error = ""
-        self._hu = HyperTGUpload(self)
+        self._hu = HypertgUpload(self)
 
     async def _user_settings(self):
         settings_map = {

@@ -1,57 +1,62 @@
 import os
 from asyncio import (
+    FIRST_COMPLETED,
     CancelledError,
-    Event,
+    Queue,
     create_task,
+    ensure_future,
     gather,
-    get_event_loop,
-    new_event_loop,
     sleep,
     to_thread,
+    wait,
 )
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from mimetypes import guess_extension
+from os import cpu_count
 from pathlib import Path
 from re import sub
 from sys import argv
 from time import time
 
 from aiofiles.os import makedirs
-from pyrogram import StopTransmission, raw, utils
+from pyrogram import StopTransmission, raw
 from pyrogram.errors import (
-    AuthBytesInvalid,
     FileMigrate,
     FileReferenceExpired,
     FileReferenceInvalid,
     FloodPremiumWait,
     FloodWait,
 )
-from pyrogram.file_id import PHOTO_TYPES, FileId, FileType, ThumbnailSource
-from pyrogram.session import Auth, Session
+from pyrogram.file_id import PHOTO_TYPES, FileId, FileType
 from pyrogram.session.internals import MsgId
 
 from ... import LOGGER
 from ...core.config_manager import Config
 from ...core.tg_client import TgClient
+from ..telegram_helper.tg_transfer import HypertgTransfer, MB
 
-MB = 1024 * 1024
+KB = 1024
+_MIN_CHUNK = 64 * KB
+_DEFAULT_PIPELINE = 32
+_MIN_PIPELINE = 4
+_MAX_PIPELINE_MULT = 4
+_LOW_WORKERS = 2
+_HIGH_WORKERS = max(8, (cpu_count() or 4) * 2)
 
 
-def _pick_client(work_loads, client_keys):
-    if not client_keys:
-        return None
-    return min(client_keys, key=lambda i: work_loads.get(i, 0))
+def _pick_clients(wl, clients, count):
+    keys = list(clients.keys())
+    return sorted(keys, key=lambda i: wl.get(i, 0))[:count]
 
 
-class HyperTGDownload:
-    _ref_cache_max = 100
-
-    def __init__(self):
-        self.clients = TgClient.helper_bots
-        self.work_loads = TgClient.helper_loads
-        self.num_clients = len(self.clients)
-        self.num_parts = Config.HYPER_THREADS or max(8, self.num_clients)
+class HypertgDownload(HypertgTransfer):
+    def __init__(self, obj):
+        super().__init__(obj)
+        self.chunk_size = max(Config.HYPER_CHUNK or 256 * KB, _MIN_CHUNK)
+        self.num_parts = Config.HYPER_THREADS or max(
+            _LOW_WORKERS, min(_HIGH_WORKERS, self.num_clients)
+        )
+        self.pipeline_depth = max(Config.HYPER_PIPELINE or _DEFAULT_PIPELINE, _MIN_PIPELINE)
         self.message = None
         self.dump_chat = None
         self.directory = None
@@ -59,149 +64,57 @@ class HyperTGDownload:
         self.file_size = 0
         self.download_dir = "downloads/"
         self._ref_cache = {}
-        self._cancel = Event()
-        self._tasks = []
-        self._prog_task = None
-        self._processed_bytes = 0
-        pool_size = min(self.num_parts, self.num_clients)
-        self._pool = ThreadPoolExecutor(
-            max_workers=pool_size, thread_name_prefix="hyperdl"
-        )
 
-    @staticmethod
-    def _media_of(message):
-        for attr in (
-            "audio",
-            "document",
-            "photo",
-            "sticker",
-            "animation",
-            "video",
-            "voice",
-            "video_note",
-            "new_chat_photo",
-        ):
-            if m := getattr(message, attr, None):
-                return m
-        raise ValueError("No downloadable media")
-
-    def _ref_cache_get(self, idx):
+    def _ref_get(self, idx):
         return self._ref_cache.get(idx)
 
-    def _ref_cache_put(self, idx, data):
-        if len(self._ref_cache) > self._ref_cache_max:
-            oldest = next(iter(self._ref_cache))
-            self._ref_cache.pop(oldest, None)
+    def _ref_put(self, idx, data):
+        if len(self._ref_cache) > 100:
+            self._ref_cache.pop(next(iter(self._ref_cache)))
         self._ref_cache[idx] = data
 
-    async def _fetch_ref(self, idx, client, force=False):
+    async def _fetch_ref(self, idx, client, retries=3, force=False):
         if not force:
-            cached = self._ref_cache_get(idx)
+            cached = self._ref_get(idx)
             if cached is not None:
                 return cached
-        for attempt in range(3):
+        last_err = None
+        for attempt in range(retries):
             try:
                 msg = await client.get_messages(self.dump_chat, self.message.id)
                 if msg is None:
-                    raise ValueError(
-                        f"msg {self.message.id} not found in {self.dump_chat}"
-                    )
+                    raise ValueError(f"msg {self.message.id} not found in {self.dump_chat}")
                 media = self._media_of(msg)
-                fid_str = getattr(media, "file_id", None)
+                fid_str = media.file_id if hasattr(media, "file_id") else None
                 if not fid_str:
-                    raise ValueError(
-                        f"no file_id in media from msg {self.message.id}"
-                    )
+                    raise ValueError(f"no file_id in media from msg {self.message.id}")
                 fid = FileId.decode(fid_str)
-                self._ref_cache_put(idx, fid)
+                self._ref_put(idx, fid)
                 return fid
             except Exception as e:
-                if attempt < 2:
-                    LOGGER.warning(
-                        f"HyperDL _fetch_ref attempt {attempt + 1} "
-                        f"fail: {e} (client={client.me.username})"
-                    )
-                    await sleep(attempt * 2)
-                else:
-                    raise
+                last_err = e
+                LOGGER.warning(
+                    f"HypertgDL _fetch_ref attempt {attempt + 1}/{retries} "
+                    f"fail: {e} (client={client.me.username})"
+                )
+                if attempt < retries - 1:
+                    await sleep(attempt + 1)
+        raise ValueError(f"Failed to get file ref with {client.me.username}: {last_err}")
 
     @staticmethod
-    def _location(fid):
-        ft = fid.file_type
-        if ft == FileType.CHAT_PHOTO:
-            if fid.chat_id > 0:
-                peer = raw.types.InputPeerUser(
-                    user_id=fid.chat_id, access_hash=fid.chat_access_hash
-                )
-            elif fid.chat_access_hash == 0:
-                peer = raw.types.InputPeerChat(chat_id=-fid.chat_id)
-            else:
-                peer = raw.types.InputPeerChannel(
-                    channel_id=utils.get_channel_id(fid.chat_id),
-                    access_hash=fid.chat_access_hash,
-                )
-            return raw.types.InputPeerPhotoFileLocation(
-                peer=peer,
-                volume_id=fid.volume_id,
-                local_id=fid.local_id,
-                big=fid.thumbnail_source == ThumbnailSource.CHAT_PHOTO_BIG,
-            )
-        if ft == FileType.PHOTO:
-            return raw.types.InputPhotoFileLocation(
-                id=fid.media_id,
-                access_hash=fid.access_hash,
-                file_reference=fid.file_reference,
-                thumb_size=fid.thumbnail_size,
-            )
-        return raw.types.InputDocumentFileLocation(
-            id=fid.media_id,
-            access_hash=fid.access_hash,
-            file_reference=fid.file_reference,
-            thumb_size=fid.thumbnail_size,
-        )
-
-    async def _export_auth(self, client, dc_id):
-        return await client.invoke(
-            raw.functions.auth.ExportAuthorization(dc_id=dc_id)
-        )
-
-    async def _mk_session_thread(self, client, dc_id, auth_export):
-        tm = await client.storage.test_mode()
-        if dc_id != await client.storage.dc_id():
-            if auth_export is None:
-                raise AuthBytesInvalid
-            ak = await Auth(client, dc_id, tm).create()
-            s = Session(client, dc_id, ak, tm, is_media=True)
-            await s.start()
-            for attempt in range(3):
-                try:
-                    await s.invoke(
-                        raw.functions.auth.ImportAuthorization(
-                            id=auth_export[0], bytes=auth_export[1]
-                        )
-                    )
-                    return s
-                except AuthBytesInvalid:
-                    LOGGER.warning(
-                        f"HyperDL _mk_session AuthBytesInvalid "
-                        f"attempt {attempt + 1}/3 "
-                        f"client={client.me.username} dc={dc_id}"
-                    )
-                    await sleep(1 + attempt)
-            await s.stop()
-            raise AuthBytesInvalid
-        ak = await client.storage.auth_key()
-        s = Session(client, dc_id, ak, tm, is_media=True)
-        await s.start()
-        return s
+    def _media_of(message):
+        for attr in ("audio", "document", "photo", "sticker", "animation",
+                     "video", "voice", "video_note", "new_chat_photo"):
+            if m := getattr(message, attr, None):
+                return m
+        raise ValueError("No downloadable media")
 
     async def _do_req(self, sess, client, location, off, csz, attempt=0):
         try:
             r = await sess.invoke(
                 raw.functions.upload.GetFile(
-                    location=location,
-                    offset=off,
-                    limit=csz,
+                    precise=True, cdn_supported=False,
+                    location=location, offset=off, limit=csz,
                 ),
                 sleep_threshold=client.sleep_threshold,
             )
@@ -210,201 +123,170 @@ class HyperTGDownload:
             raise ValueError(f"Unexpected response type: {type(r)}")
         except FileMigrate as e:
             dc = e.value if hasattr(e, "value") else int(str(e).split()[-1])
-            LOGGER.info(
-                f"HyperDL FileMigrate attempt={attempt} dc={dc} "
-                f"sess_dc={sess.dc_id} off={off}"
-            )
             if attempt < 3:
                 return None, dc
             raise
-        except (FileReferenceExpired, FileReferenceInvalid) as e:
-            LOGGER.info(
-                f"HyperDL {type(e).__name__} attempt={attempt} "
-                f"off={off} sess_dc={sess.dc_id}"
-            )
+        except (FileReferenceExpired, FileReferenceInvalid):
             if attempt < 3:
                 return None, -1
             raise
-        except (ConnectionError, OSError) as e:
-            LOGGER.info(
-                f"HyperDL {type(e).__name__}: {e} attempt={attempt} "
-                f"off={off} sess_dc={sess.dc_id}"
-            )
-            if attempt < 3:
-                return None, -2
-            raise
-        except TimeoutError:
-            LOGGER.info(
-                f"HyperDL TimeoutError attempt={attempt} "
-                f"off={off} sess_dc={sess.dc_id}"
-            )
+        except (ConnectionError, OSError, TimeoutError):
             if attempt < 3:
                 return None, -2
             raise
 
-    def _thread_download(self, ci, start, end, final_path, fid, loc, auth_export):
-        loop = new_event_loop()
-        try:
-            loop.run_until_complete(
-                self._async_download(
-                    ci, start, end, final_path, fid, loc, auth_export
-                )
-            )
-        finally:
-            loop.close()
+    async def _pipeline_fetch(self, idx, location, start, end, fid, queue, csz):
+        sess = await self._get_session(idx, fid.dc_id)
+        loc = location
+        first_off = start - (start % csz)
+        first_trim = start - first_off
+        last_byte = end - 1
+        window = self.pipeline_depth
+        min_win = _MIN_PIPELINE
+        max_win = window * _MAX_PIPELINE_MULT
+        inflight = set()
+        cur = first_off
+        seq = 0
+        ok_count = 0
+        flood_count = 0
 
-    async def _async_download(
-        self, ci, start, end, final_path, fid, loc, auth_export
-    ):
-        client = self.clients[ci]
-        sess = await self._mk_session_thread(client, fid.dc_id, auth_export)
-
-        LOGGER.info(
-            f"HyperDL thread ci={ci} dc={fid.dc_id} "
-            f"range={start}-{end} ({(end - start) / MB:.1f}MB)"
-        )
-
-        fd = await to_thread(os.open, final_path, os.O_WRONLY)
-        try:
-            csz = 1 << 20
-            cur_off = start
-            last_byte = end - 1
-            attempt = 0
-
-            while cur_off <= last_byte:
-                if self._cancel.is_set():
-                    return
-
-                chunk_loc = self._location(fid)
+        async def _req(off, s):
+            nonlocal window, ok_count, flood_count
+            my_sess = sess
+            my_loc = loc
+            for attempt in range(3):
                 try:
-                    result = await self._do_req(
-                        sess, client, chunk_loc, cur_off, csz, attempt
-                    )
-                except (CancelledError, FloodWait, FloodPremiumWait):
-                    raise
-                except Exception:
-                    if attempt < 2:
-                        attempt += 1
-                        await sleep(1 + attempt)
+                    result = await self._do_req(my_sess, self.clients[idx], my_loc, off, csz, attempt)
+                    if isinstance(result, tuple):
+                        _, dc_or_ref = result
+                        if dc_or_ref == -1:
+                            fid_new = await self._fetch_ref(idx, self.clients[idx], force=True)
+                            my_loc = self._location(fid_new)
+                        elif dc_or_ref == -2:
+                            my_sess = await self._get_session(idx, my_sess.dc_id, force=True)
+                        else:
+                            my_sess = await self._get_session(idx, dc_or_ref, force=True)
+                        await sleep(attempt + 1)
                         continue
+                    return s, off, result
+                except (FloodWait, FloodPremiumWait) as e:
+                    flood_count += 1
+                    val = e.value if hasattr(e, "value") else 5
+                    if val > 10 or flood_count >= 3:
+                        window = max(min_win, window - max(1, window // 4))
+                        ok_count = 0
+                        flood_count = 0
+                    await sleep(val + 1)
+                except CancelledError:
                     raise
+            raise RuntimeError(f"Failed after 3 attempts at offset {off}")
 
-                if isinstance(result, tuple):
-                    _, dc_or_ref = result
-                    if dc_or_ref == -1:
-                        fid = await self._fetch_ref(ci, client, force=True)
-                        attempt += 1
-                        if attempt <= 5:
-                            await sleep(attempt + 1)
-                            continue
-                        raise RuntimeError("File ref refresh failed")
-                    if dc_or_ref == -2:
-                        try:
-                            await sess.stop()
-                        except Exception:
-                            pass
-                        sess = await self._mk_session_thread(
-                            client, sess.dc_id, auth_export
-                        )
-                        attempt += 1
-                        if attempt <= 5:
-                            await sleep(attempt + 1)
-                            continue
-                        raise RuntimeError("Session reconnect failed")
-                    try:
-                        await sess.stop()
-                    except Exception:
-                        pass
-                    sess = await self._mk_session_thread(
-                        client, dc_or_ref, auth_export
-                    )
-                    attempt = 0
-                    await sleep(1)
-                    continue
-
-                chunk = result
-                if not chunk:
+        try:
+            while cur <= last_byte or inflight:
+                while len(inflight) < window and cur <= last_byte:
+                    if self._cancel.is_set():
+                        raise CancelledError
+                    inflight.add(ensure_future(_req(cur, seq)))
+                    cur += csz
+                    seq += 1
+                if not inflight:
                     break
-
-                remaining = last_byte - cur_off + 1
-                if len(chunk) > remaining:
-                    chunk = chunk[:remaining]
-
-                if chunk:
-                    n = await to_thread(os.pwrite, fd, chunk, cur_off - start)
-                    if n < len(chunk):
-                        mv = memoryview(chunk)
-                        written = n
-                        while written < len(chunk):
-                            n = await to_thread(
-                                os.pwrite,
-                                fd,
-                                mv[written:],
-                                cur_off - start + written,
-                            )
-                            if n == 0:
-                                raise OSError(
-                                    f"pwrite returned 0 at "
-                                    f"offset {cur_off - start + written}"
-                                )
-                            written += n
-                    self._processed_bytes += len(chunk)
-
-                cur_off += csz
-                attempt = 0
+                done_set, inflight = await wait(inflight, return_when=FIRST_COMPLETED)
+                ok_count += len(done_set)
+                if ok_count >= window:
+                    window = min(window + 2, max_win)
+                    ok_count = 0
+                for f in done_set:
+                    s, roff, chunk = f.result()
+                    if not chunk:
+                        continue
+                    if roff == first_off and roff + csz >= end:
+                        chunk = chunk[first_trim:last_byte - roff + 1]
+                    elif roff == first_off:
+                        chunk = chunk[first_trim:]
+                    elif roff + csz > end:
+                        chunk = chunk[:end - roff]
+                    await queue.put((roff, chunk))
+        except CancelledError:
+            raise
+        except Exception as e:
+            if "Flood" in type(e).__name__:
+                window = max(min_win, window // 2)
+                ok_count = 0
+            LOGGER.error(f"HypertgDL pipeline err: {e}")
+            raise
         finally:
-            await to_thread(os.close, fd)
+            for f in inflight:
+                if not f.done():
+                    f.cancel()
+
+    async def _part(self, start, end, final_path, ci, fid, csz):
+        q = Queue(maxsize=self.pipeline_depth + 1)
+        err = [None]
+
+        async def _producer():
             try:
-                await sess.stop()
-            except Exception:
+                await self._pipeline_fetch(ci, self._location(fid), start, end, fid, q, csz)
+            except CancelledError:
                 pass
+            except Exception as e:
+                err[0] = e
+            finally:
+                await q.put(None)
 
-    async def _progress(self, cb, args):
-        if not cb:
-            return
-        last = 0
-        while not self._cancel.is_set():
+        async def _consumer():
+            fd = await to_thread(os.open, final_path, os.O_WRONLY)
             try:
-                cur = self._processed_bytes
-                if cur != last:
-                    await cb(cur, self.file_size, *args)
-                    last = cur
-                await sleep(1)
-            except (CancelledError, StopTransmission):
-                break
-            except Exception:
-                await sleep(1)
+                while True:
+                    item = await q.get()
+                    if item is None:
+                        break
+                    roff, chunk = item
+                    await self._pwrite(fd, chunk, roff)
+                    self._obj._processed_bytes += len(chunk)
+            finally:
+                await to_thread(os.close, fd)
 
-    async def handle_download(self, progress, progress_args):
+        prod = ensure_future(_producer())
+        try:
+            await _consumer()
+            if err[0] is not None:
+                raise err[0]
+        except CancelledError:
+            prod.cancel()
+            raise
+        except Exception:
+            prod.cancel()
+            raise
+        finally:
+            if not prod.done():
+                prod.cancel()
+
+    @staticmethod
+    async def _pwrite(fd, data, offset):
+        total = len(data)
+        written = 0
+        while written < total:
+            n = await to_thread(os.pwrite, fd, data[written:], offset + written)
+            if n == 0:
+                raise OSError(f"pwrite returned 0 at offset {offset + written}")
+            written += n
+
+    async def handle_download(self):
         self._cancel.clear()
-        self._processed_bytes = 0
+        self._obj._processed_bytes = 0
         dl_start = time()
         await makedirs(self.directory, exist_ok=True)
-        final = os.path.abspath(
-            sub("\\\\", "/", os.path.join(self.directory, self.file_name))
-        )
+        final = os.path.abspath(sub("\\\\", "/", os.path.join(self.directory, self.file_name)))
 
         n_use = min(self.num_parts, self.num_clients)
+        cidx = _pick_clients(self.work_loads, self.clients, n_use)
 
         min_part = 1 * MB
-        n_parts = (
-            min(n_use, max(1, self.file_size // min_part))
-            if self.file_size >= min_part
-            else 1
-        )
+        n_parts = min(n_use, max(1, self.file_size // min_part)) if self.file_size >= min_part else 1
         psz = self.file_size // n_parts if n_parts > 0 else self.file_size
-        ranges = [
-            (i * psz, min((i + 1) * psz, self.file_size)) for i in range(n_parts)
-        ]
-
-        load_map = {}
-        assigns = []
-        client_keys = list(self.clients.keys())
-        for _ in range(n_parts):
-            ci = _pick_client(self.work_loads, client_keys)
-            assigns.append(ci)
-            self.work_loads[ci] = self.work_loads.get(ci, 0) + 1
-            load_map[ci] = load_map.get(ci, 0) + 1
+        ranges = [(i * psz, min((i + 1) * psz, self.file_size)) for i in range(n_parts)]
+        assigns = [cidx[i % n_use] for i in range(n_parts)]
 
         unique_clients = set(assigns)
         fid_map = {}
@@ -412,116 +294,55 @@ class HyperTGDownload:
             for ci in unique_clients:
                 fid_map[ci] = await self._fetch_ref(ci, self.clients[ci])
         except Exception as e:
-            LOGGER.error(f"HyperDL ref fail: {e}")
-            for ci, cnt in load_map.items():
-                self.work_loads[ci] = max(0, self.work_loads.get(ci, 1) - cnt)
+            LOGGER.error(f"HypertgDL ref fail: {e}")
             return None
 
-        auth_exports = {}
+        first_fid = fid_map[assigns[0]]
         try:
-            for ci in unique_clients:
-                fid = fid_map[ci]
-                dc_id = fid.dc_id
-                if dc_id not in auth_exports:
-                    client = self.clients[ci]
-                    tm = await client.storage.test_mode()
-                    if dc_id != await client.storage.dc_id():
-                        for attempt in range(3):
-                            try:
-                                e = await self._export_auth(client, dc_id)
-                                auth_exports[dc_id] = (e.id, e.bytes)
-                                break
-                            except AuthBytesInvalid:
-                                LOGGER.warning(
-                                    f"HyperDL ExportAuth attempt "
-                                    f"{attempt + 1}/3 fail "
-                                    f"client={client.me.username} dc={dc_id}"
-                                )
-                                await sleep(1 + attempt)
-                        else:
-                            auth_exports[dc_id] = None
-                    else:
-                        auth_exports[dc_id] = "home"
+            await self._warmup(unique_clients, first_fid.dc_id)
         except Exception as e:
-            LOGGER.error(f"HyperDL auth export fail: {e}")
-            for ci, cnt in load_map.items():
-                self.work_loads[ci] = max(0, self.work_loads.get(ci, 1) - cnt)
-            return None
+            LOGGER.warning(f"HypertgDL warmup err: {e}")
 
         self._tasks = []
-        self._prog_task = None
-
         try:
-            await to_thread(self._create_file_sync, final, self.file_size)
+            fd = await to_thread(os.open, final, os.O_WRONLY | os.O_CREAT)
+            try:
+                await to_thread(os.ftruncate, fd, self.file_size)
+            finally:
+                await to_thread(os.close, fd)
 
-            loop = get_event_loop()
             for i, (s, e) in enumerate(ranges):
-                ci = assigns[i]
-                fid = fid_map[ci]
-                part_loc = self._location(fid)
-                auth = auth_exports.get(fid.dc_id)
-                if auth == "home":
-                    auth = None
-                LOGGER.info(
-                    f"HyperDL part {i}: client={ci} "
-                    f"range={s}-{e} ({(e - s) / MB:.1f}MB) "
-                    f"dc={fid.dc_id}"
-                )
                 self._tasks.append(
-                    loop.run_in_executor(
-                        self._pool,
-                        self._thread_download,
-                        ci, s, e, final, fid, part_loc, auth,
-                    )
+                    create_task(self._part(s, e, final, assigns[i], fid_map[assigns[i]], self.chunk_size))
                 )
-                if i < len(ranges) - 1:
-                    await sleep(0.5)
 
-            if progress:
-                self._prog_task = create_task(
-                    self._progress(progress, progress_args)
-                )
             await gather(*self._tasks)
             dl_elapsed = time() - dl_start
-            dl_speed = (
-                self.file_size / dl_elapsed / MB if dl_elapsed > 0 else 0
-            )
-            wl_str = " ".join(
-                f"c{k}:{v}" for k, v in sorted(self.work_loads.items())
-            )
+            dl_speed = self.file_size / dl_elapsed / MB if dl_elapsed > 0 else 0
+            wl_str = " ".join(f"c{k}:{v}" for k, v in sorted(self.work_loads.items()))
             LOGGER.info(
-                f"HyperDL done {self.file_name} "
+                f"HypertgDL done {self.file_name} "
                 f"({self.file_size / MB:.1f}MB {n_parts}p {n_use}c "
-                f"wl=[{wl_str}] {dl_speed:.1f}MB/s)"
+                f"pipe={self.pipeline_depth} wl=[{wl_str}] {dl_speed:.1f}MB/s)"
             )
             return final
-        except FloodWait as e:
-            wait_val = e.value if hasattr(e, "value") else 5
-            LOGGER.warning(f"HyperDL FloodWait: sleeping {wait_val}s")
-            await sleep(wait_val + 1)
-            return None
+        except FloodWait:
+            raise
         except (CancelledError, StopTransmission):
             return None
         except Exception as e:
-            LOGGER.error(f"HyperDL: {type(e).__name__}: {e}")
+            LOGGER.error(f"HypertgDL: {e}")
             return None
         finally:
             self._cancel.set()
-            to_cancel = []
-            if self._prog_task and not self._prog_task.done():
-                to_cancel.append(self._prog_task)
-            if to_cancel:
-                await gather(*to_cancel, return_exceptions=True)
-            self._pool.shutdown(wait=False)
+            for t in self._tasks:
+                if not t.done():
+                    t.cancel()
+            if self._tasks:
+                await gather(*self._tasks, return_exceptions=True)
+            await self._close_all()
 
-    async def download_media(
-        self,
-        message,
-        file_name="downloads/",
-        progress=None,
-        progress_args=(),
-        dump_chat=None,
-    ):
+    async def download_media(self, message, file_name="downloads/", dump_chat=None):
         try:
             if dump_chat and not isinstance(dump_chat, int):
                 try:
@@ -537,37 +358,33 @@ class HyperTGDownload:
                         disable_notification=True,
                     )
                 except Exception as e:
-                    LOGGER.warning(
-                        f"HyperDL copy fail: {e} "
-                        f"(from={message.chat.id} to={dump_chat})"
-                    )
+                    LOGGER.warning(f"HypertgDL copy fail: {e} (from={message.chat.id} to={dump_chat})")
                     raise RuntimeError(f"Cannot copy to dump chat: {e}") from e
             self.dump_chat = dump_chat or message.chat.id
             self.message = self.message or message
-            LOGGER.info(
-                f"HyperDL init dump={self.dump_chat} "
-                f"msg_id={self.message.id} msg_type={type(self.message).__name__}"
-            )
+            LOGGER.info(f"HypertgDL init dump={self.dump_chat} msg_id={self.message.id}")
             media = self._media_of(self.message)
             fid_str = media if isinstance(media, str) else media.file_id
             fid_obj = FileId.decode(fid_str)
             ftype = fid_obj.file_type
-            mname = getattr(media, "file_name", "")
-            self.file_size = getattr(media, "file_size", 0)
-            mime = getattr(media, "mime_type", "image/jpeg")
-            dt = getattr(media, "date", None)
+            mname = media.file_name if hasattr(media, "file_name") else ""
+            self.file_size = media.file_size if hasattr(media, "file_size") else 0
+            mime = media.mime_type if hasattr(media, "mime_type") else "image/jpeg"
+            dt = media.date if hasattr(media, "date") else None
             self.directory, self.file_name = os.path.split(file_name)
             self.file_name = self.file_name or mname or ""
             if not os.path.isabs(self.file_name):
-                self.directory = Path(argv[0]).parent / (
-                    self.directory or self.download_dir
-                )
+                self.directory = Path(argv[0]).parent / (self.directory or self.download_dir)
             if not self.file_name:
                 ext = self._ext(ftype, mime)
-                self.file_name = f"{FileType(ftype).name.lower()}_{(dt or datetime.now()).strftime('%Y-%m-%d_%H-%M-%S')}_{MsgId()}{ext}"
-            return await self.handle_download(progress, progress_args)
+                self.file_name = (
+                    f"{FileType(ftype).name.lower()}_"
+                    f"{(dt or datetime.now()).strftime('%Y-%m-%d_%H-%M-%S')}_"
+                    f"{MsgId()}{ext}"
+                )
+            return await self.handle_download()
         except Exception as e:
-            LOGGER.error(f"HyperDL download_media: {e}")
+            LOGGER.error(f"HypertgDL download_media: {e}")
             raise
 
     @staticmethod
@@ -586,20 +403,3 @@ class HyperTGDownload:
             FileType.AUDIO: ".mp3",
             FileType.STICKER: ".webp",
         }.get(ft, ".bin")
-
-    @staticmethod
-    def _create_file_sync(path, size):
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT)
-        try:
-            os.ftruncate(fd, size)
-        finally:
-            os.close(fd)
-
-    async def cancel(self):
-        self._cancel.set()
-        to_cancel = []
-        if self._prog_task and not self._prog_task.done():
-            to_cancel.append(self._prog_task)
-        if to_cancel:
-            await gather(*to_cancel, return_exceptions=True)
-        self._pool.shutdown(wait=False)
