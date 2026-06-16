@@ -17,7 +17,6 @@ from os import cpu_count
 from pathlib import Path
 from re import sub
 from sys import argv
-from time import time
 
 from aiofiles.os import makedirs
 from pyrogram import StopTransmission, raw

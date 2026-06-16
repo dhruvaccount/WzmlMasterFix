@@ -19,7 +19,7 @@ _ul_sessions: dict[int, Session] = {}
 _ul_sessions_lock = Lock()
 
 KB = 1024
-PART_SIZE = 256 * KB
+PART_SIZE = 512 * KB
 
 
 async def _close_ul_sessions():
@@ -83,11 +83,9 @@ class HypertgUpload(HypertgTransfer):
                 ul_ci = min(self.clients.keys(), key=lambda i: self.work_loads.get(i, 0))
                 self.work_loads[ul_ci] = self.work_loads.get(ul_ci, 0) + 1
             up_client = self.clients[ul_ci]
-            up_name = up_client.me.username
         else:
             ul_ci = None
             up_client = client
-            up_name = "self_client"
 
         fp = open(file_path, "rb")
         q = Queue(num_workers * 4)
