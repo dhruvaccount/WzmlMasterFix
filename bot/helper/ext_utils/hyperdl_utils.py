@@ -582,8 +582,17 @@ class HypertgDownload(HypertgTransfer):
             for i, r in enumerate(results):
                 if isinstance(r, BaseException):
                     LOGGER.error(f"HypertgDL part {i} failed: {r}")
-                    if hasattr(r, "failed_offsets"):
+                    if hasattr(r, "failed_offsets") and r.failed_offsets:
                         all_failed_offsets.update(r.failed_offsets)
+                    else:
+                        s, e = ranges[i]
+                        LOGGER.warning(
+                            f"HypertgDL part {i} missing failed_offsets — "
+                            f"retrying full range {s}-{e}"
+                        )
+                        all_failed_offsets.update(
+                            range(s, e, self.chunk_size)
+                        )
                 elif isinstance(r, set) and r:
                     all_failed_offsets.update(r)
 
@@ -614,22 +623,44 @@ class HypertgDownload(HypertgTransfer):
                     LOGGER.error("HypertgDL retry: no good bots remaining")
                     break
 
-                sorted_offsets = sorted(all_failed_offsets)
-                n_batches = min(
-                    max(2, len(good_bots) // 2),
-                    len(good_bots),
-                    len(all_failed_offsets),
-                )
-                batch_size = max(1, len(sorted_offsets) // n_batches)
+                range_buckets = {i: [] for i in range(len(ranges))}
+                orphans = 0
+                for off in all_failed_offsets:
+                    matched = False
+                    for i, (s, e) in enumerate(ranges):
+                        if s <= off < e:
+                            range_buckets[i].append(off)
+                            matched = True
+                            break
+                    if not matched:
+                        LOGGER.error(
+                            f"HypertgDL retry: offset {off} outside all ranges"
+                        )
+                        range_buckets[0].append(off)
+                        orphans += 1
 
+                # Sort buckets by range index for deterministic ordering
+                sorted_buckets = sorted(
+                    [(i, offs) for i, offs in range_buckets.items() if offs],
+                    key=lambda x: x[0],
+                )
+                assigned = set()
                 bot_task_map = []
-                for bot_idx in good_bots[:n_batches]:
-                    if not sorted_offsets:
-                        break
-                    batch = sorted_offsets[:batch_size]
-                    sorted_offsets = sorted_offsets[batch_size:]
-                    if not batch:
-                        continue
+                still_failed = set()
+                for i, bucket in sorted_buckets:
+                    bot_idx = assigns[i]
+                    if bot_idx in bad_bots or bot_idx in assigned:
+                        for gb in good_bots:
+                            if gb not in bad_bots and gb not in assigned:
+                                bot_idx = gb
+                                assigned.add(gb)
+                                break
+                        else:
+                            still_failed |= set(bucket)
+                            continue
+                    else:
+                        assigned.add(bot_idx)
+
                     if bot_idx not in fid_map:
                         try:
                             fid_map[bot_idx] = await self._fetch_ref(
@@ -640,16 +671,19 @@ class HypertgDownload(HypertgTransfer):
                                 f"HypertgDL retry ref fail bot={bot_idx}: {e}"
                             )
                             bad_bots.add(bot_idx)
+                            still_failed |= set(bucket)
                             continue
-                    retry_start = batch[0]
+                    retry_start = min(bucket)
                     retry_end = min(
-                        batch[-1] + self.chunk_size, self.file_size
+                        max(bucket) + self.chunk_size, self.file_size
                     )
+                    cname = self.clients[bot_idx].me.username
                     LOGGER.info(
                         f"HypertgDL retry ci={bot_idx} "
-                        f"client={self.clients[bot_idx].me.username} "
+                        f"client={cname} "
                         f"range={retry_start}-{retry_end} "
-                        f"({len(batch)} offsets)"
+                        f"({len(bucket)} offsets from original ci={assigns[i]}"
+                        f"{' (remap)' if assigns[i] != bot_idx else ''})"
                     )
                     task = create_task(
                         self._part(
@@ -657,7 +691,7 @@ class HypertgDownload(HypertgTransfer):
                             fid_map[bot_idx], self.chunk_size,
                         )
                     )
-                    bot_task_map.append((bot_idx, task))
+                    bot_task_map.append((bot_idx, bucket, task))
 
                 if not bot_task_map:
                     LOGGER.error(
@@ -666,10 +700,9 @@ class HypertgDownload(HypertgTransfer):
                     break
 
                 retry_results = await gather(
-                    *[t for _, t in bot_task_map], return_exceptions=True
+                    *[t for _, _, t in bot_task_map], return_exceptions=True
                 )
-                still_failed = set()
-                for (bot_idx, _), r in zip(bot_task_map, retry_results):
+                for (bot_idx, bucket, _), r in zip(bot_task_map, retry_results):
                     if isinstance(r, BaseException):
                         LOGGER.error(
                             f"HypertgDL retry ci={bot_idx} "
@@ -677,7 +710,9 @@ class HypertgDownload(HypertgTransfer):
                             f"failed: {r}"
                         )
                         if hasattr(r, "failed_offsets") and r.failed_offsets:
-                            still_failed.update(r.failed_offsets)
+                            still_failed |= r.failed_offsets
+                        else:
+                            still_failed |= set(bucket)
                         bad_bots.add(bot_idx)
                     elif isinstance(r, set):
                         if r:
@@ -686,7 +721,7 @@ class HypertgDownload(HypertgTransfer):
                                 f"client={self.clients[bot_idx].me.username} "
                                 f"returned {len(r)} failed offsets — marking bad"
                             )
-                            still_failed.update(r)
+                            still_failed |= r
                             bad_bots.add(bot_idx)
                 all_failed_offsets = still_failed
 
