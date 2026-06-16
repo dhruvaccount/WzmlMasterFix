@@ -130,10 +130,24 @@ class HypertgUpload(HypertgTransfer):
                     offset = part * PART_SIZE
                     size = min(PART_SIZE, file_size - offset)
                     chunk = os.pread(fd, size, offset)
-                    await s.invoke(rpc_fn(
-                        file_id=file_id, file_part=part,
-                        file_total_parts=file_total_parts, bytes=chunk,
-                    ))
+                    last_err = None
+                    for attempt in range(3):
+                        try:
+                            await s.invoke(rpc_fn(
+                                file_id=file_id, file_part=part,
+                                file_total_parts=file_total_parts, bytes=chunk,
+                            ))
+                            last_err = None
+                            break
+                        except TimeoutError as e:
+                            last_err = e
+                            LOGGER.warning(
+                                f"HypertgUL worker {wid} timeout "
+                                f"part={part} attempt={attempt}"
+                            )
+                            await sleep(2 ** attempt)
+                    if last_err is not None:
+                        raise last_err
                     self._obj._processed_bytes += len(chunk)
                     sent += 1
                     part += num_workers
