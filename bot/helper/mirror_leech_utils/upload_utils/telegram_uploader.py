@@ -219,7 +219,7 @@ class TelegramUploader:
                 cap_mono,
             )
 
-        if len(file_) > 64:
+        if len(file_) > 60:
             if is_archive(file_):
                 name = get_base_name(file_)
                 ext = file_.split(name, 1)[1]

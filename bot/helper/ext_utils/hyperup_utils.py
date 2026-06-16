@@ -1,6 +1,6 @@
 import os
 import re
-from asyncio import Lock, Queue, Semaphore, create_task, gather, sleep
+from asyncio import CancelledError, Lock, Queue, Semaphore, TaskGroup, create_task, gather, sleep
 from hashlib import md5
 from math import ceil
 from mimetypes import guess_type
@@ -69,7 +69,7 @@ class HypertgUpload(HypertgTransfer):
         file_id = client.rnd_id()
         dc_id = await client.storage.dc_id()
         is_big = file_size > 10 * MB
-        num_workers = min(16, self.num_clients or 1) if is_big else 1
+        num_workers = max(4, min(10, self.num_clients or 1)) if is_big else 1
 
         _slot_acquired = False
         async with _ul_slots_lock:
@@ -96,20 +96,27 @@ class HypertgUpload(HypertgTransfer):
         if is_cross:
             ea = await client.invoke(raw.functions.auth.ExportAuthorization(dc_id=dc_id))
 
-        BATCH = 5
-
         async def worker(wid):
             s = Session(up_client, dc_id, ak, tm, is_media=True)
             await self.start_session(s, mode=1)
             if ea is not None:
                 await s.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
+
+            async def _invoke(data):
+                try:
+                    return await s.invoke(data)
+                except CancelledError:
+                    return None
+
+            bs = 3
+            err_streak = 0
             try:
                 while True:
                     data = await q.get()
                     if data is None:
                         return
                     batch = [data]
-                    for _ in range(BATCH - 1):
+                    for _ in range(bs - 1):
                         try:
                             d = q.get_nowait()
                             if d is None:
@@ -118,10 +125,21 @@ class HypertgUpload(HypertgTransfer):
                             batch.append(d)
                         except Queue.Empty:
                             break
-                    if len(batch) == 1:
-                        await s.invoke(batch[0])
-                    else:
-                        await gather(*[s.invoke(d) for d in batch])
+                    try:
+                        async with TaskGroup() as tg:
+                            for d in batch:
+                                tg.create_task(_invoke(d))
+                        err_streak = 0
+                        if len(batch) == bs and bs < 5:
+                            bs += 1
+                    except* TimeoutError:
+                        err_streak += 1
+                        if err_streak >= 3:
+                            raise
+                        if err_streak >= 2:
+                            bs = max(1, bs - 1)
+                        for item in batch:
+                            await q.put(item)
             finally:
                 try:
                     await s.stop()
