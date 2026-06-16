@@ -264,7 +264,7 @@ class HypertgDownload(HypertgTransfer):
                 return s, off, b""
             my_sess = sess
             my_loc = loc
-            max_attempts = 1 if bot_down else 3
+            max_attempts = 1
             for attempt in range(max_attempts):
                 try:
                     cdn = self._cdn_info.get(idx)
