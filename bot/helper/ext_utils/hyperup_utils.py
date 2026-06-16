@@ -27,6 +27,18 @@ class HypertgUpload(HypertgTransfer):
         self._up_file = ""
         self._up_size = 0
 
+    def _build_media(self, input_file, mime_type, media_type, attributes, thumb_file=None):
+        if media_type == "photo":
+            return raw.types.InputMediaUploadedPhoto(file=input_file)
+        return raw.types.InputMediaUploadedDocument(
+            file=input_file,
+            thumb=thumb_file,
+            mime_type=mime_type or "application/octet-stream",
+            attributes=attributes or [],
+            nosound_video=media_type == "video" and "video" in (mime_type or ""),
+            force_file=media_type == "document",
+        )
+
     async def _upload_file(self, client, file_path):
         t0 = time()
         file_size = ospath.getsize(file_path)
@@ -124,18 +136,22 @@ class HypertgUpload(HypertgTransfer):
             rpc = await q.get()
             if rpc is None:
                 break
-            try:
-                await session.send(rpc, wait_response=True)
-            except (FloodWait, FloodPremiumWait) as e:
-                val = e.value if hasattr(e, "value") else 5
-                LOGGER.warning(f"HypertgUL worker flood {val}s dc={session.dc_id}")
-                await sleep(val + 1)
+            for attempt in range(3):
                 try:
                     await session.send(rpc, wait_response=True)
-                except Exception as e2:
-                    LOGGER.error(f"HypertgUL worker retry fail: {e2}")
-            except Exception as e:
-                LOGGER.warning(f"HypertgUL worker err: {type(e).__name__}: {e} dc={session.dc_id}")
+                    break
+                except (FloodWait, FloodPremiumWait) as e:
+                    val = e.value if hasattr(e, "value") else 5
+                    LOGGER.warning(f"HypertgUL worker flood {val}s dc={session.dc_id}")
+                    await sleep(val + 1)
+                except (TimeoutError, OSError) as e:
+                    if attempt == 2:
+                        LOGGER.warning(f"HypertgUL worker fail: {type(e).__name__}: {e} dc={session.dc_id}")
+                    else:
+                        await sleep(1)
+                except Exception as e:
+                    LOGGER.warning(f"HypertgUL worker err: {type(e).__name__}: {e} dc={session.dc_id}")
+                    break
 
     async def _upload_small(self, client, file_path):
         file_size = ospath.getsize(file_path)
