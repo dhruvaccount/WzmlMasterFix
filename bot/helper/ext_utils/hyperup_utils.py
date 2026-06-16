@@ -82,7 +82,18 @@ class HypertgUpload(HypertgTransfer):
         if is_cross:
             ea = await client.invoke(raw.functions.auth.ExportAuthorization(dc_id=dc_id))
 
-        async def worker(wid):
+        _workers_lock = Lock()
+        worker_tasks = []
+
+        async def _spawn_worker():
+            async with _workers_lock:
+                if len(worker_tasks) >= num_workers:
+                    return
+                wid = len(worker_tasks)
+                t = create_task(_worker(wid))
+                worker_tasks.append(t)
+
+        async def _worker(wid):
             s = Session(up_client, dc_id, ak, tm, is_media=True)
             await self.start_session(s, mode=1)
             if ea is not None:
@@ -96,7 +107,7 @@ class HypertgUpload(HypertgTransfer):
 
             bs = 3
             err_streak = 0
-            recreations = 0
+            ok_streak = 0
             try:
                 while True:
                     data = await q.get()
@@ -117,34 +128,41 @@ class HypertgUpload(HypertgTransfer):
                             for d in batch:
                                 tg.create_task(_invoke(d))
                         err_streak = 0
+                        ok_streak += 1
                         if len(batch) == bs and bs < 5:
                             bs += 1
+                        if ok_streak >= 8:
+                            await _spawn_worker()
+                            ok_streak = 0
                     except* TimeoutError:
                         err_streak += 1
+                        ok_streak = 0
                         if err_streak >= 2:
                             bs = max(1, bs - 1)
                         if err_streak >= 3:
-                            recreations += 1
-                            if recreations >= 3:
-                                raise RuntimeError("upload worker exhausted after 3 session recreations")
-                            err_streak = 0
-                            try:
-                                await s.stop()
-                            except Exception:
-                                pass
-                            s = Session(up_client, dc_id, ak, tm, is_media=True)
-                            await self.start_session(s, mode=1)
-                            if ea is not None:
-                                await s.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
-                        for item in batch:
-                            await q.put(item)
+                            if wid == 0:
+                                recreations = _worker._recreations = getattr(_worker, "_recreations", 0) + 1
+                                if recreations <= 3:
+                                    try:
+                                        await s.stop()
+                                    except Exception:
+                                        pass
+                                    s = Session(up_client, dc_id, ak, tm, is_media=True)
+                                    await self.start_session(s, mode=1)
+                                    if ea is not None:
+                                        await s.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
+                                err_streak = 0
+                            for item in batch:
+                                await q.put(item)
             finally:
                 try:
                     await s.stop()
                 except Exception:
                     pass
 
-        workers = [create_task(worker(wid)) for wid in range(num_workers)]
+        for _ in range(min(4, num_workers)):
+            await _spawn_worker()
+        workers = worker_tasks
 
         try:
             part = 0
