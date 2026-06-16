@@ -123,13 +123,14 @@ class HypertgUpload(HypertgTransfer):
                             batch.append(d)
                         except Queue.Empty:
                             break
-                    _exit_worker = False
                     try:
                         async with TaskGroup() as tg:
                             for d in batch:
                                 tg.create_task(_invoke(d))
                         err_streak = 0
                         ok_streak += 1
+                        if ok_streak >= 3:
+                            _worker._recreations = 0
                         if len(batch) == bs and bs < 5:
                             bs += 1
                         if ok_streak >= 5:
@@ -143,24 +144,21 @@ class HypertgUpload(HypertgTransfer):
                         if err_streak >= 3:
                             for item in batch:
                                 await q.put(item)
-                            _exit_worker = True
                             recreations = _worker._recreations = getattr(_worker, "_recreations", 0) + 1
-                            if recreations <= 3:
-                                try:
-                                    await s.stop()
-                                except Exception:
-                                    pass
-                                s = Session(up_client, dc_id, ak, tm, is_media=True)
-                                await self.start_session(s, mode=1)
-                                if ea is not None:
-                                    await s.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
-                                err_streak = 0
-                                _exit_worker = False
+                            if recreations > 3:
+                                await sleep(min(30, 2 ** (recreations - 3)))
+                            try:
+                                await s.stop()
+                            except Exception:
+                                pass
+                            s = Session(up_client, dc_id, ak, tm, is_media=True)
+                            await self.start_session(s, mode=1)
+                            if ea is not None:
+                                await s.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
+                            err_streak = 0
                         else:
                             for item in batch:
                                 await q.put(item)
-                    if _exit_worker:
-                        return
             finally:
                 try:
                     await s.stop()
