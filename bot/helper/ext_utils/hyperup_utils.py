@@ -1,5 +1,5 @@
 import os
-from asyncio import Lock, Queue, ensure_future, gather, sleep
+from asyncio import Lock, Queue, ensure_future, gather, sleep, CancelledError
 from hashlib import md5
 from math import ceil
 from mimetypes import guess_type
