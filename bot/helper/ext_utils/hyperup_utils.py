@@ -21,7 +21,7 @@ _ul_sessions: dict[int, Session] = {}
 _ul_sessions_lock = Lock()
 
 KB = 1024
-PART_SIZE = 512 * KB
+PART_SIZE = 1 * MB
 
 
 async def _close_ul_sessions():
@@ -82,7 +82,7 @@ class HypertgUpload(HypertgTransfer):
         file_id = client.rnd_id()
         dc_id = await client.storage.dc_id()
         is_big = file_size > 10 * MB
-        num_workers = 12 if is_big else 1
+        num_workers = min(4, self.num_clients or 1) if is_big else 1
 
         _slot_acquired = False
         async with _ul_slots_lock:
@@ -110,7 +110,7 @@ class HypertgUpload(HypertgTransfer):
         )
 
         fp = open(file_path, "rb")
-        q = Queue(16)
+        q = Queue(num_workers * 4)
 
         up_session = None
         sk = ul_ci if ul_ci is not None else -1
