@@ -8,7 +8,9 @@ from os import path as ospath
 from time import time
 
 from pyrogram import StopTransmission, raw
-from pyrogram.errors import FilePartMissing, FloodPremiumWait, FloodWait
+from pyrogram.connection import Connection
+from pyrogram.errors import AuthKeyDuplicated, FilePartMissing, FloodPremiumWait, FloodWait, RPCError
+from pyrogram.raw.all import layer
 from pyrogram.session import Auth, Session
 
 from ... import LOGGER
@@ -20,6 +22,48 @@ _ul_slots_lock = Lock()
 
 KB = 1024
 PART_SIZE = 512 * KB
+
+
+async def _start_session(s: Session, mode: int = 3):
+    while True:
+        s.connection = Connection(
+            s.dc_id, s.test_mode, s.client.ipv6,
+            s.client.proxy, s.is_media, mode=mode
+        )
+        try:
+            await s.connection.connect()
+            s.network_task = s.client.loop.create_task(s.network_worker())
+            await s.send(raw.functions.Ping(ping_id=0), timeout=Session.START_TIMEOUT)
+            if not s.is_cdn:
+                await s.send(
+                    raw.functions.InvokeWithLayer(
+                        layer=layer,
+                        query=raw.functions.InitConnection(
+                            api_id=await s.client.storage.api_id(),
+                            app_version=s.client.app_version,
+                            device_model=s.client.device_model,
+                            system_version=s.client.system_version,
+                            system_lang_code=s.client.lang_code,
+                            lang_code=s.client.lang_code,
+                            lang_pack="",
+                            query=raw.functions.help.GetConfig(),
+                        )
+                    ),
+                    timeout=Session.START_TIMEOUT
+                )
+            s.ping_task = s.client.loop.create_task(s.ping_worker())
+        except AuthKeyDuplicated as e:
+            await s.stop()
+            raise e
+        except (OSError, TimeoutError, RPCError):
+            await s.stop()
+            continue
+        except Exception as e:
+            await s.stop()
+            raise e
+        else:
+            break
+    s.is_connected.set()
 
 
 class HypertgUpload(HypertgTransfer):
@@ -67,7 +111,7 @@ class HypertgUpload(HypertgTransfer):
         file_id = client.rnd_id()
         dc_id = await client.storage.dc_id()
         is_big = file_size > 10 * MB
-        num_workers = 16 if is_big else 1
+        num_workers = 12 if is_big else 1
 
         _slot_acquired = False
         async with _ul_slots_lock:
@@ -108,7 +152,7 @@ class HypertgUpload(HypertgTransfer):
 
         async def worker(wid):
             my_session = Session(up_client, dc_id, ak, tm, is_media=True)
-            await my_session.start()
+            await _start_session(my_session, mode=1)
             if ea is not None:
                 await my_session.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
             sent = 0

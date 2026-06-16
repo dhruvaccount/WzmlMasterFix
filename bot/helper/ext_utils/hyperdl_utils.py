@@ -620,6 +620,7 @@ class HypertgDownload(HypertgTransfer):
                         )
                 elif isinstance(r, set) and r:
                     all_failed_offsets.update(r)
+                    bad_bots.add(assigns[i])
             max_retries = 4
             for retry_round in range(max_retries):
                 if not all_failed_offsets:
