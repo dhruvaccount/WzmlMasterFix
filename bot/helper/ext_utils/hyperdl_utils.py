@@ -249,7 +249,6 @@ class HypertgDownload(HypertgTransfer):
         timeout_count = 0
         reconn_count = 0
         total_req = 0
-        total_off = start
         pipe_timeouts = 0
         bot_down = False
 
@@ -665,7 +664,6 @@ class HypertgDownload(HypertgTransfer):
                     f"{' (bad bots: ' + str(bad_bots) + ')' if bad_bots else ''}"
                 )
 
-                # Sort buckets by range index for deterministic ordering
                 sorted_buckets = sorted(
                     [(i, offs) for i, offs in range_buckets.items() if offs],
                     key=lambda x: x[0],

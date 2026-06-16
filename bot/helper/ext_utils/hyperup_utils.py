@@ -1,6 +1,6 @@
 import os
 import re
-from asyncio import Queue, create_task, gather, sleep
+from asyncio import Lock, Queue, Semaphore, create_task, gather, sleep
 from hashlib import md5
 from math import ceil
 from mimetypes import guess_type
@@ -9,10 +9,14 @@ from time import time
 
 from pyrogram import StopTransmission, raw
 from pyrogram.errors import FilePartMissing, FloodPremiumWait, FloodWait
-from pyrogram.session import Session
+from pyrogram.session import Auth, Session
 
 from ... import LOGGER
 from ..telegram_helper.tg_transfer import HypertgTransfer, MB
+
+_ul_load_lock = Lock()
+_ul_slots = [None]
+_ul_slots_lock = Lock()
 
 KB = 1024
 PART_SIZE = 512 * KB
@@ -62,77 +66,65 @@ class HypertgUpload(HypertgTransfer):
         file_total_parts = ceil(file_size / PART_SIZE)
         file_id = client.rnd_id()
         dc_id = await client.storage.dc_id()
-        ak = await client.storage.auth_key()
-        tm = await client.storage.test_mode()
         is_big = file_size > 10 * MB
         num_workers = 16 if is_big else 1
+
+        _slot_acquired = False
+        async with _ul_slots_lock:
+            if _ul_slots[0] is None:
+                _ul_slots[0] = Semaphore(max(1, self.num_clients))
+        await _ul_slots[0].acquire()
+        _slot_acquired = True
+
+        if self.clients:
+            async with _ul_load_lock:
+                ul_ci = min(self.clients.keys(), key=lambda i: self.work_loads.get(i, 0))
+                self.work_loads[ul_ci] = self.work_loads.get(ul_ci, 0) + 1
+            up_client = self.clients[ul_ci]
+            up_name = up_client.me.username
+        else:
+            ul_ci = None
+            up_client = client
+            up_name = "self_client"
 
         LOGGER.info(
             f"HypertgUL upload {os.path.basename(file_path)} "
             f"({file_size / MB:.1f}MB {file_total_parts}p "
-            f"{num_workers}w dc={dc_id} big={is_big})"
+            f"{num_workers}w dc={dc_id} big={is_big}) "
+            f"bot={up_name}"
         )
 
         fp = open(file_path, "rb")
-        LOGGER.info(f"HypertgUL sessions {num_workers} created (not started yet) dc={dc_id}")
-
         q = Queue(16)
 
-        async def worker(_, wid):
-            nonlocal fp
-            my_session = Session(client, dc_id, ak, tm, is_media=True)
+        tm = await client.storage.test_mode()
+        main_dc = await client.storage.dc_id()
+        if dc_id != main_dc:
+            ak = await Auth(client, dc_id, tm).create()
+            ea = await client.invoke(raw.functions.auth.ExportAuthorization(dc_id=dc_id))
+        else:
+            ak = await client.storage.auth_key()
+            ea = None
+
+        async def worker(wid):
+            my_session = Session(up_client, dc_id, ak, tm, is_media=True)
             await my_session.start()
-            LOGGER.info(f"HypertgUL w{wid} session started dc={my_session.dc_id} connected={my_session.is_connected}")
+            if ea is not None:
+                await my_session.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
             sent = 0
             failed = 0
-            consec_err = 0
-            LOGGER.info(f"HypertgUL w{wid} started dc={my_session.dc_id}")
             while True:
                 data = await q.get()
                 if data is None:
-                    LOGGER.info(
-                        f"HypertgUL w{wid} done dc={my_session.dc_id} "
-                        f"ok={sent} fail={failed}"
-                    )
                     await my_session.stop()
                     return
-                for up_retry in range(3):
-                    try:
-                        await my_session.invoke(data)
-                        sent += 1
-                        consec_err = 0
-                        break
-                    except (TimeoutError, OSError, ConnectionError) as e:
-                        failed += 1
-                        consec_err += 1
-                        LOGGER.warning(
-                            f"HypertgUL w{wid} {type(e).__name__}: {e} "
-                            f"dc={my_session.dc_id} ok={sent} fail={failed} "
-                            f"consec={consec_err} retry={up_retry}"
-                        )
-                        if consec_err >= 3:
-                            LOGGER.warning(
-                                f"HypertgUL w{wid} reconnecting after {consec_err} errors"
-                            )
-                            try:
-                                await my_session.stop()
-                            except Exception:
-                                pass
-                            my_session = Session(client, dc_id, ak, tm, is_media=True)
-                            await my_session.start()
-                            LOGGER.info(f"HypertgUL w{wid} session reconnected dc={my_session.dc_id}")
-                            consec_err = 0
-                        await sleep(up_retry + 1)
-                    except Exception as e:
-                        failed += 1
-                        LOGGER.warning(
-                            f"HypertgUL w{wid} {type(e).__name__}: {e} "
-                            f"dc={my_session.dc_id} ok={sent} fail={failed}"
-                        )
-                        break
+                try:
+                    await my_session.invoke(data)
+                    sent += 1
+                except Exception:
+                    failed += 1
 
-        workers = [create_task(worker(None, wid)) for wid in range(num_workers)]
-        LOGGER.info(f"HypertgUL {len(workers)} workers created")
+        workers = [create_task(worker(wid)) for wid in range(num_workers)]
 
         try:
             part = 0
@@ -185,13 +177,16 @@ class HypertgUpload(HypertgTransfer):
             LOGGER.error(f"HypertgUL upload fail: {type(e).__name__}: {e}")
             raise
         finally:
-            LOGGER.info("HypertgUL upload cleanup starting")
+            if ul_ci is not None:
+                async with _ul_load_lock:
+                    self.work_loads[ul_ci] = max(0, self.work_loads.get(ul_ci, 0) - 1)
+            if _slot_acquired:
+                _ul_slots[0].release()
             for _ in workers:
                 await q.put(None)
             await gather(*workers, return_exceptions=True)
             try:
                 fp.close()
-                LOGGER.info("HypertgUL file closed")
             except Exception:
                 pass
 
@@ -330,7 +325,7 @@ class HypertgUpload(HypertgTransfer):
             LOGGER.info(f"HypertgUL phase=thumb start {thumb_path}")
             thumb_file = await self._upload_thumb(target_client, thumb_path)
         else:
-            LOGGER.info(f"HypertgUL phase=thumb skip (no thumb)")
+            LOGGER.info("HypertgUL phase=thumb skip (no thumb)")
         LOGGER.info(f"HypertgUL phase=thumb done ({time() - t_phase:.1f}s)")
 
         mime_type = self._mime(file_path)
