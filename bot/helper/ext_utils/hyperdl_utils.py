@@ -2,6 +2,7 @@ import os
 from asyncio import (
     FIRST_COMPLETED,
     CancelledError,
+    Lock,
     Queue,
     create_task,
     ensure_future,
@@ -46,11 +47,16 @@ _MIN_PIPELINE = 4
 _MAX_PIPELINE_MULT = 4
 _LOW_WORKERS = 2
 _HIGH_WORKERS = max(8, (cpu_count() or 4) * 2)
+_load_lock = Lock()
 
 
-def _pick_clients(wl, clients, count):
+async def _pick_clients(wl, clients, count):
     keys = list(clients.keys())
-    return sorted(keys, key=lambda i: wl.get(i, 0))[:count]
+    async with _load_lock:
+        picked = sorted(keys, key=lambda i: wl.get(i, 0))[:count]
+        for k in picked:
+            wl[k] = wl.get(k, 0) + 1
+    return picked
 
 
 class HypertgDownload(HypertgTransfer):
@@ -235,6 +241,7 @@ class HypertgDownload(HypertgTransfer):
         min_win = _MIN_PIPELINE
         max_win = window * _MAX_PIPELINE_MULT
         inflight = set()
+        _inflight_offsets = {}
         cur = first_off
         seq = 0
         ok_count = 0
@@ -289,19 +296,22 @@ class HypertgDownload(HypertgTransfer):
                             continue
                         if dc_or_ref == -2:
                             pipe_timeouts += 1
+                            old = window
+                            window = max(min_win, window - 1)
                             LOGGER.warning(
                                 f"HypertgDL Timeout attempt {attempt + 1}/{max_attempts} "
                                 f"client={cname} off={off} "
-                                f"(pipe_timeouts={pipe_timeouts})"
+                                f"(pipe_timeouts={pipe_timeouts}) "
+                                f"window {old}->{window}"
                             )
-                            if pipe_timeouts >= 3:
+                            if pipe_timeouts >= 8:
                                 bot_down = True
                                 LOGGER.warning(
                                     f"HypertgDL bot DOWN {cname} — "
                                     f"failing remaining offsets fast"
                                 )
                                 return s, off, b""
-                            await sleep(1)
+                            await sleep(min(3, pipe_timeouts))
                             continue
                         LOGGER.info(
                             f"HypertgDL FileMigrate dc={dc_or_ref} "
@@ -360,15 +370,21 @@ class HypertgDownload(HypertgTransfer):
                                     continue
                                 if roff == first_off and roff + csz >= end:
                                     chunk = chunk[first_trim:last_byte - roff + 1]
+                                    await queue.put((start, chunk))
                                 elif roff == first_off:
                                     chunk = chunk[first_trim:]
+                                    await queue.put((start, chunk))
                                 elif roff + csz > end:
                                     chunk = chunk[:end - roff]
-                                await queue.put((roff, chunk))
+                                    await queue.put((roff, chunk))
+                                else:
+                                    await queue.put((roff, chunk))
                             except CancelledError:
                                 raise
                             except Exception:
-                                pass
+                                roff = _inflight_offsets.get(f)
+                                if roff is not None:
+                                    failed_offsets.add(roff)
                     remaining = []
                     c = cur
                     while c <= last_byte:
@@ -384,32 +400,40 @@ class HypertgDownload(HypertgTransfer):
                 while len(inflight) < window and cur <= last_byte:
                     if self._cancel.is_set():
                         raise CancelledError
-                    inflight.add(ensure_future(_req(cur, seq)))
+                    f = ensure_future(_req(cur, seq))
+                    _inflight_offsets[f] = cur
+                    inflight.add(f)
                     cur += csz
                     seq += 1
                 if not inflight:
                     break
                 done_set, inflight = await wait(inflight, return_when=FIRST_COMPLETED)
-                ok_count += len(done_set)
-                if ok_count >= window:
-                    old = window
-                    window = min(window + 2, max_win)
-                    if window != old:
-                        LOGGER.debug(f"HypertgDL window grow {old}->{window} client={cname}")
-                    ok_count = 0
                 for f in done_set:
                     s, roff, chunk = f.result()
                     if not chunk:
                         LOGGER.warning(f"HypertgDL empty chunk off={roff} client={cname}")
                         failed_offsets.add(roff)
+                        if window > min_win:
+                            window -= 1
                         continue
+                    ok_count += 1
+                    if ok_count >= window:
+                        old = window
+                        window = min(window + 2, max_win)
+                        if window != old:
+                            LOGGER.debug(f"HypertgDL window grow {old}->{window} client={cname}")
+                        ok_count = 0
                     if roff == first_off and roff + csz >= end:
                         chunk = chunk[first_trim:last_byte - roff + 1]
+                        await queue.put((start, chunk))
                     elif roff == first_off:
                         chunk = chunk[first_trim:]
+                        await queue.put((start, chunk))
                     elif roff + csz > end:
                         chunk = chunk[:end - roff]
-                    await queue.put((roff, chunk))
+                        await queue.put((roff, chunk))
+                    else:
+                        await queue.put((roff, chunk))
             LOGGER.info(
                 f"HypertgDL pipe done idx={idx} client={cname} "
                 f"range={start}-{end} ({total_req}req {reconn_count}reconn "
@@ -535,7 +559,7 @@ class HypertgDownload(HypertgTransfer):
         final = os.path.abspath(sub("\\\\", "/", os.path.join(self.directory, self.file_name)))
 
         n_use = min(self.num_parts, self.num_clients)
-        cidx = _pick_clients(self.work_loads, self.clients, n_use)
+        cidx = await _pick_clients(self.work_loads, self.clients, n_use)
 
         min_part = 1 * MB
         n_parts = min(n_use, max(1, self.file_size // min_part)) if self.file_size >= min_part else 1
@@ -573,15 +597,20 @@ class HypertgDownload(HypertgTransfer):
                 await to_thread(os.close, fd)
 
             all_failed_offsets = set()
+            stagger = max(0.02, min(0.15, 1.0 / len(ranges)))
             for i, (s, e) in enumerate(ranges):
+                if i > 0:
+                    await sleep(stagger)
                 self._tasks.append(
                     create_task(self._part(s, e, final, assigns[i], fid_map[assigns[i]], self.chunk_size))
                 )
 
             results = await gather(*self._tasks, return_exceptions=True)
+            bad_bots = set()
             for i, r in enumerate(results):
                 if isinstance(r, BaseException):
                     LOGGER.error(f"HypertgDL part {i} failed: {r}")
+                    bad_bots.add(assigns[i])
                     if hasattr(r, "failed_offsets") and r.failed_offsets:
                         all_failed_offsets.update(r.failed_offsets)
                     else:
@@ -595,25 +624,20 @@ class HypertgDownload(HypertgTransfer):
                         )
                 elif isinstance(r, set) and r:
                     all_failed_offsets.update(r)
-
-            bad_bots = set()
             max_retries = 4
             for retry_round in range(max_retries):
                 if not all_failed_offsets:
                     break
 
                 if retry_round > 0:
-                    LOGGER.info(
-                        f"HypertgDL retry cooling 3s "
-                        f"before round {retry_round + 1}"
-                    )
-                    await sleep(3)
-
-                LOGGER.warning(
-                    f"HypertgDL retry round {retry_round + 1}/{max_retries}: "
-                    f"{len(all_failed_offsets)} failed offsets"
-                    f"{' (bad bots: ' + str(bad_bots) + ')' if bad_bots else ''}"
+                    cool = 3
+                else:
+                    cool = 2
+                LOGGER.info(
+                    f"HypertgDL retry cooling {cool}s "
+                    f"before round {retry_round + 1}"
                 )
+                await sleep(cool)
 
                 good_bots = sorted(
                     [i for i in self.clients.keys() if i not in bad_bots],
@@ -638,6 +662,14 @@ class HypertgDownload(HypertgTransfer):
                         )
                         range_buckets[0].append(off)
                         orphans += 1
+
+                orphans_str = f" {orphans} orphans" if orphans else ""
+                LOGGER.warning(
+                    f"HypertgDL retry round {retry_round + 1}/{max_retries}: "
+                    f"{len(all_failed_offsets)} failed offsets"
+                    f"{orphans_str}"
+                    f"{' (bad bots: ' + str(bad_bots) + ')' if bad_bots else ''}"
+                )
 
                 # Sort buckets by range index for deterministic ordering
                 sorted_buckets = sorted(
@@ -759,6 +791,9 @@ class HypertgDownload(HypertgTransfer):
                     t.cancel()
             if self._tasks:
                 await gather(*self._tasks, return_exceptions=True)
+            async with _load_lock:
+                for k in cidx:
+                    self.work_loads[k] = max(0, self.work_loads.get(k, 0) - 1)
             for s in self._cdn_sessions.values():
                 try:
                     if s.is_connected:

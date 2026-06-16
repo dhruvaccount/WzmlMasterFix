@@ -65,7 +65,7 @@ class HypertgUpload(HypertgTransfer):
         ak = await client.storage.auth_key()
         tm = await client.storage.test_mode()
         is_big = file_size > 10 * MB
-        num_workers = 16 if is_big else 1
+        num_workers = 24 if is_big else 1
 
         LOGGER.info(
             f"HypertgUL upload {os.path.basename(file_path)} "
@@ -96,36 +96,40 @@ class HypertgUpload(HypertgTransfer):
                     )
                     await my_session.stop()
                     return
-                try:
-                    await my_session.invoke(data)
-                    sent += 1
-                    consec_err = 0
-                except (TimeoutError, OSError, ConnectionError) as e:
-                    failed += 1
-                    consec_err += 1
-                    LOGGER.warning(
-                        f"HypertgUL w{wid} {type(e).__name__}: {e} "
-                        f"dc={my_session.dc_id} ok={sent} fail={failed} "
-                        f"consec={consec_err}"
-                    )
-                    if consec_err >= 3:
-                        LOGGER.warning(
-                            f"HypertgUL w{wid} reconnecting after {consec_err} errors"
-                        )
-                        try:
-                            await my_session.stop()
-                        except Exception:
-                            pass
-                        my_session = Session(client, dc_id, ak, tm, is_media=True)
-                        await my_session.start()
-                        LOGGER.info(f"HypertgUL w{wid} session reconnected dc={my_session.dc_id}")
+                for up_retry in range(3):
+                    try:
+                        await my_session.invoke(data)
+                        sent += 1
                         consec_err = 0
-                except Exception as e:
-                    failed += 1
-                    LOGGER.warning(
-                        f"HypertgUL w{wid} {type(e).__name__}: {e} "
-                        f"dc={my_session.dc_id} ok={sent} fail={failed}"
-                    )
+                        break
+                    except (TimeoutError, OSError, ConnectionError) as e:
+                        failed += 1
+                        consec_err += 1
+                        LOGGER.warning(
+                            f"HypertgUL w{wid} {type(e).__name__}: {e} "
+                            f"dc={my_session.dc_id} ok={sent} fail={failed} "
+                            f"consec={consec_err} retry={up_retry}"
+                        )
+                        if consec_err >= 3:
+                            LOGGER.warning(
+                                f"HypertgUL w{wid} reconnecting after {consec_err} errors"
+                            )
+                            try:
+                                await my_session.stop()
+                            except Exception:
+                                pass
+                            my_session = Session(client, dc_id, ak, tm, is_media=True)
+                            await my_session.start()
+                            LOGGER.info(f"HypertgUL w{wid} session reconnected dc={my_session.dc_id}")
+                            consec_err = 0
+                        await sleep(up_retry + 1)
+                    except Exception as e:
+                        failed += 1
+                        LOGGER.warning(
+                            f"HypertgUL w{wid} {type(e).__name__}: {e} "
+                            f"dc={my_session.dc_id} ok={sent} fail={failed}"
+                        )
+                        break
 
         workers = [create_task(worker(None, wid)) for wid in range(num_workers)]
         LOGGER.info(f"HypertgUL {len(workers)} workers created")
