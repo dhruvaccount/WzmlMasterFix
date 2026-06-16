@@ -64,6 +64,11 @@ class HypertgDownload(HypertgTransfer):
         self.file_size = 0
         self.download_dir = "downloads/"
         self._ref_cache = {}
+        LOGGER.info(
+            f"HypertgDL init clients={self.num_clients} "
+            f"chunk={self.chunk_size // KB}KB parts={self.num_parts} "
+            f"pipeline={self.pipeline_depth}"
+        )
 
     def _ref_get(self, idx):
         return self._ref_cache.get(idx)
@@ -123,14 +128,17 @@ class HypertgDownload(HypertgTransfer):
             raise ValueError(f"Unexpected response type: {type(r)}")
         except FileMigrate as e:
             dc = e.value if hasattr(e, "value") else int(str(e).split()[-1])
+            LOGGER.warning(f"HypertgDL FileMigrate dc={dc} client={client.me.username} off={off}")
             if attempt < 3:
                 return None, dc
             raise
-        except (FileReferenceExpired, FileReferenceInvalid):
+        except (FileReferenceExpired, FileReferenceInvalid) as e:
+            LOGGER.warning(f"HypertgDL {type(e).__name__} client={client.me.username} off={off}")
             if attempt < 3:
                 return None, -1
             raise
-        except (ConnectionError, OSError, TimeoutError):
+        except (ConnectionError, OSError, TimeoutError) as e:
+            LOGGER.warning(f"HypertgDL {type(e).__name__}: {e} client={client.me.username} off={off}")
             if attempt < 3:
                 return None, -2
             raise
@@ -173,9 +181,14 @@ class HypertgDownload(HypertgTransfer):
                     flood_count += 1
                     val = e.value if hasattr(e, "value") else 5
                     if val > 10 or flood_count >= 3:
+                        old = window
                         window = max(min_win, window - max(1, window // 4))
                         ok_count = 0
                         flood_count = 0
+                        LOGGER.warning(
+                            f"HypertgDL flood window {old}->{window} "
+                            f"val={val}s client={self.clients[idx].me.username}"
+                        )
                     await sleep(val + 1)
                 except CancelledError:
                     raise
@@ -289,6 +302,12 @@ class HypertgDownload(HypertgTransfer):
         assigns = [cidx[i % n_use] for i in range(n_parts)]
 
         unique_clients = set(assigns)
+        cnames = [self.clients[i].me.username for i in cidx]
+        LOGGER.info(
+            f"HypertgDL assign {self.file_name} "
+            f"({self.file_size / MB:.1f}MB {n_parts}p {n_use}c "
+            f"clients={cnames} dc={self.dump_chat})"
+        )
         fid_map = {}
         try:
             for ci in unique_clients:

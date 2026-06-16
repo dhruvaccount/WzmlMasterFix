@@ -30,10 +30,7 @@ WEB_ACCESS_PASSWORD=""  # Secret for deriving proxy passwords. Logs derived pass
 
 # Hyper Tg Downloader
 HELPER_TOKENS = ""
-
-# Hyper Upload (auto-enabled when HELPER_TOKENS set)
-HYPERUL_WORKERS = 8
-HYPERUL_PIPELINE = 64
+USE_HYPER = True
 
 # MegaAPI v4.30
 MEGA_EMAIL = ""

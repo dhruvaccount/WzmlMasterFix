@@ -72,7 +72,7 @@ class TelegramUploader:
         self._log_msg = None
         self._user_session = self._listener.transmission_mode in ("user", "both")
         self._error = ""
-        self._hu = HypertgUpload(self)
+        self._hu = HypertgUpload(self) if Config.USE_HYPER and Config.LEECH_DUMP_CHAT else None
 
     async def _user_settings(self):
         settings_map = {
@@ -471,6 +471,42 @@ class TelegramUploader:
             mtype = "photo"
             attrs = None
         target_client = TgClient.user if self._user_session else self._listener.client
+        if self._hu is None:
+            return await target_client.send_video(
+                chat_id=self._sent_msg.chat.id,
+                video=f_path or self._up_path,
+                caption=cap_mono,
+                duration=duration or 0,
+                width=width or 480,
+                height=height or 320,
+                thumb=thumb if thumb and thumb != "none" else None,
+                supports_streaming=True,
+                disable_notification=True,
+                reply_to_message_id=self._sent_msg.id,
+            ) if key == "videos" else await target_client.send_audio(
+                chat_id=self._sent_msg.chat.id,
+                audio=f_path or self._up_path,
+                caption=cap_mono,
+                duration=duration or 0,
+                performer=artist or "",
+                title=title or "",
+                thumb=thumb if thumb and thumb != "none" else None,
+                disable_notification=True,
+                reply_to_message_id=self._sent_msg.id,
+            ) if key == "audios" else await target_client.send_document(
+                chat_id=self._sent_msg.chat.id,
+                document=f_path or self._up_path,
+                caption=cap_mono,
+                thumb=thumb if thumb and thumb != "none" else None,
+                disable_notification=True,
+                reply_to_message_id=self._sent_msg.id,
+            ) if key == "documents" else await target_client.send_photo(
+                chat_id=self._sent_msg.chat.id,
+                photo=f_path or self._up_path,
+                caption=cap_mono,
+                disable_notification=True,
+                reply_to_message_id=self._sent_msg.id,
+            )
         return await self._hu.upload(
             target_client=target_client,
             target_chat_id=self._sent_msg.chat.id,
