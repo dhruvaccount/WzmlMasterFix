@@ -1,4 +1,4 @@
-FROM mysterysd/wzmlx:v3-beta
+FROM mysterysd/wzmlx:v3
 
 WORKDIR /usr/src/app
 
