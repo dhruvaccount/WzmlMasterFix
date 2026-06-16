@@ -1,6 +1,6 @@
 import os
 import re
-from asyncio import Queue, ensure_future, gather, sleep
+from asyncio import Queue, create_task, gather, sleep
 from hashlib import md5
 from math import ceil
 from mimetypes import guess_type
@@ -16,12 +16,10 @@ from ... import LOGGER
 from ..telegram_helper.tg_transfer import HypertgTransfer, MB
 
 KB = 1024
-GB = 1024 * MB
+PART_SIZE = 512 * KB
 
 
 class HypertgUpload(HypertgTransfer):
-    PART_SIZE = 512 * KB
-
     def __init__(self, obj):
         super().__init__(obj)
         self._up_start = 0
@@ -57,51 +55,58 @@ class HypertgUpload(HypertgTransfer):
     async def _upload_file(self, client, file_path):
         t0 = time()
         file_size = ospath.getsize(file_path)
-        file_total_parts = ceil(file_size / self.PART_SIZE)
+        file_total_parts = ceil(file_size / PART_SIZE)
         file_id = client.rnd_id()
         dc_id = await client.storage.dc_id()
         ak = await client.storage.auth_key()
         tm = await client.storage.test_mode()
-
         is_big = file_size > 10 * MB
         pool_size = 3 if is_big else 1
-        workers_per_session = 4 if is_big else 1
-        total_workers = pool_size * workers_per_session
+        workers_count = 4 if is_big else 1
 
         LOGGER.info(
             f"HypertgUL upload {os.path.basename(file_path)} "
             f"({file_size / MB:.1f}MB {file_total_parts}p "
-            f"{pool_size}x{workers_per_session}w dc={dc_id})"
+            f"{pool_size}x{workers_count}w dc={dc_id})"
         )
 
         fp = open(file_path, "rb")
-        pool = []
-        workers = []
+        pool = [
+            Session(client, dc_id, ak, tm, is_media=True)
+            for _ in range(pool_size)
+        ]
+
+        async def worker(session):
+            while True:
+                data = await q.get()
+                if data is None:
+                    return
+                try:
+                    await session.invoke(data)
+                except Exception as e:
+                    LOGGER.warning(f"HypertgUL worker {type(e).__name__}: {e} dc={session.dc_id}")
+
         q = Queue(16)
+        workers = [
+            create_task(worker(session))
+            for session in pool for _ in range(workers_count)
+        ]
 
         try:
-            for _ in range(pool_size):
-                s = Session(client, dc_id, ak, tm, is_media=True)
-                await s.start()
-                pool.append(s)
-
             for session in pool:
-                for _ in range(workers_per_session):
-                    workers.append(ensure_future(self._worker(session, q)))
+                await session.start()
 
+            fp.seek(0)
             part = 0
             rpc_fn = raw.functions.upload.SaveBigFilePart if is_big else raw.functions.upload.SaveFilePart
-            md5_sum = md5() if not is_big else None
 
             while True:
-                chunk = fp.read(self.PART_SIZE)
+                chunk = fp.read(PART_SIZE)
                 if not chunk:
                     break
-                if md5_sum is not None:
-                    md5_sum.update(chunk)
                 rpc = rpc_fn(
-                    file_id=file_id, file_part=part, bytes=chunk,
-                    **({"file_total_parts": file_total_parts} if is_big else {}),
+                    file_id=file_id, file_part=part,
+                    file_total_parts=file_total_parts, bytes=chunk,
                 )
                 await q.put(rpc)
                 self._obj._processed_bytes += len(chunk)
@@ -116,16 +121,17 @@ class HypertgUpload(HypertgTransfer):
             LOGGER.info(
                 f"HypertgUL file done {os.path.basename(file_path)} "
                 f"({file_size / MB:.1f}MB {file_total_parts}p "
-                f"{pool_size}x{workers_per_session}w {up_speed:.1f}MB/s {up_elapsed:.1f}s)"
+                f"{pool_size}x{workers_count}w {up_speed:.1f}MB/s {up_elapsed:.1f}s)"
             )
 
             if is_big:
                 return raw.types.InputFileBig(
-                    id=file_id, parts=file_total_parts, name=os.path.basename(file_path),
+                    id=file_id, parts=file_total_parts,
+                    name=os.path.basename(file_path),
                 )
             return raw.types.InputFile(
                 id=file_id, parts=file_total_parts,
-                name=os.path.basename(file_path), md5_checksum=md5_sum.hexdigest(),
+                name=os.path.basename(file_path),
             )
         except StopTransmission:
             raise
@@ -133,14 +139,12 @@ class HypertgUpload(HypertgTransfer):
             LOGGER.error(f"HypertgUL upload fail: {e}")
             raise
         finally:
-            for w in workers:
-                if not w.done():
-                    w.cancel()
+            for _ in workers:
+                await q.put(None)
             await gather(*workers, return_exceptions=True)
-            for s in pool:
+            for session in pool:
                 try:
-                    if s.is_connected:
-                        await s.stop()
+                    await session.stop()
                 except Exception:
                     pass
             try:
@@ -148,22 +152,9 @@ class HypertgUpload(HypertgTransfer):
             except Exception:
                 pass
 
-    async def _worker(self, session, q):
-        while True:
-            rpc = await q.get()
-            if rpc is None:
-                break
-            try:
-                await session.invoke(rpc)
-            except Exception as e:
-                LOGGER.warning(
-                    f"HypertgUL worker {type(e).__name__}: {e} "
-                    f"dc={session.dc_id}"
-                )
-
     async def _upload_small(self, client, file_path):
         file_size = ospath.getsize(file_path)
-        file_total_parts = ceil(file_size / self.PART_SIZE)
+        file_total_parts = ceil(file_size / PART_SIZE)
         file_id = client.rnd_id()
         dc_id = await client.storage.dc_id()
         ak = await client.storage.auth_key()
@@ -177,7 +168,7 @@ class HypertgUpload(HypertgTransfer):
             for part in range(file_total_parts):
                 if self._listener.is_cancelled:
                     raise StopTransmission()
-                chunk = fp.read(self.PART_SIZE)
+                chunk = fp.read(PART_SIZE)
                 if not chunk:
                     break
                 h.update(chunk)
@@ -191,8 +182,7 @@ class HypertgUpload(HypertgTransfer):
             )
         finally:
             try:
-                if s.is_connected:
-                    await s.stop()
+                await s.stop()
             except Exception:
                 pass
             fp.close()
@@ -200,7 +190,7 @@ class HypertgUpload(HypertgTransfer):
     async def _upload_thumb(self, client, file_path):
         file_size = ospath.getsize(file_path)
         file_id = client.rnd_id()
-        file_total_parts = ceil(file_size / self.PART_SIZE)
+        file_total_parts = ceil(file_size / PART_SIZE)
         fp = open(file_path, "rb")
         h = md5()
 
@@ -208,7 +198,7 @@ class HypertgUpload(HypertgTransfer):
             for part in range(file_total_parts):
                 if self._listener.is_cancelled:
                     raise StopTransmission()
-                chunk = fp.read(self.PART_SIZE)
+                chunk = fp.read(PART_SIZE)
                 if not chunk:
                     break
                 h.update(chunk)
@@ -224,11 +214,11 @@ class HypertgUpload(HypertgTransfer):
             fp.close()
 
     async def _reupload_part(self, client, file_path, input_file, part_num):
-        offset = part_num * self.PART_SIZE
+        offset = part_num * PART_SIZE
         fp = open(file_path, "rb")
         try:
             fp.seek(offset)
-            chunk = fp.read(self.PART_SIZE)
+            chunk = fp.read(PART_SIZE)
             if not chunk:
                 return
             if isinstance(input_file, raw.types.InputFileBig):
@@ -298,8 +288,7 @@ class HypertgUpload(HypertgTransfer):
             except (FloodWait, FloodPremiumWait) as e:
                 if attempt == 4:
                     raise
-                val = e.value if hasattr(e, "value") else 5
-                await sleep(val + 1)
+                await sleep(e.value + 1)
 
         if isinstance(r, raw.types.MessageMediaDocument):
             doc = r.document
@@ -353,8 +342,7 @@ class HypertgUpload(HypertgTransfer):
             except (FloodWait, FloodPremiumWait) as e:
                 if attempt == 4:
                     raise
-                val = e.value if hasattr(e, "value") else 5
-                await sleep(val + 1)
+                await sleep(e.value + 1)
 
         for u in r_updates.updates:
             if isinstance(u, (raw.types.UpdateNewMessage, raw.types.UpdateNewChannelMessage, raw.types.UpdateNewScheduledMessage)):
