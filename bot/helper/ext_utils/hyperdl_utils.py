@@ -304,7 +304,7 @@ class HypertgDownload(HypertgTransfer):
                                 f"(pipe_timeouts={pipe_timeouts}) "
                                 f"window {old}->{window}"
                             )
-                            if pipe_timeouts >= 8:
+                            if pipe_timeouts >= 3:
                                 bot_down = True
                                 LOGGER.warning(
                                     f"HypertgDL bot DOWN {cname} — "
@@ -597,10 +597,7 @@ class HypertgDownload(HypertgTransfer):
                 await to_thread(os.close, fd)
 
             all_failed_offsets = set()
-            stagger = max(0.02, min(0.15, 1.0 / len(ranges)))
             for i, (s, e) in enumerate(ranges):
-                if i > 0:
-                    await sleep(stagger)
                 self._tasks.append(
                     create_task(self._part(s, e, final, assigns[i], fid_map[assigns[i]], self.chunk_size))
                 )
@@ -629,10 +626,7 @@ class HypertgDownload(HypertgTransfer):
                 if not all_failed_offsets:
                     break
 
-                if retry_round > 0:
-                    cool = 3
-                else:
-                    cool = 2
+                cool = 1
                 LOGGER.info(
                     f"HypertgDL retry cooling {cool}s "
                     f"before round {retry_round + 1}"

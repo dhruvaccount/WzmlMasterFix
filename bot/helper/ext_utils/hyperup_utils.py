@@ -65,7 +65,7 @@ class HypertgUpload(HypertgTransfer):
         ak = await client.storage.auth_key()
         tm = await client.storage.test_mode()
         is_big = file_size > 10 * MB
-        num_workers = 24 if is_big else 1
+        num_workers = 16 if is_big else 1
 
         LOGGER.info(
             f"HypertgUL upload {os.path.basename(file_path)} "
