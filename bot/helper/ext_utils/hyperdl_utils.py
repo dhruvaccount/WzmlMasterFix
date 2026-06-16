@@ -254,6 +254,7 @@ class HypertgDownload(HypertgTransfer):
             nonlocal window, ok_count, flood_count, timeout_count, reconn_count, total_req, sess, loc
             my_sess = sess
             my_loc = loc
+            bot_timeouts = 0
             for attempt in range(3):
                 try:
                     cdn = self._cdn_info.get(idx)
@@ -282,19 +283,27 @@ class HypertgDownload(HypertgTransfer):
                             LOGGER.info(f"HypertgDL ref expired client={cname} off={off} — refreshing")
                             fid_new = await self._fetch_ref(idx, self.clients[idx], force=True)
                             my_loc = self._location(fid_new)
-                        elif dc_or_ref == -2:
-                            LOGGER.info(f"HypertgDL reconnecting session dc={my_sess.dc_id} client={cname} off={off}")
-                            reconn_count += 1
-                            my_sess = await self._get_session(idx, my_sess.dc_id, force=True)
-                            sess = my_sess
-                        else:
-                            LOGGER.info(
-                                f"HypertgDL FileMigrate dc={dc_or_ref} "
-                                f"client={cname} off={off} — migrating"
+                            await sleep(attempt + 1)
+                            continue
+                        if dc_or_ref == -2:
+                            bot_timeouts += 1
+                            LOGGER.warning(
+                                f"HypertgDL Timeout attempt {attempt + 1}/3 "
+                                f"client={cname} off={off} "
+                                f"(bot_timeouts={bot_timeouts}, throttling)"
                             )
-                            reconn_count += 1
-                            my_sess = await self._get_session(idx, dc_or_ref, force=True)
-                            sess = my_sess
+                            if bot_timeouts >= 2:
+                                halt = 2 ** bot_timeouts
+                                LOGGER.info(f"HypertgDL backoff {halt}s client={cname} off={off}")
+                                await sleep(halt)
+                            continue
+                        LOGGER.info(
+                            f"HypertgDL FileMigrate dc={dc_or_ref} "
+                            f"client={cname} off={off} — migrating"
+                        )
+                        reconn_count += 1
+                        my_sess = await self._get_session(idx, dc_or_ref, force=True)
+                        sess = my_sess
                         await sleep(attempt + 1)
                         continue
                     timeout_count = 0

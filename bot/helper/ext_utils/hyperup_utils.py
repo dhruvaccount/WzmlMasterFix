@@ -65,47 +65,39 @@ class HypertgUpload(HypertgTransfer):
         ak = await client.storage.auth_key()
         tm = await client.storage.test_mode()
         is_big = file_size > 10 * MB
-        pool_size = 3 if is_big else 1
-        workers_count = 4 if is_big else 1
+        num_workers = 12 if is_big else 1
 
         LOGGER.info(
             f"HypertgUL upload {os.path.basename(file_path)} "
             f"({file_size / MB:.1f}MB {file_total_parts}p "
-            f"{pool_size}x{workers_count}w dc={dc_id} big={is_big})"
+            f"{num_workers}w dc={dc_id} big={is_big})"
         )
 
         fp = open(file_path, "rb")
-        pool = [Session(client, dc_id, ak, tm, is_media=True) for _ in range(pool_size)]
-        LOGGER.info(f"HypertgUL sessions {pool_size} created (not started yet) dc={dc_id}")
+        LOGGER.info(f"HypertgUL sessions {num_workers} created (not started yet) dc={dc_id}")
 
         q = Queue(16)
 
-        async def _reconnect(session):
-            LOGGER.info(f"HypertgUL reconnecting session dc={session.dc_id}")
-            try:
-                await session.stop()
-            except Exception:
-                pass
-            s = Session(client, dc_id, ak, tm, is_media=True)
-            await s.start()
-            LOGGER.info(f"HypertgUL session reconnected dc={s.dc_id}")
-            return s
-
-        async def worker(session, wid):
+        async def worker(_, wid):
+            nonlocal fp
+            my_session = Session(client, dc_id, ak, tm, is_media=True)
+            await my_session.start()
+            LOGGER.info(f"HypertgUL w{wid} session started dc={my_session.dc_id} connected={my_session.is_connected}")
             sent = 0
             failed = 0
             consec_err = 0
-            LOGGER.info(f"HypertgUL w{wid} started dc={session.dc_id}")
+            LOGGER.info(f"HypertgUL w{wid} started dc={my_session.dc_id}")
             while True:
                 data = await q.get()
                 if data is None:
                     LOGGER.info(
-                        f"HypertgUL w{wid} done dc={session.dc_id} "
+                        f"HypertgUL w{wid} done dc={my_session.dc_id} "
                         f"ok={sent} fail={failed}"
                     )
+                    await my_session.stop()
                     return
                 try:
-                    await session.invoke(data)
+                    await my_session.invoke(data)
                     sent += 1
                     consec_err = 0
                 except (TimeoutError, OSError, ConnectionError) as e:
@@ -113,38 +105,32 @@ class HypertgUpload(HypertgTransfer):
                     consec_err += 1
                     LOGGER.warning(
                         f"HypertgUL w{wid} {type(e).__name__}: {e} "
-                        f"dc={session.dc_id} ok={sent} fail={failed} "
+                        f"dc={my_session.dc_id} ok={sent} fail={failed} "
                         f"consec={consec_err}"
                     )
                     if consec_err >= 3:
                         LOGGER.warning(
                             f"HypertgUL w{wid} reconnecting after {consec_err} errors"
                         )
-                        session = await _reconnect(session)
+                        try:
+                            await my_session.stop()
+                        except Exception:
+                            pass
+                        my_session = Session(client, dc_id, ak, tm, is_media=True)
+                        await my_session.start()
+                        LOGGER.info(f"HypertgUL w{wid} session reconnected dc={my_session.dc_id}")
                         consec_err = 0
                 except Exception as e:
                     failed += 1
                     LOGGER.warning(
                         f"HypertgUL w{wid} {type(e).__name__}: {e} "
-                        f"dc={session.dc_id} ok={sent} fail={failed}"
+                        f"dc={my_session.dc_id} ok={sent} fail={failed}"
                     )
 
-        workers = []
-        wid = 0
-        for session in pool:
-            for _ in range(workers_count):
-                workers.append(create_task(worker(session, wid)))
-                wid += 1
+        workers = [create_task(worker(None, wid)) for wid in range(num_workers)]
         LOGGER.info(f"HypertgUL {len(workers)} workers created")
 
         try:
-            for i, session in enumerate(pool):
-                await session.start()
-                LOGGER.info(
-                    f"HypertgUL session {i}/{pool_size} started dc={session.dc_id} "
-                    f"connected={session.is_connected}"
-                )
-
             part = 0
             rpc_fn = raw.functions.upload.SaveBigFilePart if is_big else raw.functions.upload.SaveFilePart
             LOGGER.info(f"HypertgUL queuing {file_total_parts} parts rpc={rpc_fn.__name__}")
@@ -173,7 +159,7 @@ class HypertgUpload(HypertgTransfer):
             LOGGER.info(
                 f"HypertgUL file done {os.path.basename(file_path)} "
                 f"({file_size / MB:.1f}MB {file_total_parts}p "
-                f"{pool_size}x{workers_count}w {up_speed:.1f}MB/s {up_elapsed:.1f}s)"
+                f"{num_workers}w {up_speed:.1f}MB/s {up_elapsed:.1f}s)"
             )
 
             if is_big:
@@ -199,12 +185,6 @@ class HypertgUpload(HypertgTransfer):
             for _ in workers:
                 await q.put(None)
             await gather(*workers, return_exceptions=True)
-            for i, session in enumerate(pool):
-                try:
-                    await session.stop()
-                    LOGGER.info(f"HypertgUL session {i} stopped dc={session.dc_id}")
-                except Exception as e:
-                    LOGGER.warning(f"HypertgUL session {i} stop err: {e}")
             try:
                 fp.close()
                 LOGGER.info("HypertgUL file closed")
@@ -365,37 +345,45 @@ class HypertgUpload(HypertgTransfer):
         t_phase = time()
         LOGGER.info(f"HypertgUL phase=SendMedia start {self._up_file}")
         r_updates = None
-        for attempt in range(5):
+        send_retries = 0
+        missing_fixed = 0
+        while True:
             try:
                 LOGGER.info(
-                    f"HypertgUL SendMedia attempt {attempt + 1}/5 "
-                    f"{self._up_file}"
+                    f"HypertgUL SendMedia attempt {send_retries + 1} "
+                    f"{self._up_file} (fixed {missing_fixed} missing parts so far)"
                 )
                 r_updates = await target_client.invoke(rpc)
                 LOGGER.info(f"HypertgUL SendMedia success {self._up_file}")
                 break
             except FilePartMissing as e:
                 part = self._parse_missing_part(e)
+                missing_fixed += 1
                 LOGGER.warning(
                     f"HypertgUL SendMedia missing part {part} "
-                    f"(attempt {attempt + 1}/5) {self._up_file}"
+                    f"(fixed {missing_fixed}) {self._up_file}"
                 )
                 await self._reupload_part(target_client, file_path, input_file, part)
+                send_retries += 1
+                if send_retries >= 100:
+                    raise RuntimeError(f"SendMedia exhausted after fixing {missing_fixed} missing parts")
             except (FloodWait, FloodPremiumWait) as e:
                 val = e.value if hasattr(e, "value") else 5
+                send_retries += 1
                 LOGGER.warning(
                     f"HypertgUL SendMedia flood {val}s "
-                    f"(attempt {attempt + 1}/5) {self._up_file}"
+                    f"(retry {send_retries}) {self._up_file}"
                 )
-                if attempt == 4:
+                if send_retries >= 10:
                     raise
                 await sleep(val + 1)
             except Exception as e:
+                send_retries += 1
                 LOGGER.error(
                     f"HypertgUL SendMedia {type(e).__name__}: {e} "
-                    f"(attempt {attempt + 1}/5) {self._up_file}"
+                    f"(retry {send_retries}) {self._up_file}"
                 )
-                if attempt == 4:
+                if send_retries >= 10:
                     raise
         LOGGER.info(f"HypertgUL phase=SendMedia done ({time() - t_phase:.1f}s)")
 
