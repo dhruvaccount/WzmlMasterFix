@@ -21,7 +21,7 @@ _ul_sessions: dict[int, Session] = {}
 _ul_sessions_lock = Lock()
 
 KB = 1024
-PART_SIZE = 1 * MB
+PART_SIZE = 512 * KB
 
 
 async def _close_ul_sessions():
@@ -112,37 +112,31 @@ class HypertgUpload(HypertgTransfer):
         fp = open(file_path, "rb")
         q = Queue(num_workers * 4)
 
-        up_session = None
-        sk = ul_ci if ul_ci is not None else -1
-        async with _ul_sessions_lock:
-            s = _ul_sessions.get(sk)
-            if s is not None and s.is_connected.is_set() and s.dc_id == dc_id:
-                up_session = s
-
-        if up_session is None:
-            tm = await client.storage.test_mode()
-            ak, is_cross = await self.create_auth(client, dc_id, tm)
-            up_session = Session(up_client, dc_id, ak, tm, is_media=True)
-            await self.start_session(up_session, mode=1)
-            if is_cross:
-                ea = await client.invoke(raw.functions.auth.ExportAuthorization(dc_id=dc_id))
-                await up_session.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
-            async with _ul_sessions_lock:
-                _ul_sessions[sk] = up_session
+        tm = await client.storage.test_mode()
+        ak, is_cross = await self.create_auth(client, dc_id, tm)
+        ea = None
+        if is_cross:
+            ea = await client.invoke(raw.functions.auth.ExportAuthorization(dc_id=dc_id))
 
         async def worker(wid):
-            while True:
-                data = await q.get()
-                if data is None:
-                    return
+            s = Session(up_client, dc_id, ak, tm, is_media=True)
+            await self.start_session(s, mode=1)
+            if ea is not None:
+                await s.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
+            try:
+                while True:
+                    data = await q.get()
+                    if data is None:
+                        return
+                    await s.invoke(data)
+            finally:
                 try:
-                    await up_session.invoke(data)
+                    await s.stop()
                 except Exception:
                     pass
 
         workers = [create_task(worker(wid)) for wid in range(num_workers)]
 
-        _err = True
         try:
             part = 0
             rpc_fn = raw.functions.upload.SaveBigFilePart if is_big else raw.functions.upload.SaveFilePart
@@ -167,7 +161,6 @@ class HypertgUpload(HypertgTransfer):
                 await q.put(None)
             await gather(*workers)
 
-            _err = False
             up_elapsed = time() - t0
             up_speed = file_size / up_elapsed / MB if up_elapsed > 0 else 0
             LOGGER.info(
@@ -203,13 +196,6 @@ class HypertgUpload(HypertgTransfer):
             for _ in workers:
                 await q.put(None)
             await gather(*workers, return_exceptions=True)
-            if _err:
-                async with _ul_sessions_lock:
-                    _ul_sessions.pop(sk, None)
-                try:
-                    await up_session.stop()
-                except Exception:
-                    pass
             try:
                 fp.close()
             except Exception:
