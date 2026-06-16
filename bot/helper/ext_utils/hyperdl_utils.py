@@ -243,6 +243,8 @@ class HypertgDownload(HypertgTransfer):
         reconn_count = 0
         total_req = 0
         total_off = start
+        pipe_timeouts = 0
+        bot_down = False
 
         LOGGER.info(
             f"HypertgDL pipe start idx={idx} client={cname} "
@@ -251,11 +253,11 @@ class HypertgDownload(HypertgTransfer):
         )
 
         async def _req(off, s):
-            nonlocal window, ok_count, flood_count, timeout_count, reconn_count, total_req, sess, loc
+            nonlocal window, ok_count, flood_count, timeout_count, reconn_count, total_req, sess, loc, pipe_timeouts, bot_down
             my_sess = sess
             my_loc = loc
-            bot_timeouts = 0
-            for attempt in range(3):
+            max_attempts = 1 if bot_down else 3
+            for attempt in range(max_attempts):
                 try:
                     cdn = self._cdn_info.get(idx)
                     if cdn:
@@ -286,16 +288,20 @@ class HypertgDownload(HypertgTransfer):
                             await sleep(attempt + 1)
                             continue
                         if dc_or_ref == -2:
-                            bot_timeouts += 1
+                            pipe_timeouts += 1
                             LOGGER.warning(
-                                f"HypertgDL Timeout attempt {attempt + 1}/3 "
+                                f"HypertgDL Timeout attempt {attempt + 1}/{max_attempts} "
                                 f"client={cname} off={off} "
-                                f"(bot_timeouts={bot_timeouts}, throttling)"
+                                f"(pipe_timeouts={pipe_timeouts})"
                             )
-                            if bot_timeouts >= 2:
-                                halt = 2 ** bot_timeouts
-                                LOGGER.info(f"HypertgDL backoff {halt}s client={cname} off={off}")
-                                await sleep(halt)
+                            if pipe_timeouts >= 3:
+                                bot_down = True
+                                LOGGER.warning(
+                                    f"HypertgDL bot DOWN {cname} — "
+                                    f"failing remaining offsets fast"
+                                )
+                                return s, off, b""
+                            await sleep(1)
                             continue
                         LOGGER.info(
                             f"HypertgDL FileMigrate dc={dc_or_ref} "
@@ -334,10 +340,47 @@ class HypertgDownload(HypertgTransfer):
                     f"HypertgDL timeout window {old}->{window} "
                     f"client={cname} off={off}"
                 )
-            raise RuntimeError(f"Failed after 3 attempts at offset {off}")
+            return s, off, b""
 
+        failed_offsets = set()
         try:
             while cur <= last_byte or inflight:
+                if bot_down:
+                    LOGGER.warning(
+                        f"HypertgDL bot_down — waiting for inflight to finish, "
+                        f"then aborting remaining offsets for {cname}"
+                    )
+                    while inflight:
+                        done_set, inflight = await wait(inflight, return_when=FIRST_COMPLETED)
+                        for f in done_set:
+                            try:
+                                s, roff, chunk = f.result()
+                                if not chunk:
+                                    failed_offsets.add(roff)
+                                    continue
+                                if roff == first_off and roff + csz >= end:
+                                    chunk = chunk[first_trim:last_byte - roff + 1]
+                                elif roff == first_off:
+                                    chunk = chunk[first_trim:]
+                                elif roff + csz > end:
+                                    chunk = chunk[:end - roff]
+                                await queue.put((roff, chunk))
+                            except CancelledError:
+                                raise
+                            except Exception:
+                                pass
+                    remaining = []
+                    c = cur
+                    while c <= last_byte:
+                        remaining.append(c)
+                        c += csz
+                    if remaining:
+                        LOGGER.warning(
+                            f"HypertgDL bot_down aborting {len(remaining)} offsets "
+                            f"for {cname}: {remaining[0]}-{remaining[-1]}"
+                        )
+                        failed_offsets.update(remaining)
+                    break
                 while len(inflight) < window and cur <= last_byte:
                     if self._cancel.is_set():
                         raise CancelledError
@@ -358,6 +401,7 @@ class HypertgDownload(HypertgTransfer):
                     s, roff, chunk = f.result()
                     if not chunk:
                         LOGGER.warning(f"HypertgDL empty chunk off={roff} client={cname}")
+                        failed_offsets.add(roff)
                         continue
                     if roff == first_off and roff + csz >= end:
                         chunk = chunk[first_trim:last_byte - roff + 1]
@@ -383,6 +427,7 @@ class HypertgDownload(HypertgTransfer):
             for f in inflight:
                 if not f.done():
                     f.cancel()
+        return failed_offsets
 
     async def _part(self, start, end, final_path, ci, fid, csz):
         cname = self.clients[ci].me.username
@@ -395,10 +440,20 @@ class HypertgDownload(HypertgTransfer):
         q = Queue(maxsize=self.pipeline_depth + 1)
         err = [None]
         bytes_written = 0
+        failed_offsets = set()
+        completed_offsets = set()
 
         async def _producer():
+            nonlocal failed_offsets
             try:
-                await self._pipeline_fetch(ci, self._location(fid), start, end, fid, q, csz)
+                result = await self._pipeline_fetch(ci, self._location(fid), start, end, fid, q, csz)
+                if isinstance(result, set):
+                    failed_offsets = result
+                    if failed_offsets:
+                        LOGGER.warning(
+                            f"HypertgDL producer ci={ci} client={cname} "
+                            f"pipeline returned {len(failed_offsets)} failed offsets"
+                        )
             except CancelledError:
                 LOGGER.info(f"HypertgDL part cancelled ci={ci} client={cname} range={start}-{end}")
             except Exception as e:
@@ -419,6 +474,7 @@ class HypertgDownload(HypertgTransfer):
                     await self._pwrite(fd, chunk, roff)
                     self._obj._processed_bytes += len(chunk)
                     bytes_written += len(chunk)
+                    completed_offsets.add(roff)
             except Exception as e:
                 LOGGER.error(f"HypertgDL consumer err ci={ci}: {e}")
                 raise
@@ -429,6 +485,19 @@ class HypertgDownload(HypertgTransfer):
         try:
             await _consumer()
             if err[0] is not None:
+                if not failed_offsets:
+                    first_off = start - (start % csz)
+                    c = first_off
+                    while c < end:
+                        if c not in completed_offsets:
+                            failed_offsets.add(c)
+                        c += csz
+                    if failed_offsets:
+                        LOGGER.warning(
+                            f"HypertgDL part fail ci={ci} client={cname} "
+                            f"calculating {len(failed_offsets)} missing offsets from crash"
+                        )
+                err[0].failed_offsets = failed_offsets
                 raise err[0]
             elapsed = time() - t0
             speed = bytes_written / elapsed / MB if elapsed > 0 else 0
@@ -446,6 +515,7 @@ class HypertgDownload(HypertgTransfer):
         finally:
             if not prod.done():
                 prod.cancel()
+        return failed_offsets
 
     @staticmethod
     async def _pwrite(fd, data, offset):
@@ -502,12 +572,82 @@ class HypertgDownload(HypertgTransfer):
             finally:
                 await to_thread(os.close, fd)
 
+            all_failed_offsets = set()
             for i, (s, e) in enumerate(ranges):
                 self._tasks.append(
                     create_task(self._part(s, e, final, assigns[i], fid_map[assigns[i]], self.chunk_size))
                 )
 
-            await gather(*self._tasks)
+            results = await gather(*self._tasks, return_exceptions=True)
+            for i, r in enumerate(results):
+                if isinstance(r, BaseException):
+                    LOGGER.error(f"HypertgDL part {i} failed: {r}")
+                    if hasattr(r, "failed_offsets"):
+                        all_failed_offsets.update(r.failed_offsets)
+                elif isinstance(r, set) and r:
+                    all_failed_offsets.update(r)
+
+            max_retries = 3
+            for retry_round in range(max_retries):
+                if not all_failed_offsets:
+                    break
+                LOGGER.warning(
+                    f"HypertgDL retry round {retry_round + 1}/{max_retries}: "
+                    f"{len(all_failed_offsets)} failed offsets"
+                )
+                all_client_indices = list(self.clients.keys())
+                retry_tasks = []
+                retry_batch_size = max(1, len(all_failed_offsets) // max(1, len(all_client_indices)))
+                sorted_offsets = sorted(all_failed_offsets)
+                for bot_idx in all_client_indices:
+                    if not sorted_offsets:
+                        break
+                    batch = sorted_offsets[:retry_batch_size]
+                    sorted_offsets = sorted_offsets[retry_batch_size:]
+                    if not batch:
+                        continue
+                    if bot_idx not in fid_map:
+                        try:
+                            fid_map[bot_idx] = await self._fetch_ref(bot_idx, self.clients[bot_idx])
+                        except Exception as e:
+                            LOGGER.warning(f"HypertgDL retry ref fail bot={bot_idx}: {e}")
+                            continue
+                    retry_start = batch[0]
+                    retry_end = min(batch[-1] + self.chunk_size, self.file_size)
+                    LOGGER.info(
+                        f"HypertgDL retry ci={bot_idx} "
+                        f"client={self.clients[bot_idx].me.username} "
+                        f"range={retry_start}-{retry_end} "
+                        f"({len(batch)} offsets)"
+                    )
+                    retry_tasks.append(
+                        create_task(
+                            self._part(
+                                retry_start, retry_end, final, bot_idx,
+                                fid_map[bot_idx], self.chunk_size
+                            )
+                        )
+                    )
+                if not retry_tasks:
+                    LOGGER.error("HypertgDL retry: no bots available for retry")
+                    break
+                retry_results = await gather(*retry_tasks, return_exceptions=True)
+                still_failed = set()
+                for r in retry_results:
+                    if isinstance(r, BaseException):
+                        LOGGER.error(f"HypertgDL retry part failed: {r}")
+                        if hasattr(r, "failed_offsets"):
+                            still_failed.update(r.failed_offsets)
+                    elif isinstance(r, set) and r:
+                        still_failed.update(r)
+                all_failed_offsets = still_failed
+
+            if all_failed_offsets:
+                LOGGER.error(
+                    f"HypertgDL {len(all_failed_offsets)} offsets still failed "
+                    f"after {max_retries} retry rounds — file may be incomplete"
+                )
+
             dl_elapsed = time() - dl_start
             dl_speed = self.file_size / dl_elapsed / MB if dl_elapsed > 0 else 0
             wl_str = " ".join(f"c{k}:{v}" for k, v in sorted(self.work_loads.items()))
