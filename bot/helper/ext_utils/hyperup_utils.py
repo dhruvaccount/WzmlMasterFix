@@ -8,10 +8,8 @@ from os import path as ospath
 from time import time
 
 from pyrogram import StopTransmission, raw
-from pyrogram.connection import Connection
-from pyrogram.errors import AuthKeyDuplicated, FilePartMissing, FloodPremiumWait, FloodWait, RPCError
-from pyrogram.raw.all import layer
-from pyrogram.session import Auth, Session
+from pyrogram.errors import FilePartMissing, FloodPremiumWait, FloodWait
+from pyrogram.session import Session
 
 from ... import LOGGER
 from ..telegram_helper.tg_transfer import HypertgTransfer, MB
@@ -19,51 +17,24 @@ from ..telegram_helper.tg_transfer import HypertgTransfer, MB
 _ul_load_lock = Lock()
 _ul_slots = [None]
 _ul_slots_lock = Lock()
+_ul_sessions: dict[int, Session] = {}
+_ul_sessions_lock = Lock()
 
 KB = 1024
 PART_SIZE = 512 * KB
 
 
-async def _start_session(s: Session, mode: int = 3):
-    while True:
-        s.connection = Connection(
-            s.dc_id, s.test_mode, s.client.ipv6,
-            s.client.proxy, s.is_media, mode=mode
-        )
+async def _close_ul_sessions():
+    async with _ul_sessions_lock:
+        sessions = list(_ul_sessions.values())
+        _ul_sessions.clear()
+    for s in sessions:
         try:
-            await s.connection.connect()
-            s.network_task = s.client.loop.create_task(s.network_worker())
-            await s.send(raw.functions.Ping(ping_id=0), timeout=Session.START_TIMEOUT)
-            if not s.is_cdn:
-                await s.send(
-                    raw.functions.InvokeWithLayer(
-                        layer=layer,
-                        query=raw.functions.InitConnection(
-                            api_id=await s.client.storage.api_id(),
-                            app_version=s.client.app_version,
-                            device_model=s.client.device_model,
-                            system_version=s.client.system_version,
-                            system_lang_code=s.client.lang_code,
-                            lang_code=s.client.lang_code,
-                            lang_pack="",
-                            query=raw.functions.help.GetConfig(),
-                        )
-                    ),
-                    timeout=Session.START_TIMEOUT
-                )
-            s.ping_task = s.client.loop.create_task(s.ping_worker())
-        except AuthKeyDuplicated as e:
-            await s.stop()
-            raise e
-        except (OSError, TimeoutError, RPCError):
-            await s.stop()
-            continue
-        except Exception as e:
-            await s.stop()
-            raise e
-        else:
-            break
-    s.is_connected.set()
+            if s.is_connected.is_set():
+                await s.stop()
+        except Exception:
+            pass
+    LOGGER.info(f"HypertgUL closed {len(sessions)} upload sessions")
 
 
 class HypertgUpload(HypertgTransfer):
@@ -141,35 +112,37 @@ class HypertgUpload(HypertgTransfer):
         fp = open(file_path, "rb")
         q = Queue(16)
 
-        tm = await client.storage.test_mode()
-        main_dc = await client.storage.dc_id()
-        if dc_id != main_dc:
-            ak = await Auth(client, dc_id, tm).create()
-            ea = await client.invoke(raw.functions.auth.ExportAuthorization(dc_id=dc_id))
-        else:
-            ak = await client.storage.auth_key()
-            ea = None
+        up_session = None
+        sk = ul_ci if ul_ci is not None else -1
+        async with _ul_sessions_lock:
+            s = _ul_sessions.get(sk)
+            if s is not None and s.is_connected.is_set() and s.dc_id == dc_id:
+                up_session = s
+
+        if up_session is None:
+            tm = await client.storage.test_mode()
+            ak, is_cross = await self.create_auth(client, dc_id, tm)
+            up_session = Session(up_client, dc_id, ak, tm, is_media=True)
+            await self.start_session(up_session, mode=1)
+            if is_cross:
+                ea = await client.invoke(raw.functions.auth.ExportAuthorization(dc_id=dc_id))
+                await up_session.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
+            async with _ul_sessions_lock:
+                _ul_sessions[sk] = up_session
 
         async def worker(wid):
-            my_session = Session(up_client, dc_id, ak, tm, is_media=True)
-            await _start_session(my_session, mode=1)
-            if ea is not None:
-                await my_session.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
-            sent = 0
-            failed = 0
             while True:
                 data = await q.get()
                 if data is None:
-                    await my_session.stop()
                     return
                 try:
-                    await my_session.invoke(data)
-                    sent += 1
+                    await up_session.invoke(data)
                 except Exception:
-                    failed += 1
+                    pass
 
         workers = [create_task(worker(wid)) for wid in range(num_workers)]
 
+        _err = True
         try:
             part = 0
             rpc_fn = raw.functions.upload.SaveBigFilePart if is_big else raw.functions.upload.SaveFilePart
@@ -189,11 +162,12 @@ class HypertgUpload(HypertgTransfer):
                 if part % 200 == 0 or part == file_total_parts:
                     LOGGER.info(f"HypertgUL queued {part}/{file_total_parts}")
 
-            LOGGER.info(f"HypertgUL all parts queued, signaling workers")
+            LOGGER.info("HypertgUL all parts queued, signaling workers")
             for _ in workers:
                 await q.put(None)
             await gather(*workers)
 
+            _err = False
             up_elapsed = time() - t0
             up_speed = file_size / up_elapsed / MB if up_elapsed > 0 else 0
             LOGGER.info(
@@ -229,6 +203,13 @@ class HypertgUpload(HypertgTransfer):
             for _ in workers:
                 await q.put(None)
             await gather(*workers, return_exceptions=True)
+            if _err:
+                async with _ul_sessions_lock:
+                    _ul_sessions.pop(sk, None)
+                try:
+                    await up_session.stop()
+                except Exception:
+                    pass
             try:
                 fp.close()
             except Exception:
@@ -451,6 +432,12 @@ class HypertgUpload(HypertgTransfer):
         msg = await target_client.get_messages(chat_id=target_chat_id, message_ids=msg_id)
         LOGGER.info(f"HypertgUL msg fetched id={msg_id}")
         return msg
+
+    async def cancel(self):
+        LOGGER.info("HypertgUpload cancel called")
+        await super().cancel()
+        await _close_ul_sessions()
+        LOGGER.info("HypertgUpload cancel done")
 
     @staticmethod
     def _mime(path):

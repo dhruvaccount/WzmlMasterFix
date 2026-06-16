@@ -5,9 +5,11 @@ from os import cpu_count
 
 import pyrogram
 from pyrogram import raw, utils
+from pyrogram.connection import Connection
 from pyrogram.connection.transport.tcp.tcp import TCP
-from pyrogram.errors import AuthBytesInvalid
+from pyrogram.errors import AuthBytesInvalid, AuthKeyDuplicated, RPCError
 from pyrogram.file_id import FileType, ThumbnailSource
+from pyrogram.raw.all import layer
 from pyrogram.session import Auth, Session
 from pyrogram.session.internals import DataCenter
 
@@ -75,6 +77,61 @@ class HypertgTransfer:
             f"loads={dict(self.work_loads)}"
         )
 
+    @staticmethod
+    async def create_auth(client, dc_id, tm=None):
+        if tm is None:
+            tm = await client.storage.test_mode()
+        main_dc = await client.storage.dc_id()
+        if dc_id != main_dc:
+            ak = await Auth(client, dc_id, tm).create()
+            LOGGER.info(f"HypertgTransfer create_auth cross-dc dc={dc_id} client={client.me.username}")
+            return ak, True
+        ak = await client.storage.auth_key()
+        LOGGER.debug(f"HypertgTransfer create_auth same-dc dc={dc_id}")
+        return ak, False
+
+    @staticmethod
+    async def start_session(s, mode=3):
+        while True:
+            s.connection = Connection(
+                s.dc_id, s.test_mode, s.client.ipv6,
+                s.client.proxy, s.is_media, mode=mode
+            )
+            try:
+                await s.connection.connect()
+                s.network_task = s.client.loop.create_task(s.network_worker())
+                await s.send(raw.functions.Ping(ping_id=0), timeout=Session.START_TIMEOUT)
+                if not s.is_cdn:
+                    await s.send(
+                        raw.functions.InvokeWithLayer(
+                            layer=layer,
+                            query=raw.functions.InitConnection(
+                                api_id=await s.client.storage.api_id(),
+                                app_version=s.client.app_version,
+                                device_model=s.client.device_model,
+                                system_version=s.client.system_version,
+                                system_lang_code=s.client.lang_code,
+                                lang_code=s.client.lang_code,
+                                lang_pack="",
+                                query=raw.functions.help.GetConfig(),
+                            )
+                        ),
+                        timeout=Session.START_TIMEOUT
+                    )
+                s.ping_task = s.client.loop.create_task(s.ping_worker())
+            except AuthKeyDuplicated as e:
+                await s.stop()
+                raise e
+            except (OSError, TimeoutError, RPCError):
+                await s.stop()
+                continue
+            except Exception as e:
+                await s.stop()
+                raise e
+            else:
+                break
+        s.is_connected.set()
+
     def _get_lock(self, client_id, dc_id):
         key = (client_id, dc_id)
         if key not in self._session_locks:
@@ -82,61 +139,40 @@ class HypertgTransfer:
             LOGGER.debug(f"HypertgTransfer new lock client={client_id} dc={dc_id}")
         return self._session_locks[key]
 
-    async def _mk_session(self, client, dc_id):
+    async def _mk_session(self, client, dc_id, mode=3):
         tm = await client.storage.test_mode()
-        main_dc = await client.storage.dc_id()
+        ak, is_cross = await self.create_auth(client, dc_id, tm)
         LOGGER.info(
             f"HypertgTransfer mk_session client={client.me.username} "
-            f"dc={dc_id} main_dc={main_dc} test={tm}"
+            f"dc={dc_id} is_cross={is_cross} mode={mode}"
         )
-        if dc_id != main_dc:
-            LOGGER.info(
-                f"HypertgTransfer mk_session cross-dc dc={dc_id} "
-                f"client={client.me.username} — creating auth"
-            )
-            ak = await Auth(client, dc_id, tm).create()
-            s = Session(client, dc_id, ak, tm, is_media=True)
-            await s.start()
-            LOGGER.info(
-                f"HypertgTransfer mk_session dc={dc_id} "
-                f"connected={s.is_connected} — exporting auth"
-            )
+        s = Session(client, dc_id, ak, tm, is_media=True)
+        await self.start_session(s, mode=mode)
+        if is_cross:
+            LOGGER.info(f"HypertgTransfer mk_session dc={dc_id} exporting auth")
             for attempt in range(6):
                 try:
                     e = await client.invoke(
                         raw.functions.auth.ExportAuthorization(dc_id=dc_id)
                     )
-                    LOGGER.info(
-                        f"HypertgTransfer mk_session dc={dc_id} "
-                        f"auth exported id={e.id} — importing"
-                    )
                     await s.invoke(
                         raw.functions.auth.ImportAuthorization(id=e.id, bytes=e.bytes)
                     )
-                    client.media_sessions[dc_id] = s
-                    LOGGER.info(
-                        f"HypertgTransfer mk_session dc={dc_id} "
-                        f"auth imported — session ready"
-                    )
-                    return s
+                    LOGGER.info(f"HypertgTransfer mk_session dc={dc_id} auth imported")
+                    break
                 except AuthBytesInvalid:
                     LOGGER.warning(
                         f"HypertgTransfer AuthBytesInvalid attempt {attempt + 1}/6 "
                         f"client={client.me.username} dc={dc_id}"
                     )
                     await sleep(1)
-            await s.stop()
-            LOGGER.error(
-                f"HypertgTransfer mk_session dc={dc_id} "
-                f"auth failed after 6 attempts — raising"
-            )
-            raise AuthBytesInvalid
-        ak = await client.storage.auth_key()
-        s = Session(client, dc_id, ak, tm, is_media=True)
-        await s.start()
+            else:
+                await s.stop()
+                LOGGER.error(f"HypertgTransfer mk_session dc={dc_id} auth failed")
+                raise AuthBytesInvalid
         client.media_sessions[dc_id] = s
         LOGGER.info(
-            f"HypertgTransfer mk_session same-dc dc={dc_id} "
+            f"HypertgTransfer mk_session dc={dc_id} "
             f"client={client.me.username} connected={s.is_connected}"
         )
         return s
