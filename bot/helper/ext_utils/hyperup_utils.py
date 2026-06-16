@@ -134,7 +134,7 @@ class HypertgUpload(HypertgTransfer):
                         if ok_streak >= 8:
                             await _spawn_worker()
                             ok_streak = 0
-                    except* TimeoutError:
+                    except* (OSError, TimeoutError):
                         err_streak += 1
                         ok_streak = 0
                         if err_streak >= 2:
