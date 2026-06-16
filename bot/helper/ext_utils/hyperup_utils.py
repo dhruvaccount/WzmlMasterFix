@@ -15,24 +15,10 @@ from ..telegram_helper.tg_transfer import HypertgTransfer, MB
 _ul_load_lock = Lock()
 _ul_slots = [None]
 _ul_slots_lock = Lock()
-_ul_sessions: dict[int, Session] = {}
-_ul_sessions_lock = Lock()
+
 
 KB = 1024
 PART_SIZE = 512 * KB
-
-
-async def _close_ul_sessions():
-    async with _ul_sessions_lock:
-        sessions = list(_ul_sessions.values())
-        _ul_sessions.clear()
-    for s in sessions:
-        try:
-            if s.is_connected.is_set():
-                await s.stop()
-        except Exception:
-            pass
-    LOGGER.info(f"HypertgUL closed {len(sessions)} upload sessions")
 
 
 class HypertgUpload(HypertgTransfer):
@@ -110,6 +96,7 @@ class HypertgUpload(HypertgTransfer):
 
             bs = 3
             err_streak = 0
+            recreations = 0
             try:
                 while True:
                     data = await q.get()
@@ -134,10 +121,21 @@ class HypertgUpload(HypertgTransfer):
                             bs += 1
                     except* TimeoutError:
                         err_streak += 1
-                        if err_streak >= 3:
-                            raise
                         if err_streak >= 2:
                             bs = max(1, bs - 1)
+                        if err_streak >= 3:
+                            recreations += 1
+                            if recreations >= 3:
+                                raise RuntimeError("upload worker exhausted after 3 session recreations")
+                            err_streak = 0
+                            try:
+                                await s.stop()
+                            except Exception:
+                                pass
+                            s = Session(up_client, dc_id, ak, tm, is_media=True)
+                            await self.start_session(s, mode=1)
+                            if ea is not None:
+                                await s.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
                         for item in batch:
                             await q.put(item)
             finally:
@@ -362,7 +360,6 @@ class HypertgUpload(HypertgTransfer):
 
     async def cancel(self):
         await super().cancel()
-        await _close_ul_sessions()
 
     @staticmethod
     def _mime(path):
