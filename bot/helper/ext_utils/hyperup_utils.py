@@ -118,6 +118,8 @@ class HypertgUpload(HypertgTransfer):
         if is_cross:
             ea = await client.invoke(raw.functions.auth.ExportAuthorization(dc_id=dc_id))
 
+        BATCH = 3
+
         async def worker(wid):
             s = Session(up_client, dc_id, ak, tm, is_media=True)
             await self.start_session(s, mode=1)
@@ -128,18 +130,20 @@ class HypertgUpload(HypertgTransfer):
                     data = await q.get()
                     if data is None:
                         return
-                    data2 = None
-                    try:
-                        data2 = q.get_nowait()
-                        if data2 is None:
-                            await q.put(None)
-                            data2 = None
-                    except Queue.Empty:
-                        pass
-                    if data2 is not None:
-                        await gather(s.invoke(data), s.invoke(data2))
+                    batch = [data]
+                    for _ in range(BATCH - 1):
+                        try:
+                            d = q.get_nowait()
+                            if d is None:
+                                await q.put(None)
+                                break
+                            batch.append(d)
+                        except Queue.Empty:
+                            break
+                    if len(batch) == 1:
+                        await s.invoke(batch[0])
                     else:
-                        await s.invoke(data)
+                        await gather(*[s.invoke(d) for d in batch])
             finally:
                 try:
                     await s.stop()

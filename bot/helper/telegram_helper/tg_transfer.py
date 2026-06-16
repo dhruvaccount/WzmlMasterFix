@@ -24,7 +24,6 @@ _orig_tcp_connect = TCP.connect
 
 
 async def _tcp_tuned_connect(self, address):
-    LOGGER.debug(f"HypertgTCP connecting to {address}")
     await _orig_tcp_connect(self, address)
     sock = None
     if self.writer:
@@ -38,7 +37,6 @@ async def _tcp_tuned_connect(self, address):
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
-            LOGGER.debug(f"HypertgTCP tuned socket {address}: NODELAY=1 KEEPALIVE=1 SNDBUF=4MB RCVBUF=4MB")
         except OSError as e:
             LOGGER.debug(f"HypertgTCP socket tune failed: {e}")
 
@@ -51,7 +49,6 @@ _orig_dc_new = DataCenter.__new__
 def _dc_alt_port(cls, dc_id, test_mode, ipv6, media):
     ip, port = _orig_dc_new(cls, dc_id, test_mode, ipv6, media)
     if media and not test_mode:
-        LOGGER.debug(f"HypertgDC dc={dc_id} alt port 5222 (was {port})")
         port = 5222
     return ip, port
 
@@ -84,10 +81,8 @@ class HypertgTransfer:
         main_dc = await client.storage.dc_id()
         if dc_id != main_dc:
             ak = await Auth(client, dc_id, tm).create()
-            LOGGER.info(f"HypertgTransfer create_auth cross-dc dc={dc_id} client={client.me.username}")
             return ak, True
         ak = await client.storage.auth_key()
-        LOGGER.debug(f"HypertgTransfer create_auth same-dc dc={dc_id}")
         return ak, False
 
     @staticmethod
@@ -136,20 +131,14 @@ class HypertgTransfer:
         key = (client_id, dc_id)
         if key not in self._session_locks:
             self._session_locks[key] = Lock()
-            LOGGER.debug(f"HypertgTransfer new lock client={client_id} dc={dc_id}")
         return self._session_locks[key]
 
     async def _mk_session(self, client, dc_id, mode=3):
         tm = await client.storage.test_mode()
         ak, is_cross = await self.create_auth(client, dc_id, tm)
-        LOGGER.info(
-            f"HypertgTransfer mk_session client={client.me.username} "
-            f"dc={dc_id} is_cross={is_cross} mode={mode}"
-        )
         s = Session(client, dc_id, ak, tm, is_media=True)
         await self.start_session(s, mode=mode)
         if is_cross:
-            LOGGER.info(f"HypertgTransfer mk_session dc={dc_id} exporting auth")
             for attempt in range(6):
                 try:
                     e = await client.invoke(
@@ -158,7 +147,6 @@ class HypertgTransfer:
                     await s.invoke(
                         raw.functions.auth.ImportAuthorization(id=e.id, bytes=e.bytes)
                     )
-                    LOGGER.info(f"HypertgTransfer mk_session dc={dc_id} auth imported")
                     break
                 except AuthBytesInvalid:
                     LOGGER.warning(
@@ -171,66 +159,35 @@ class HypertgTransfer:
                 LOGGER.error(f"HypertgTransfer mk_session dc={dc_id} auth failed")
                 raise AuthBytesInvalid
         client.media_sessions[dc_id] = s
-        LOGGER.info(
-            f"HypertgTransfer mk_session dc={dc_id} "
-            f"client={client.me.username} connected={s.is_connected}"
-        )
         return s
 
     async def _get_session(self, idx, dc_id, force=False):
         s = self._sessions.get(idx)
         if s and not force:
             if s.is_connected and s.dc_id == dc_id:
-                LOGGER.debug(
-                    f"HypertgTransfer session reuse idx={idx} "
-                    f"dc={dc_id} connected={s.is_connected}"
-                )
                 return s
-            LOGGER.info(
-                f"HypertgTransfer session stale idx={idx} "
-                f"old_dc={s.dc_id} new_dc={dc_id} connected={s.is_connected} — stopping"
-            )
             try:
                 await s.stop()
-            except Exception as e:
-                LOGGER.debug(f"HypertgTransfer session stop err: {e}")
+            except Exception:
+                pass
         lock = self._get_lock(id(self.clients[idx]), dc_id)
-        LOGGER.debug(f"HypertgTransfer session acquire lock idx={idx} dc={dc_id}")
         async with lock:
             s = self._sessions.get(idx)
             if s and not force:
                 if s.is_connected and s.dc_id == dc_id:
-                    LOGGER.debug(
-                        f"HypertgTransfer session reuse (double-check) idx={idx} dc={dc_id}"
-                    )
                     return s
-            LOGGER.info(
-                f"HypertgTransfer session creating idx={idx} "
-                f"dc={dc_id} client={self.clients[idx].me.username}"
-            )
             s = await self._mk_session(self.clients[idx], dc_id)
             self._sessions[idx] = s
-            LOGGER.info(
-                f"HypertgTransfer session created idx={idx} "
-                f"dc={dc_id} connected={s.is_connected}"
-            )
         return s
 
     async def _warmup(self, indices, dc_id):
-        LOGGER.info(f"HypertgTransfer warmup indices={list(indices)} dc={dc_id}")
-
         async def _w(i):
             try:
-                s = await self._get_session(i, dc_id)
-                LOGGER.info(
-                    f"HypertgTransfer warmup ok client={i} "
-                    f"dc={dc_id} connected={s.is_connected}"
-                )
+                await self._get_session(i, dc_id)
             except Exception as e:
                 LOGGER.warning(f"HypertgTransfer warmup fail client {i}: {e}")
 
         await gather(*[_w(i) for i in indices])
-        LOGGER.info(f"HypertgTransfer warmup done indices={list(indices)}")
 
     async def _close_all(self):
         sessions = list(self._sessions.values())
@@ -240,19 +197,12 @@ class HypertgTransfer:
             try:
                 for client in self.clients.values():
                     if s in client.media_sessions.values():
-                        LOGGER.debug(
-                            f"HypertgTransfer close_all session {i} "
-                            f"dc={s.dc_id} in client media_sessions — skipping"
-                        )
                         break
                 else:
                     if s.is_connected:
                         await s.stop()
-                        LOGGER.info(f"HypertgTransfer close_all session {i} dc={s.dc_id} stopped")
-                    else:
-                        LOGGER.debug(f"HypertgTransfer close_all session {i} dc={s.dc_id} already disconnected")
-            except Exception as e:
-                LOGGER.warning(f"HypertgTransfer close_all session {i} stop err: {e}")
+            except Exception:
+                pass
 
     @staticmethod
     def _location(fid):
@@ -275,7 +225,6 @@ class HypertgTransfer:
                 local_id=fid.local_id,
                 big=fid.thumbnail_source == ThumbnailSource.CHAT_PHOTO_BIG,
             )
-            LOGGER.debug(f"HypertgTransfer location CHAT_PHOTO vol={fid.volume_id} local={fid.local_id}")
             return loc
         if ft == FileType.PHOTO:
             loc = raw.types.InputPhotoFileLocation(
@@ -284,7 +233,6 @@ class HypertgTransfer:
                 file_reference=fid.file_reference,
                 thumb_size=fid.thumbnail_size,
             )
-            LOGGER.debug(f"HypertgTransfer location PHOTO id={fid.media_id}")
             return loc
         loc = raw.types.InputDocumentFileLocation(
             id=fid.media_id,
@@ -292,11 +240,9 @@ class HypertgTransfer:
             file_reference=fid.file_reference,
             thumb_size=fid.thumbnail_size,
         )
-        LOGGER.debug(f"HypertgTransfer location DOCUMENT id={fid.media_id}")
         return loc
 
     async def cancel(self):
-        LOGGER.info("HypertgTransfer cancel called")
         self._cancel.set()
         for t in self._tasks:
             if not t.done():
@@ -304,4 +250,3 @@ class HypertgTransfer:
         if self._tasks:
             await gather(*self._tasks, return_exceptions=True)
         await self._close_all()
-        LOGGER.info("HypertgTransfer cancel done")

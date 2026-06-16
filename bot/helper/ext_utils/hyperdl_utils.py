@@ -111,10 +111,6 @@ class HypertgDownload(HypertgTransfer):
                 return fid
             except Exception as e:
                 last_err = e
-                LOGGER.warning(
-                    f"HypertgDL _fetch_ref attempt {attempt + 1}/{retries} "
-                    f"fail: {e} (client={client.me.username})"
-                )
                 if attempt < retries - 1:
                     await sleep(attempt + 1)
         raise ValueError(f"Failed to get file ref with {client.me.username}: {last_err}")
@@ -144,17 +140,14 @@ class HypertgDownload(HypertgTransfer):
             raise ValueError(f"Unexpected response type: {type(r)}")
         except FileMigrate as e:
             dc = e.value if hasattr(e, "value") else int(str(e).split()[-1])
-            LOGGER.warning(f"HypertgDL FileMigrate dc={dc} client={client.me.username} off={off}")
             if attempt < 3:
                 return None, dc
             raise
-        except (FileReferenceExpired, FileReferenceInvalid) as e:
-            LOGGER.warning(f"HypertgDL {type(e).__name__} client={client.me.username} off={off}")
+        except (FileReferenceExpired, FileReferenceInvalid):
             if attempt < 3:
                 return None, -1
             raise
-        except (ConnectionError, OSError, TimeoutError) as e:
-            LOGGER.warning(f"HypertgDL {type(e).__name__}: {e} client={client.me.username} off={off}")
+        except (ConnectionError, OSError, TimeoutError):
             if attempt < 3:
                 return None, -2
             raise
@@ -252,12 +245,6 @@ class HypertgDownload(HypertgTransfer):
         pipe_timeouts = 0
         bot_down = False
 
-        LOGGER.info(
-            f"HypertgDL pipe start idx={idx} client={cname} "
-            f"dc={fid.dc_id} range={start}-{end} "
-            f"({(end - start) / MB:.1f}MB) window={window} csz={csz}"
-        )
-
         async def _req(off, s):
             nonlocal window, ok_count, flood_count, timeout_count, reconn_count, total_req, sess, loc, pipe_timeouts, bot_down
             if bot_down:
@@ -278,10 +265,6 @@ class HypertgDownload(HypertgTransfer):
                         _, dc_or_ref = result
                         if isinstance(dc_or_ref, dict):
                             self._cdn_info[idx] = dc_or_ref
-                            LOGGER.info(
-                                f"HypertgDL CDN redirect dc={dc_or_ref['cdn_dc']} "
-                                f"client={cname} off={off}"
-                            )
                             chunk = await self._cdnpull(idx, dc_or_ref, off, csz)
                             if chunk is not None:
                                 total_req += 1
@@ -290,7 +273,6 @@ class HypertgDownload(HypertgTransfer):
                             await sleep(attempt + 1)
                             continue
                         if dc_or_ref == -1:
-                            LOGGER.info(f"HypertgDL ref expired client={cname} off={off} — refreshing")
                             fid_new = await self._fetch_ref(idx, self.clients[idx], force=True)
                             my_loc = self._location(fid_new)
                             await sleep(attempt + 1)
@@ -299,27 +281,12 @@ class HypertgDownload(HypertgTransfer):
                             if bot_down:
                                 return s, off, b""
                             pipe_timeouts += 1
-                            old = window
                             window = max(min_win, window - 1)
-                            LOGGER.warning(
-                                f"HypertgDL Timeout attempt {attempt + 1}/{max_attempts} "
-                                f"client={cname} off={off} "
-                                f"(pipe_timeouts={pipe_timeouts}) "
-                                f"window {old}->{window}"
-                            )
                             if pipe_timeouts >= 3:
                                 bot_down = True
-                                LOGGER.warning(
-                                    f"HypertgDL bot DOWN {cname} — "
-                                    f"failing remaining offsets fast"
-                                )
                                 return s, off, b""
                             await sleep(min(3, pipe_timeouts))
                             continue
-                        LOGGER.info(
-                            f"HypertgDL FileMigrate dc={dc_or_ref} "
-                            f"client={cname} off={off} — migrating"
-                        )
                         reconn_count += 1
                         my_sess = await self._get_session(idx, dc_or_ref, force=True)
                         sess = my_sess
@@ -332,12 +299,11 @@ class HypertgDownload(HypertgTransfer):
                     flood_count += 1
                     val = e.value if hasattr(e, "value") else 5
                     if val > 10 or flood_count >= 3:
-                        old = window
                         window = max(min_win, window - max(1, window // 4))
                         ok_count = 0
                         flood_count = 0
                         LOGGER.warning(
-                            f"HypertgDL flood window {old}->{window} "
+                            f"HypertgDL flood window={window} "
                             f"val={val}s client={cname} off={off}"
                         )
                     await sleep(val + 1)
@@ -345,24 +311,15 @@ class HypertgDownload(HypertgTransfer):
                     raise
             timeout_count += 1
             if timeout_count >= 3:
-                old = window
                 window = max(min_win, window - max(1, window // 4))
                 timeout_count = 0
                 ok_count = 0
-                LOGGER.warning(
-                    f"HypertgDL timeout window {old}->{window} "
-                    f"client={cname} off={off}"
-                )
             return s, off, b""
 
         failed_offsets = set()
         try:
             while cur <= last_byte or inflight:
                 if bot_down:
-                    LOGGER.warning(
-                        f"HypertgDL bot_down — waiting for inflight to finish, "
-                        f"then aborting remaining offsets for {cname}"
-                    )
                     while inflight:
                         done_set, inflight = await wait(inflight, return_when=FIRST_COMPLETED)
                         for f in done_set:
@@ -394,10 +351,6 @@ class HypertgDownload(HypertgTransfer):
                         remaining.append(c)
                         c += csz
                     if remaining:
-                        LOGGER.warning(
-                            f"HypertgDL bot_down aborting {len(remaining)} offsets "
-                            f"for {cname}: {remaining[0]}-{remaining[-1]}"
-                        )
                         failed_offsets.update(remaining)
                     break
                 while len(inflight) < window and cur <= last_byte:
@@ -414,15 +367,11 @@ class HypertgDownload(HypertgTransfer):
                 for f in done_set:
                     s, roff, chunk = f.result()
                     if not chunk:
-                        LOGGER.warning(f"HypertgDL empty chunk off={roff} client={cname}")
                         failed_offsets.add(roff)
                         continue
                     ok_count += 1
                     if ok_count >= window:
-                        old = window
                         window = min(window + 2, max_win)
-                        if window != old:
-                            LOGGER.debug(f"HypertgDL window grow {old}->{window} client={cname}")
                         ok_count = 0
                     if roff == first_off and roff + csz >= end:
                         chunk = chunk[first_trim:last_byte - roff + 1]
@@ -456,12 +405,7 @@ class HypertgDownload(HypertgTransfer):
 
     async def _part(self, start, end, final_path, ci, fid, csz):
         cname = self.clients[ci].me.username
-        psize = end - start
         t0 = time()
-        LOGGER.info(
-            f"HypertgDL part start ci={ci} client={cname} "
-            f"range={start}-{end} ({psize / MB:.1f}MB) path={os.path.basename(final_path)}"
-        )
         q = Queue(maxsize=self.pipeline_depth + 1)
         err = [None]
         bytes_written = 0
@@ -474,13 +418,8 @@ class HypertgDownload(HypertgTransfer):
                 result = await self._pipeline_fetch(ci, self._location(fid), start, end, fid, q, csz)
                 if isinstance(result, set):
                     failed_offsets = result
-                    if failed_offsets:
-                        LOGGER.warning(
-                            f"HypertgDL producer ci={ci} client={cname} "
-                            f"pipeline returned {len(failed_offsets)} failed offsets"
-                        )
             except CancelledError:
-                LOGGER.info(f"HypertgDL part cancelled ci={ci} client={cname} range={start}-{end}")
+                pass
             except Exception as e:
                 err[0] = e
                 LOGGER.error(f"HypertgDL part fail ci={ci} client={cname}: {e}")
@@ -517,11 +456,6 @@ class HypertgDownload(HypertgTransfer):
                         if c not in completed_offsets:
                             failed_offsets.add(c)
                         c += csz
-                    if failed_offsets:
-                        LOGGER.warning(
-                            f"HypertgDL part fail ci={ci} client={cname} "
-                            f"calculating {len(failed_offsets)} missing offsets from crash"
-                        )
                 err[0].failed_offsets = failed_offsets
                 raise err[0]
             elapsed = time() - t0
@@ -628,12 +562,7 @@ class HypertgDownload(HypertgTransfer):
                 if not all_failed_offsets:
                     break
 
-                cool = 1
-                LOGGER.info(
-                    f"HypertgDL retry cooling {cool}s "
-                    f"before round {retry_round + 1}"
-                )
-                await sleep(cool)
+                await sleep(1)
 
                 good_bots = sorted(
                     [i for i in self.clients.keys() if i not in bad_bots],
@@ -693,24 +622,13 @@ class HypertgDownload(HypertgTransfer):
                             fid_map[bot_idx] = await self._fetch_ref(
                                 bot_idx, self.clients[bot_idx]
                             )
-                        except Exception as e:
-                            LOGGER.warning(
-                                f"HypertgDL retry ref fail bot={bot_idx}: {e}"
-                            )
+                        except Exception:
                             bad_bots.add(bot_idx)
                             still_failed |= set(bucket)
                             continue
                     retry_start = min(bucket)
                     retry_end = min(
                         max(bucket) + self.chunk_size, self.file_size
-                    )
-                    cname = self.clients[bot_idx].me.username
-                    LOGGER.info(
-                        f"HypertgDL retry ci={bot_idx} "
-                        f"client={cname} "
-                        f"range={retry_start}-{retry_end} "
-                        f"({len(bucket)} offsets from original ci={assigns[i]}"
-                        f"{' (remap)' if assigns[i] != bot_idx else ''})"
                     )
                     task = create_task(
                         self._part(
@@ -743,11 +661,6 @@ class HypertgDownload(HypertgTransfer):
                         bad_bots.add(bot_idx)
                     elif isinstance(r, set):
                         if r:
-                            LOGGER.warning(
-                                f"HypertgDL retry ci={bot_idx} "
-                                f"client={self.clients[bot_idx].me.username} "
-                                f"returned {len(r)} failed offsets — marking bad"
-                            )
                             still_failed |= r
                             bad_bots.add(bot_idx)
                 all_failed_offsets = still_failed
