@@ -260,6 +260,8 @@ class HypertgDownload(HypertgTransfer):
 
         async def _req(off, s):
             nonlocal window, ok_count, flood_count, timeout_count, reconn_count, total_req, sess, loc, pipe_timeouts, bot_down
+            if bot_down:
+                return s, off, b""
             my_sess = sess
             my_loc = loc
             max_attempts = 1 if bot_down else 3
@@ -294,6 +296,8 @@ class HypertgDownload(HypertgTransfer):
                             await sleep(attempt + 1)
                             continue
                         if dc_or_ref == -2:
+                            if bot_down:
+                                return s, off, b""
                             pipe_timeouts += 1
                             old = window
                             window = max(min_win, window - 1)
@@ -412,8 +416,6 @@ class HypertgDownload(HypertgTransfer):
                     if not chunk:
                         LOGGER.warning(f"HypertgDL empty chunk off={roff} client={cname}")
                         failed_offsets.add(roff)
-                        if window > min_win:
-                            window -= 1
                         continue
                     ok_count += 1
                     if ok_count >= window:

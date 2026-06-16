@@ -82,7 +82,7 @@ class HypertgUpload(HypertgTransfer):
         file_id = client.rnd_id()
         dc_id = await client.storage.dc_id()
         is_big = file_size > 10 * MB
-        num_workers = min(4, self.num_clients or 1) if is_big else 1
+        num_workers = min(8, self.num_clients or 1) if is_big else 1
 
         _slot_acquired = False
         async with _ul_slots_lock:
