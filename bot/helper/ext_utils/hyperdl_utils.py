@@ -77,12 +77,6 @@ class HypertgDownload(HypertgTransfer):
         self._ref_cache = {}
         self._cdn_info = {}
         self._cdn_sessions = {}
-        LOGGER.info(
-            f"HypertgDL init clients={self.num_clients} "
-            f"chunk={self.chunk_size // KB}KB parts={self.num_parts} "
-            f"pipeline={self.pipeline_depth}"
-        )
-
     def _ref_get(self, idx):
         return self._ref_cache.get(idx)
 
@@ -240,13 +234,11 @@ class HypertgDownload(HypertgTransfer):
         ok_count = 0
         flood_count = 0
         timeout_count = 0
-        reconn_count = 0
-        total_req = 0
         pipe_timeouts = 0
         bot_down = False
 
         async def _req(off, s):
-            nonlocal window, ok_count, flood_count, timeout_count, reconn_count, total_req, sess, loc, pipe_timeouts, bot_down
+            nonlocal window, ok_count, flood_count, timeout_count, sess, loc, pipe_timeouts, bot_down
             if bot_down:
                 return s, off, b""
             my_sess = sess
@@ -258,7 +250,6 @@ class HypertgDownload(HypertgTransfer):
                     if cdn:
                         chunk = await self._cdnpull(idx, cdn, off, csz)
                         if chunk is not None:
-                            total_req += 1
                             return s, off, chunk
                     result = await self._do_req(my_sess, self.clients[idx], my_loc, off, csz, attempt)
                     if isinstance(result, tuple):
@@ -267,7 +258,6 @@ class HypertgDownload(HypertgTransfer):
                             self._cdn_info[idx] = dc_or_ref
                             chunk = await self._cdnpull(idx, dc_or_ref, off, csz)
                             if chunk is not None:
-                                total_req += 1
                                 return s, off, chunk
                             self._cdn_info.pop(idx, None)
                             await sleep(attempt + 1)
@@ -287,13 +277,11 @@ class HypertgDownload(HypertgTransfer):
                                 return s, off, b""
                             await sleep(min(3, pipe_timeouts))
                             continue
-                        reconn_count += 1
                         my_sess = await self._get_session(idx, dc_or_ref, force=True)
                         sess = my_sess
                         await sleep(attempt + 1)
                         continue
                     timeout_count = 0
-                    total_req += 1
                     return s, off, result
                 except (FloodWait, FloodPremiumWait) as e:
                     flood_count += 1
@@ -384,11 +372,6 @@ class HypertgDownload(HypertgTransfer):
                         await queue.put((roff, chunk))
                     else:
                         await queue.put((roff, chunk))
-            LOGGER.info(
-                f"HypertgDL pipe done idx={idx} client={cname} "
-                f"range={start}-{end} ({total_req}req {reconn_count}reconn "
-                f"final_window={window})"
-            )
         except CancelledError:
             raise
         except Exception as e:
@@ -405,10 +388,8 @@ class HypertgDownload(HypertgTransfer):
 
     async def _part(self, start, end, final_path, ci, fid, csz):
         cname = self.clients[ci].me.username
-        t0 = time()
         q = Queue(maxsize=self.pipeline_depth + 1)
         err = [None]
-        bytes_written = 0
         failed_offsets = set()
         completed_offsets = set()
 
@@ -427,7 +408,6 @@ class HypertgDownload(HypertgTransfer):
                 await q.put(None)
 
         async def _consumer():
-            nonlocal bytes_written
             fd = await to_thread(os.open, final_path, os.O_WRONLY)
             try:
                 while True:
@@ -437,7 +417,6 @@ class HypertgDownload(HypertgTransfer):
                     roff, chunk = item
                     await self._pwrite(fd, chunk, roff)
                     self._obj._processed_bytes += len(chunk)
-                    bytes_written += len(chunk)
                     completed_offsets.add(roff)
             except Exception as e:
                 LOGGER.error(f"HypertgDL consumer err ci={ci}: {e}")
@@ -458,13 +437,6 @@ class HypertgDownload(HypertgTransfer):
                         c += csz
                 err[0].failed_offsets = failed_offsets
                 raise err[0]
-            elapsed = time() - t0
-            speed = bytes_written / elapsed / MB if elapsed > 0 else 0
-            LOGGER.info(
-                f"HypertgDL part done ci={ci} client={cname} "
-                f"range={start}-{end} ({bytes_written / MB:.1f}MB "
-                f"{speed:.1f}MB/s {elapsed:.1f}s)"
-            )
         except CancelledError:
             prod.cancel()
             raise
@@ -489,7 +461,6 @@ class HypertgDownload(HypertgTransfer):
     async def handle_download(self):
         self._cancel.clear()
         self._obj._processed_bytes = 0
-        dl_start = time()
         await makedirs(self.directory, exist_ok=True)
         final = os.path.abspath(sub("\\\\", "/", os.path.join(self.directory, self.file_name)))
 
@@ -503,12 +474,6 @@ class HypertgDownload(HypertgTransfer):
         assigns = [cidx[i % n_use] for i in range(n_parts)]
 
         unique_clients = set(assigns)
-        cnames = [self.clients[i].me.username for i in cidx]
-        LOGGER.info(
-            f"HypertgDL assign {self.file_name} "
-            f"({self.file_size / MB:.1f}MB {n_parts}p {n_use}c "
-            f"clients={cnames} dc={self.dump_chat})"
-        )
         fid_map = {}
         try:
             for ci in unique_clients:
@@ -674,16 +639,6 @@ class HypertgDownload(HypertgTransfer):
                     f"{bad_detail}"
                 )
 
-            dl_elapsed = time() - dl_start
-            dl_speed = self.file_size / dl_elapsed / MB if dl_elapsed > 0 else 0
-            wl_str = " ".join(f"c{k}:{v}" for k, v in sorted(self.work_loads.items()))
-            cdn_used = list({v["cdn_dc"] for v in self._cdn_info.values()})
-            cdn_str = f" cdn={cdn_used}" if cdn_used else ""
-            LOGGER.info(
-                f"HypertgDL done {self.file_name} "
-                f"({self.file_size / MB:.1f}MB {n_parts}p {n_use}c "
-                f"pipe={self.pipeline_depth}{cdn_str} wl=[{wl_str}] {dl_speed:.1f}MB/s)"
-            )
             return final
         except FloodWait:
             raise
@@ -732,7 +687,6 @@ class HypertgDownload(HypertgTransfer):
                     raise RuntimeError(f"Cannot copy to dump chat: {e}") from e
             self.dump_chat = dump_chat or message.chat.id
             self.message = self.message or message
-            LOGGER.info(f"HypertgDL init dump={self.dump_chat} msg_id={self.message.id}")
             media = self._media_of(self.message)
             fid_str = media if isinstance(media, str) else media.file_id
             fid_obj = FileId.decode(fid_str)
