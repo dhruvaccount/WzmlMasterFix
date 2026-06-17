@@ -1,6 +1,6 @@
 import os
 import re
-from asyncio import CancelledError, Lock, Queue, QueueShutDown, Semaphore, TaskGroup, create_task, gather, sleep
+from asyncio import CancelledError, Lock, Queue, QueueShutDown, Semaphore, create_task, gather, sleep
 from hashlib import md5
 from math import ceil
 from mimetypes import guess_type
@@ -79,9 +79,7 @@ class HypertgUpload(HypertgTransfer):
                 up_client = client
 
             _is_bot = bool(getattr(getattr(up_client, 'me', None), 'is_bot', True))
-            if not _is_bot:
-                num_workers = max(2, min(4, self.num_clients or 1)) if is_big else 1
-            _workers_init = min(4, num_workers) if _is_bot else min(2, num_workers)
+            _workers_init = 4 if _is_bot else 2
 
             fp = open(file_path, "rb")
             q = Queue(_workers_init * 4)
@@ -92,80 +90,25 @@ class HypertgUpload(HypertgTransfer):
             if is_cross:
                 ea = await client.invoke(raw.functions.auth.ExportAuthorization(dc_id=dc_id))
 
-            _global_bs = 3
-            _global_bs_lock = Lock()
-            _global_ok_streak = 0
-
             async def _worker(wid):
                 s = Session(up_client, dc_id, ak, tm, is_media=True)
                 await self.start_session(s, mode=1)
                 if ea is not None:
                     await s.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
-
-                async def _invoke(data):
-                    try:
-                        return await s.invoke(data)
-                    except CancelledError:
-                        return None
-
-                err_streak = 0
-                _should_exit = False
                 try:
-                    while not _should_exit:
+                    while True:
                         if self._listener.is_cancelled:
                             return
-                        async with _global_bs_lock:
-                            bs = _global_bs
                         try:
                             data = await q.get()
                         except QueueShutDown:
                             return
-                        batch = [data]
-                        for _ in range(bs - 1):
-                            try:
-                                d = q.get_nowait()
-                                batch.append(d)
-                            except Queue.Empty:
-                                break
-                            except QueueShutDown:
-                                break
                         try:
-                            async with TaskGroup() as tg:
-                                for d in batch:
-                                    tg.create_task(_invoke(d))
-                            err_streak = 0
-                            _worker._recreations = 0
-                            async with _global_bs_lock:
-                                _global_ok_streak += 1
-                                if _global_ok_streak >= 200 and _global_bs < 3:
-                                    _global_bs += 1
-                                    _global_ok_streak = 0
-                        except* (OSError, TimeoutError):
-                            err_streak += 1
-                            async with _global_bs_lock:
-                                _global_ok_streak = 0
-                                _global_bs = max(1, _global_bs - 1)
-                            try:
-                                for item in batch:
-                                    await q.put(item)
-                            except QueueShutDown:
-                                pass
-                            if err_streak >= 3:
-                                recreations = _worker._recreations = getattr(_worker, "_recreations", 0) + 1
-                                if recreations > 3:
-                                    await sleep(min(3, 2 ** (recreations - 3)))
-                                try:
-                                    await s.stop()
-                                except Exception:
-                                    pass
-                                try:
-                                    s = Session(up_client, dc_id, ak, tm, is_media=True)
-                                    await self.start_session(s, mode=1)
-                                    if ea is not None:
-                                        await s.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
-                                    err_streak = 0
-                                except Exception:
-                                    _should_exit = True
+                            await s.invoke(data)
+                        except CancelledError:
+                            return
+                        except Exception:
+                            pass
                 finally:
                     try:
                         await s.stop()
