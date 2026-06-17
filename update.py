@@ -30,7 +30,6 @@ _VAR_LIST = [
     "BASE_URL",
     "UPSTREAM_REPO",
     "UPSTREAM_BRANCH",
-    "UPDATE_PKGS",
 ]
 
 def _get_version():
@@ -140,10 +139,9 @@ def _run_update(upstream_repo, upstream_branch, version):
     _LOGGER.info(f"UPSTREAM_REPO: {display_repo} | UPSTREAM_BRANCH: {upstream_branch} | VERSION: {version}")
 
 
-def _update_packages(update_pkgs):
-    if (isinstance(update_pkgs, str) and update_pkgs.lower() == "true") or update_pkgs:
-        scall("uv pip install -U -r requirements.txt", shell=True)
-        _LOGGER.info("Successfully Updated all the Packages!")
+def _update_packages():
+    scall("uv pip install -U -r requirements.txt", shell=True)
+    _LOGGER.info("Successfully Updated all the Packages!")
 
 
 def main():
@@ -166,8 +164,7 @@ def main():
 
     _run_update(upstream_repo, upstream_branch, version)
 
-    update_pkgs = config_file.get("UPDATE_PKGS", "True")
-    _update_packages(update_pkgs)
+    _update_packages()
 
 
 if __name__ == "__main__":

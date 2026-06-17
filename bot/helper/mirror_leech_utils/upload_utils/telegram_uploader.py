@@ -95,6 +95,8 @@ class TelegramUploader:
             self._thumb = None
 
     async def _msg_to_reply(self):
+        if self._user_session and TgClient.user is None:
+            self._user_session = False
         if self._listener.up_dest:
             msg_link = (
                 self._listener.message.link if self._listener.is_super_chat else ""
