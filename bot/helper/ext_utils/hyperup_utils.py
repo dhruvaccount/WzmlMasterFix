@@ -1,6 +1,6 @@
 import os
 import re
-from asyncio import CancelledError, Lock, Queue, QueueFull, Semaphore, create_task, gather, sleep
+from asyncio import CancelledError, Lock, Queue, QueueFull, QueueShutDown, Semaphore, create_task, gather, sleep
 from hashlib import md5
 from math import ceil
 from mimetypes import guess_type
@@ -97,8 +97,9 @@ class HypertgUpload(HypertgTransfer):
                     await s.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
                 try:
                     while True:
-                        data = await q.get()
-                        if data is None:
+                        try:
+                            data = await q.get()
+                        except QueueShutDown:
                             return
                         for attempt in range(5):
                             try:
@@ -160,8 +161,7 @@ class HypertgUpload(HypertgTransfer):
             if acc:
                 self._obj._processed_bytes += acc
 
-            for _ in workers:
-                await q.put(None)
+            q.shutdown()
             await gather(*workers)
 
             if is_big:
