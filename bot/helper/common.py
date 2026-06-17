@@ -147,6 +147,8 @@ class TaskConfig:
         self.is_rss = getattr(self.message, "_rss_trigger", False)
         self.progress = True
         self.ffmpeg_cmds = None
+        self.dump_chat = 0
+        self.dump_msg_id = 0
         self.metadata_title = None
         self.chat_thread_id = None
         self.subproc = None
