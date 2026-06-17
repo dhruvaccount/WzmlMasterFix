@@ -1,6 +1,6 @@
 import os
 import re
-from asyncio import CancelledError, Lock, Queue, Semaphore, TaskGroup, create_task, gather, sleep
+from asyncio import CancelledError, Lock, Queue, QueueShutDown, Semaphore, TaskGroup, create_task, gather, sleep
 from hashlib import md5
 from math import ceil
 from mimetypes import guess_type
@@ -115,18 +115,18 @@ class HypertgUpload(HypertgTransfer):
                             return
                         async with _global_bs_lock:
                             bs = _global_bs
-                        data = await q.get()
-                        if data is None:
+                        try:
+                            data = await q.get()
+                        except QueueShutDown:
                             return
                         batch = [data]
                         for _ in range(bs - 1):
                             try:
                                 d = q.get_nowait()
-                                if d is None:
-                                    await q.put(None)
-                                    break
                                 batch.append(d)
                             except Queue.Empty:
+                                break
+                            except QueueShutDown:
                                 break
                         try:
                             async with TaskGroup() as tg:
@@ -144,8 +144,11 @@ class HypertgUpload(HypertgTransfer):
                             async with _global_bs_lock:
                                 _global_ok_streak = 0
                                 _global_bs = max(1, _global_bs - 1)
-                            for item in batch:
-                                await q.put(item)
+                            try:
+                                for item in batch:
+                                    await q.put(item)
+                            except QueueShutDown:
+                                pass
                             if err_streak >= 3:
                                 recreations = _worker._recreations = getattr(_worker, "_recreations", 0) + 1
                                 if recreations > 3:
@@ -170,7 +173,7 @@ class HypertgUpload(HypertgTransfer):
 
             worker_tasks = []
             for i in range(_workers_init):
-                t = create_task(_worker(i))
+                t = create_task(_worker(i), eager_start=True)
                 worker_tasks.append(t)
             workers = worker_tasks
 
@@ -189,8 +192,7 @@ class HypertgUpload(HypertgTransfer):
                 await q.put(rpc)
                 self._obj._processed_bytes += len(chunk)
                 part += 1
-            for _ in workers:
-                await q.put(None)
+            q.shutdown()
             await gather(*workers)
 
             if is_big:
@@ -217,8 +219,7 @@ class HypertgUpload(HypertgTransfer):
             if _slot_acquired:
                 _ul_slots[0].release()
             if q:
-                for _ in workers:
-                    await q.put(None)
+                q.shutdown(immediate=True)
             if workers:
                 await gather(*workers, return_exceptions=True)
             if fp:
