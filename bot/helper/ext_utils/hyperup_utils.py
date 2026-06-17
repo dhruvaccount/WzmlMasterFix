@@ -1,6 +1,6 @@
 import os
 import re
-from asyncio import CancelledError, Lock, Queue, QueueShutDown, Semaphore, create_task, gather, sleep
+from asyncio import CancelledError, Lock, Queue, QueueFull, Semaphore, create_task, gather, sleep
 from hashlib import md5
 from math import ceil
 from mimetypes import guess_type
@@ -11,6 +11,7 @@ from pyrogram.session import Session
 
 from ... import LOGGER
 from ..telegram_helper.tg_transfer import HypertgTransfer, MB
+from .bot_utils import sync_to_async
 
 _ul_load_lock = Lock()
 _ul_slots = [None]
@@ -55,7 +56,6 @@ class HypertgUpload(HypertgTransfer):
         file_id = client.rnd_id()
         dc_id = await client.storage.dc_id()
         is_big = file_size > 10 * MB
-        num_workers = max(4, min(10, self.num_clients or 1)) if is_big else 1
 
         _slot_acquired = False
         async with _ul_slots_lock:
@@ -79,10 +79,10 @@ class HypertgUpload(HypertgTransfer):
                 up_client = client
 
             _is_bot = bool(getattr(getattr(up_client, 'me', None), 'is_bot', True))
-            _workers_init = 4 if _is_bot else 2
+            n_workers = 4 if _is_bot else 2
 
-            fp = open(file_path, "rb")
-            q = Queue(_workers_init * 4)
+            fp = open(file_path, "rb", buffering=4 * 1024 * 1024)
+            q = Queue(n_workers * 4)
 
             tm = await client.storage.test_mode()
             ak, is_cross = await self.create_auth(client, dc_id, tm)
@@ -97,46 +97,71 @@ class HypertgUpload(HypertgTransfer):
                     await s.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
                 try:
                     while True:
-                        if self._listener.is_cancelled:
+                        data = await q.get()
+                        if data is None:
                             return
-                        try:
-                            data = await q.get()
-                        except QueueShutDown:
-                            return
-                        try:
-                            await s.invoke(data)
-                        except CancelledError:
-                            return
-                        except Exception:
-                            pass
+                        for attempt in range(5):
+                            try:
+                                await s.invoke(data)
+                                break
+                            except StopTransmission:
+                                raise
+                            except CancelledError:
+                                return
+                            except Exception:
+                                if attempt == 4:
+                                    break
+                                await sleep(2 ** attempt)
                 finally:
                     try:
                         await s.stop()
                     except Exception:
                         pass
 
-            worker_tasks = []
-            for i in range(_workers_init):
-                t = create_task(_worker(i))
-                worker_tasks.append(t)
-            workers = worker_tasks
+            workers = [create_task(_worker(i)) for i in range(n_workers)]
 
-            part = 0
             rpc_fn = raw.functions.upload.SaveBigFilePart if is_big else raw.functions.upload.SaveFilePart
+            POOL = 4 * 1024 * 1024
+            acc = 0
+            part = 0
+
+            buf_fut = await sync_to_async(fp.read, POOL, wait=False)
             while True:
+                buf = await buf_fut
+                if not buf:
+                    break
+                buf_fut = await sync_to_async(fp.read, POOL, wait=False)
+
                 if self._listener.is_cancelled:
                     raise StopTransmission()
-                chunk = fp.read(PART_SIZE)
-                if not chunk:
-                    break
-                rpc = rpc_fn(
-                    file_id=file_id, file_part=part,
-                    file_total_parts=file_total_parts, bytes=chunk,
-                )
-                await q.put(rpc)
-                self._obj._processed_bytes += len(chunk)
-                part += 1
-            q.shutdown()
+
+                off = 0
+                n = len(buf)
+                while off < n:
+                    end = off + PART_SIZE
+                    chunk = buf[off:end]
+                    rpc = rpc_fn(
+                        file_id=file_id, file_part=part,
+                        file_total_parts=file_total_parts, bytes=chunk,
+                    )
+                    while True:
+                        try:
+                            q.put_nowait(rpc)
+                            break
+                        except QueueFull:
+                            await sleep(0)
+                    acc += len(chunk)
+                    if part & 7 == 7:
+                        self._obj._processed_bytes += acc
+                        acc = 0
+                    part += 1
+                    off = end
+
+            if acc:
+                self._obj._processed_bytes += acc
+
+            for _ in workers:
+                await q.put(None)
             await gather(*workers)
 
             if is_big:
