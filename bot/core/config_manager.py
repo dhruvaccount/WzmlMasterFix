@@ -10,6 +10,8 @@ class Config:
     BOT_TOKEN = ""
     HELPER_TOKENS = ""
     HELPER_STRINGS = ""
+    HELPER_BOT_PROXIES = ""
+    HELPER_USER_PROXIES = ""
     BOT_MAX_TASKS = 0
     BOT_PM = False
     CMD_SUFFIX = ""

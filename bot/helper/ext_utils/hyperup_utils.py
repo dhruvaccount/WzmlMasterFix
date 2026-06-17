@@ -84,12 +84,18 @@ class HypertgUpload(HypertgTransfer):
                 async with _ul_load_lock:
                     ul_ci = min(self.clients.keys(), key=lambda i: self.work_loads.get(i, 0))
                     self.work_loads[ul_ci] = self.work_loads.get(ul_ci, 0) + 1
+                    _concurrent = sum(1 for v in self.work_loads.values() if v > 0)
                 up_client = self.clients[ul_ci]
+                LOGGER.info(
+                    f"HypertgUL client={ul_ci} loads={dict(self.work_loads)} "
+                    f"bots={len(self.clients)} concurrent={_concurrent}"
+                )
             else:
                 up_client = client
+                _concurrent = 1
 
             _is_bot = bool(getattr(getattr(up_client, 'me', None), 'is_bot', True))
-            n_workers = 4 if _is_bot else 2
+            n_workers = max(1, (4 if _is_bot else 2) // _concurrent)
 
             fp = open(file_path, "rb", buffering=4 * 1024 * 1024)
             q = Queue(n_workers * 4)
