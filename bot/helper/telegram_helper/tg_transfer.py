@@ -35,6 +35,9 @@ async def _tcp_tuned_connect(self, address):
         try:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
         except OSError as e:
             LOGGER.info(f"HypertgTCP socket tune failed: {e}")
 
