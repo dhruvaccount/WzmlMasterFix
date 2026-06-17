@@ -174,7 +174,7 @@ class HypertgUpload(HypertgTransfer):
 
             worker_tasks = []
             for i in range(_workers_init):
-                t = create_task(_worker(i), eager_start=True)
+                t = create_task(_worker(i))
                 worker_tasks.append(t)
             workers = worker_tasks
 
