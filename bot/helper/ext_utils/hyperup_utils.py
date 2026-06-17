@@ -73,6 +73,10 @@ class HypertgUpload(HypertgTransfer):
             ul_ci = None
             up_client = client
 
+        _is_bot = bool(getattr(getattr(up_client, 'me', None), 'is_bot', True))
+        if not _is_bot:
+            num_workers = max(2, min(4, self.num_clients or 1)) if is_big else 1
+
         fp = open(file_path, "rb")
         q = Queue(num_workers * 4)
 
@@ -81,6 +85,13 @@ class HypertgUpload(HypertgTransfer):
         ea = None
         if is_cross:
             ea = await client.invoke(raw.functions.auth.ExportAuthorization(dc_id=dc_id))
+
+        _bs_init = 3 if _is_bot else 2
+        _bs_max = 5 if _is_bot else 2
+        _backoff_cap = 30 if _is_bot else 3
+        _ok_reset = 3 if _is_bot else 1
+        _spawn_after = 5 if _is_bot else 9999
+        _workers_init = min(4, num_workers) if _is_bot else min(2, num_workers)
 
         _workers_lock = Lock()
         worker_tasks = []
@@ -105,7 +116,7 @@ class HypertgUpload(HypertgTransfer):
                 except CancelledError:
                     return None
 
-            bs = 3
+            bs = _bs_init
             err_streak = 0
             ok_streak = 0
             try:
@@ -129,11 +140,11 @@ class HypertgUpload(HypertgTransfer):
                                 tg.create_task(_invoke(d))
                         err_streak = 0
                         ok_streak += 1
-                        if ok_streak >= 3:
+                        if ok_streak >= _ok_reset:
                             _worker._recreations = 0
-                        if len(batch) == bs and bs < 5:
+                        if len(batch) == bs and bs < _bs_max:
                             bs += 1
-                        if ok_streak >= 5:
+                        if ok_streak >= _spawn_after:
                             await _spawn_worker()
                             ok_streak = 0
                     except* (OSError, TimeoutError):
@@ -146,7 +157,7 @@ class HypertgUpload(HypertgTransfer):
                                 await q.put(item)
                             recreations = _worker._recreations = getattr(_worker, "_recreations", 0) + 1
                             if recreations > 3:
-                                await sleep(min(30, 2 ** (recreations - 3)))
+                                await sleep(min(_backoff_cap, 2 ** (recreations - 3)))
                             try:
                                 await s.stop()
                             except Exception:
@@ -165,7 +176,7 @@ class HypertgUpload(HypertgTransfer):
                 except Exception:
                     pass
 
-        for _ in range(min(4, num_workers)):
+        for _ in range(_workers_init):
             await _spawn_worker()
         workers = worker_tasks
 
