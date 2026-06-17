@@ -37,7 +37,7 @@ from pyrogram.session.internals import MsgId
 from ... import LOGGER
 from ...core.config_manager import Config
 from ...core.tg_client import TgClient
-from ..telegram_helper.tg_transfer import HypertgTransfer, MB
+from ..telegram_helper.tg_transfer import MB, HypertgTransfer
 
 KB = 1024
 _MIN_CHUNK = 64 * KB

@@ -1,9 +1,9 @@
-import socket
-from asyncio import Lock, Event, gather, sleep
+from asyncio import Event, Lock, gather, sleep
 from concurrent.futures import ThreadPoolExecutor
 from os import cpu_count
 
 import pyrogram
+import socket
 from pyrogram import raw, utils
 from pyrogram.connection import Connection
 from pyrogram.connection.transport.tcp.tcp import TCP
@@ -30,15 +30,19 @@ async def _tcp_tuned_connect(self, address):
         try:
             sock = self.writer.get_extra_info("socket")
         except Exception as e:
-            LOGGER.debug(f"HypertgTCP get socket err: {e}")
+            LOGGER.info(f"HypertgTCP get socket err: {e}")
     if sock:
         try:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_QUICKACK, 1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8 * 1024 * 1024)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 256 * 1024)
         except OSError as e:
-            LOGGER.debug(f"HypertgTCP socket tune failed: {e}")
+            LOGGER.info(f"HypertgTCP socket tune failed: {e}")
 
 
 TCP.connect = _tcp_tuned_connect

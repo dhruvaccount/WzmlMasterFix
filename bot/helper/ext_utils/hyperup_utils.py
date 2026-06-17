@@ -1,16 +1,26 @@
-import os
-import re
-from asyncio import CancelledError, Lock, Queue, QueueFull, QueueShutDown, Semaphore, create_task, gather, sleep
+from asyncio import (
+    CancelledError,
+    Lock,
+    Queue,
+    QueueFull,
+    QueueShutDown,
+    Semaphore,
+    create_task,
+    gather,
+    sleep,
+)
 from hashlib import md5
 from math import ceil
 from mimetypes import guess_type
 from os import path as ospath
+from re import search as research
+
 from pyrogram import StopTransmission, raw
 from pyrogram.errors import FilePartMissing, FloodPremiumWait, FloodWait
 from pyrogram.session import Session
 
 from ... import LOGGER
-from ..telegram_helper.tg_transfer import HypertgTransfer, MB
+from ..telegram_helper.tg_transfer import MB, HypertgTransfer
 from .bot_utils import sync_to_async
 
 _ul_load_lock = Lock()
@@ -32,7 +42,7 @@ class HypertgUpload(HypertgTransfer):
         val = getattr(exc, "value", None)
         if isinstance(val, int):
             return val
-        m = re.search(r"Part (\d+)", str(exc))
+        m = research(r"Part (\d+)", str(exc))
         if m:
             return int(m.group(1))
         LOGGER.warning(f"HypertgUL parse_part fallback=0 exc={exc}")
@@ -167,12 +177,12 @@ class HypertgUpload(HypertgTransfer):
             if is_big:
                 result = raw.types.InputFileBig(
                     id=file_id, parts=file_total_parts,
-                    name=os.path.basename(file_path),
+                    name=ospath.basename(file_path),
                 )
             else:
                 result = raw.types.InputFile(
                     id=file_id, parts=file_total_parts,
-                    name=os.path.basename(file_path),
+                    name=ospath.basename(file_path),
                 )
             return result
         except StopTransmission:
@@ -223,7 +233,7 @@ class HypertgUpload(HypertgTransfer):
                 self._obj._processed_bytes += len(chunk)
             return raw.types.InputFile(
                 id=file_id, parts=file_total_parts,
-                name=os.path.basename(file_path), md5_checksum=h.hexdigest(),
+                name=ospath.basename(file_path), md5_checksum=h.hexdigest(),
             )
         finally:
             try:
@@ -253,7 +263,7 @@ class HypertgUpload(HypertgTransfer):
                 self._obj._processed_bytes += len(chunk)
             return raw.types.InputFile(
                 id=file_id, parts=file_total_parts,
-                name=os.path.basename(file_path), md5_checksum=h.hexdigest(),
+                name=ospath.basename(file_path), md5_checksum=h.hexdigest(),
             )
         finally:
             fp.close()
@@ -288,7 +298,7 @@ class HypertgUpload(HypertgTransfer):
     ):
         self._cancel.clear()
         self._obj._processed_bytes = 0
-        self._up_file = os.path.basename(file_path)
+        self._up_file = ospath.basename(file_path)
         self._up_size = ospath.getsize(file_path)
 
         if self._up_size > 10 * MB:
