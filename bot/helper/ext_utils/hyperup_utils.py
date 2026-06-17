@@ -109,8 +109,9 @@ class HypertgUpload(HypertgTransfer):
                         return None
 
                 err_streak = 0
+                _should_exit = False
                 try:
-                    while True:
+                    while not _should_exit:
                         if self._listener.is_cancelled:
                             return
                         async with _global_bs_lock:
@@ -164,7 +165,7 @@ class HypertgUpload(HypertgTransfer):
                                         await s.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
                                     err_streak = 0
                                 except Exception:
-                                    return
+                                    _should_exit = True
                 finally:
                     try:
                         await s.stop()
