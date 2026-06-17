@@ -64,126 +64,121 @@ class HypertgUpload(HypertgTransfer):
         await _ul_slots[0].acquire()
         _slot_acquired = True
 
-        if self.clients:
-            async with _ul_load_lock:
-                ul_ci = min(self.clients.keys(), key=lambda i: self.work_loads.get(i, 0))
-                self.work_loads[ul_ci] = self.work_loads.get(ul_ci, 0) + 1
-            up_client = self.clients[ul_ci]
-        else:
-            ul_ci = None
-            up_client = client
-
-        _is_bot = bool(getattr(getattr(up_client, 'me', None), 'is_bot', True))
-        if not _is_bot:
-            num_workers = max(2, min(4, self.num_clients or 1)) if is_big else 1
-
-        fp = open(file_path, "rb")
-        q = Queue(num_workers * 4)
-
-        tm = await client.storage.test_mode()
-        ak, is_cross = await self.create_auth(client, dc_id, tm)
-        ea = None
-        if is_cross:
-            ea = await client.invoke(raw.functions.auth.ExportAuthorization(dc_id=dc_id))
-
-        _bs_init = 3 if _is_bot else 2
-        _bs_max = 5 if _is_bot else 2
-        _backoff_cap = 30 if _is_bot else 3
-        _ok_reset = 3 if _is_bot else 1
-        _spawn_after = 5 if _is_bot else 9999
-        _workers_init = min(4, num_workers) if _is_bot else min(2, num_workers)
-
-        _workers_lock = Lock()
-        worker_tasks = []
-
-        async def _spawn_worker():
-            async with _workers_lock:
-                if len(worker_tasks) >= num_workers:
-                    return
-                wid = len(worker_tasks)
-                t = create_task(_worker(wid))
-                worker_tasks.append(t)
-
-        async def _worker(wid):
-            s = Session(up_client, dc_id, ak, tm, is_media=True)
-            await self.start_session(s, mode=1)
-            if ea is not None:
-                await s.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
-
-            async def _invoke(data):
-                try:
-                    return await s.invoke(data)
-                except CancelledError:
-                    return None
-
-            bs = _bs_init
-            err_streak = 0
-            ok_streak = 0
-            try:
-                while True:
-                    data = await q.get()
-                    if data is None:
-                        return
-                    batch = [data]
-                    for _ in range(bs - 1):
-                        try:
-                            d = q.get_nowait()
-                            if d is None:
-                                await q.put(None)
-                                break
-                            batch.append(d)
-                        except Queue.Empty:
-                            break
-                    try:
-                        async with TaskGroup() as tg:
-                            for d in batch:
-                                tg.create_task(_invoke(d))
-                        err_streak = 0
-                        ok_streak += 1
-                        if ok_streak >= _ok_reset:
-                            _worker._recreations = 0
-                        if len(batch) == bs and bs < _bs_max:
-                            bs += 1
-                        if ok_streak >= _spawn_after:
-                            await _spawn_worker()
-                            ok_streak = 0
-                    except* (OSError, TimeoutError):
-                        err_streak += 1
-                        ok_streak = 0
-                        if err_streak >= 2:
-                            bs = max(1, bs - 1)
-                        if err_streak >= 3:
-                            for item in batch:
-                                await q.put(item)
-                            recreations = _worker._recreations = getattr(_worker, "_recreations", 0) + 1
-                            if recreations > 3:
-                                await sleep(min(_backoff_cap, 2 ** (recreations - 3)))
-                            try:
-                                await s.stop()
-                            except Exception:
-                                pass
-                            s = Session(up_client, dc_id, ak, tm, is_media=True)
-                            await self.start_session(s, mode=1)
-                            if ea is not None:
-                                await s.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
-                            err_streak = 0
-                        else:
-                            for item in batch:
-                                await q.put(item)
-            finally:
-                try:
-                    await s.stop()
-                except Exception:
-                    pass
-
-        for _ in range(_workers_init):
-            await _spawn_worker()
-        workers = worker_tasks
+        ul_ci = None
+        fp = None
+        q = None
+        workers = []
 
         try:
+            if self.clients:
+                async with _ul_load_lock:
+                    ul_ci = min(self.clients.keys(), key=lambda i: self.work_loads.get(i, 0))
+                    self.work_loads[ul_ci] = self.work_loads.get(ul_ci, 0) + 1
+                up_client = self.clients[ul_ci]
+            else:
+                up_client = client
+
+            _is_bot = bool(getattr(getattr(up_client, 'me', None), 'is_bot', True))
+            if not _is_bot:
+                num_workers = max(2, min(4, self.num_clients or 1)) if is_big else 1
+            _workers_init = min(4, num_workers) if _is_bot else min(2, num_workers)
+
+            fp = open(file_path, "rb")
+            q = Queue(_workers_init * 4)
+
+            tm = await client.storage.test_mode()
+            ak, is_cross = await self.create_auth(client, dc_id, tm)
+            ea = None
+            if is_cross:
+                ea = await client.invoke(raw.functions.auth.ExportAuthorization(dc_id=dc_id))
+
+            _global_bs = 3
+            _global_bs_lock = Lock()
+            _global_ok_streak = 0
+
+            async def _worker(wid):
+                s = Session(up_client, dc_id, ak, tm, is_media=True)
+                await self.start_session(s, mode=1)
+                if ea is not None:
+                    await s.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
+
+                async def _invoke(data):
+                    try:
+                        return await s.invoke(data)
+                    except CancelledError:
+                        return None
+
+                err_streak = 0
+                try:
+                    while True:
+                        if self._listener.is_cancelled:
+                            return
+                        async with _global_bs_lock:
+                            bs = _global_bs
+                        data = await q.get()
+                        if data is None:
+                            return
+                        batch = [data]
+                        for _ in range(bs - 1):
+                            try:
+                                d = q.get_nowait()
+                                if d is None:
+                                    await q.put(None)
+                                    break
+                                batch.append(d)
+                            except Queue.Empty:
+                                break
+                        try:
+                            async with TaskGroup() as tg:
+                                for d in batch:
+                                    tg.create_task(_invoke(d))
+                            err_streak = 0
+                            _worker._recreations = 0
+                            async with _global_bs_lock:
+                                _global_ok_streak += 1
+                                if _global_ok_streak >= 200 and _global_bs < 3:
+                                    _global_bs += 1
+                                    _global_ok_streak = 0
+                        except* (OSError, TimeoutError):
+                            err_streak += 1
+                            async with _global_bs_lock:
+                                _global_ok_streak = 0
+                                _global_bs = max(1, _global_bs - 1)
+                            for item in batch:
+                                await q.put(item)
+                            if err_streak >= 3:
+                                recreations = _worker._recreations = getattr(_worker, "_recreations", 0) + 1
+                                if recreations > 3:
+                                    await sleep(min(3, 2 ** (recreations - 3)))
+                                try:
+                                    await s.stop()
+                                except Exception:
+                                    pass
+                                try:
+                                    s = Session(up_client, dc_id, ak, tm, is_media=True)
+                                    await self.start_session(s, mode=1)
+                                    if ea is not None:
+                                        await s.invoke(raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes))
+                                    err_streak = 0
+                                except Exception:
+                                    return
+                finally:
+                    try:
+                        await s.stop()
+                    except Exception:
+                        pass
+
+            worker_tasks = []
+            for i in range(_workers_init):
+                t = create_task(_worker(i))
+                worker_tasks.append(t)
+            workers = worker_tasks
+
             part = 0
             rpc_fn = raw.functions.upload.SaveBigFilePart if is_big else raw.functions.upload.SaveFilePart
             while True:
+                if self._listener.is_cancelled:
+                    raise StopTransmission()
                 chunk = fp.read(PART_SIZE)
                 if not chunk:
                     break
@@ -221,13 +216,16 @@ class HypertgUpload(HypertgTransfer):
                     self.work_loads[ul_ci] = max(0, self.work_loads.get(ul_ci, 0) - 1)
             if _slot_acquired:
                 _ul_slots[0].release()
-            for _ in workers:
-                await q.put(None)
-            await gather(*workers, return_exceptions=True)
-            try:
-                fp.close()
-            except Exception:
-                pass
+            if q:
+                for _ in workers:
+                    await q.put(None)
+            if workers:
+                await gather(*workers, return_exceptions=True)
+            if fp:
+                try:
+                    fp.close()
+                except Exception:
+                    pass
 
     async def _upload_small(self, client, file_path):
         file_size = ospath.getsize(file_path)
