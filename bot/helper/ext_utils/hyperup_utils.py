@@ -15,7 +15,7 @@ from mimetypes import guess_type
 from os import path as ospath
 from re import search as research
 
-from pyrogram import StopTransmission, raw
+from pyrogram import StopTransmission, raw, utils
 from pyrogram.errors import FilePartMissing, FloodPremiumWait, FloodWait
 from pyrogram.session import Session
 
@@ -329,10 +329,12 @@ class HypertgUpload(HypertgTransfer):
 
         peer = await target_client.resolve_peer(target_chat_id)
         rpc = raw.functions.messages.SendMedia(
-            peer=peer, media=input_media, message=caption or "",
+            peer=peer,
+            media=input_media,
             random_id=target_client.rnd_id(),
             reply_to=raw.types.InputReplyToMessage(reply_to_msg_id=reply_to_message_id)
             if reply_to_message_id else None,
+            **await utils.parse_text_entities(target_client, caption, None, None),
             silent=True,
         )
 
