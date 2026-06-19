@@ -134,6 +134,24 @@ class HypertgUpload(HypertgTransfer):
                                 raise
                             except CancelledError:
                                 return
+                            except (OSError, TimeoutError, ConnectionError):
+                                LOGGER.warning(
+                                    f"HypertgUL worker {wid} transport error "
+                                    f"attempt {attempt + 1}/5 — reconnecting"
+                                )
+                                try:
+                                    await s.stop()
+                                except Exception:
+                                    pass
+                                s = Session(up_client, dc_id, ak, tm, is_media=True)
+                                await self.start_session(s, mode=1)
+                                if ea is not None:
+                                    await s.invoke(
+                                        raw.functions.auth.ImportAuthorization(
+                                            id=ea.id, bytes=ea.bytes
+                                        )
+                                    )
+                                await sleep(1)
                             except Exception:
                                 if attempt == 4:
                                     break
