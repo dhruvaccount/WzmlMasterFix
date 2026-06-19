@@ -37,12 +37,12 @@ services:
       - "8080"
 
   tunnel:
-    image: cloudflare/cloudflared:latest
+    build:
+      context: .
+      dockerfile: tunnel.Dockerfile
     restart: unless-stopped
-    entrypoint: ["/bin/sh", "/script/tunnel.sh"]
     network_mode: "service:app"
     volumes:
-      - ./tunnel.sh:/script/tunnel.sh:ro
       - tunnel_data:/data
 
   # --- Second instance example (uncomment to run) ---
@@ -61,14 +61,14 @@ services:
   #     - "8080"
   # 
   # tunnel2:
-  #   image: cloudflare/cloudflared:latest
+  #   build:
+  #     context: .
+  #     dockerfile: tunnel.Dockerfile
   #   restart: unless-stopped
-  #   entrypoint: ["/bin/sh", "/script/tunnel.sh"]
   #   network_mode: "service:app2"
   #   environment:
   #     - TUNNEL_URL_FILE=/data/tunnel2_url.txt
   #   volumes:
-  #     - ./tunnel.sh:/script/tunnel.sh:ro
   #     - tunnel_data:/data
   # 
   # --- Optional: VPN for app2 via gluetun (uncomment and fill below) ---
