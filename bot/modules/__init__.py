@@ -31,7 +31,6 @@ from .mirror_leech import (
     jd_mirror,
     nzb_leech,
     nzb_mirror,
-    uphoster,
 )
 from .restart import (
     restart_bot,
@@ -80,7 +79,6 @@ __all__ = [
     "gdrive_search",
     "select_type",
     "arg_usage",
-    "uphoster",
     "mirror",
     "leech",
     "qb_leech",
