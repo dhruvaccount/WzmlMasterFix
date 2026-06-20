@@ -310,13 +310,19 @@ class TaskListener(TaskConfig):
             self.clear()
 
         if self.compress:
+            original_up_path = up_path
             up_path = await self.proceed_compress(
                 up_path,
                 gid,
             )
-            self.is_file = await aiopath.isfile(up_path)
             if self.is_cancelled:
                 return
+            if not up_path or up_path == original_up_path:
+                await self.on_upload_error(
+                    "Archive failed, so the original files were not uploaded. Check logs for the 7z error."
+                )
+                return
+            self.is_file = await aiopath.isfile(up_path)
             self.clear()
 
         self.name = up_path.replace(f"{up_dir}/", "").split("/", 1)[0]
@@ -569,10 +575,13 @@ class TaskListener(TaskConfig):
                     msg += f"\n┃\n┠ Path: <code>{rclone_path}</code>"
                 button = None
             msg += f"\n┃\n┖ <b>Task By</b> → {self.tag}\n\n"
-            group_msg = (
-                msg + "〶 <b><u>Action Performed :</u></b>\n"
-                "⋗ <i>Cloud link(s) have been sent to User PM</i>\n\n"
-            )
+            if self.bot_pm and self.is_super_chat:
+                group_msg = (
+                    msg + "〶 <b><u>Action Performed :</u></b>\n"
+                    "⋗ <i>Cloud link(s) have been sent to User PM</i>\n\n"
+                )
+            else:
+                group_msg = msg
 
             if multi_link_msg:
                 group_msg += multi_link_msg + "\n"
@@ -676,7 +685,9 @@ class TaskListener(TaskConfig):
             if self.mid in task_dict:
                 del task_dict[self.mid]
             count = len(task_dict)
-        await send_message(self.message, f"{self.tag} {escape(str(error))}")
+        error_msg = f"{self.tag} {escape(str(error))}"
+        await send_message(self.message, error_msg)
+        await self._send_mirror_log(error_msg)
         await delete_links(self.message)
         if count == 0:
             await self.clean()
