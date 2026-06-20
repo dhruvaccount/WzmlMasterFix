@@ -400,32 +400,25 @@ class SevenZ:
 
     async def zip(self, dl_path, up_path, pswd):
         size = await get_path_size(dl_path)
-        if self._listener.equal_splits:
-            parts = -(-size // self._listener.split_size)
-            split_size = (size // parts) + (size % parts)
-        else:
-            split_size = self._listener.split_size
-        cmd = [
-            "7z",
-            f"-v{split_size}b",
-            "a",
-            "-mx=0",
-            "-mmt=on",
-            f"-p{pswd}",
-            up_path,
-            dl_path,
-            "-bsp1",
-            "-bse1",
-            "-bb3",
-        ]
+        split_size = self._listener.split_size
+        volume_arg = None
         if self._listener.is_leech and int(size) > self._listener.split_size:
-            if not pswd:
-                del cmd[4]
+            if self._listener.equal_splits:
+                parts = -(-size // self._listener.split_size)
+                split_size = (size // parts) + (size % parts)
+            volume_arg = f"-v{split_size}b"
+
+        cmd = ["7z", "a"]
+        if volume_arg:
+            cmd.append(volume_arg)
+        cmd.extend(["-mx=0", "-mmt=on"])
+        if pswd:
+            cmd.append(f"-p{pswd}")
+        cmd.extend([up_path, dl_path, "-bsp1", "-bse1", "-bb3"])
+
+        if volume_arg:
             LOGGER.info(f"Zip: orig_path: {dl_path}, zip_path: {up_path}.0*")
         else:
-            del cmd[1]
-            if not pswd:
-                del cmd[3]
             LOGGER.info(f"Zip: orig_path: {dl_path}, zip_path: {up_path}")
         if self._listener.is_cancelled:
             return False
