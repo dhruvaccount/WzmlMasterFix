@@ -137,6 +137,19 @@ class Mirror(TaskListener):
 
         arg_parser(input_list[1:], args)
 
+        # Allow bare zip flag before the source link, e.g. `/cmd -z <link>`.
+        # The generic parser otherwise treats the link as the zip password because
+        # `-z` also accepts an optional password.
+        if not args["link"] and isinstance(args["-z"], str) and (
+            is_url(args["-z"])
+            or is_magnet(args["-z"])
+            or is_rclone_path(args["-z"])
+            or is_gdrive_id(args["-z"])
+            or is_telegram_link(args["-z"])
+        ):
+            args["link"] = args["-z"]
+            args["-z"] = True
+
         if Config.DISABLE_BULK and args.get("-b", False):
             await send_message(self.message, "Bulk downloads are currently disabled.")
             return
