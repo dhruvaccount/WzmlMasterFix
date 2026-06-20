@@ -402,6 +402,13 @@ class TaskListener(TaskConfig):
             del RCTransfer
         return
 
+    async def _send_mirror_log(self, text, buttons=None):
+        if not getattr(Config, "MIRROR_LOG_ID", None):
+            return
+        res = await send_message(Config.MIRROR_LOG_ID, text, buttons)
+        if isinstance(res, str):
+            LOGGER.warning(f"Failed to send mirror log: {res}")
+
     async def on_upload_complete(
         self, link, files, folders, mime_type, rclone_path="", dir_id=""
     ):
@@ -461,6 +468,7 @@ class TaskListener(TaskConfig):
 
             if not files and not self.is_super_chat:
                 await send_message(self.message, msg)
+                await self._send_mirror_log(msg)
             else:
                 log_chat = self.user_id if self.bot_pm else self.message
                 msg += "〶 <b><u>Files List :</u></b>\n"
@@ -477,11 +485,15 @@ class TaskListener(TaskConfig):
                         fmsg += f"\n┖ <b>Get Media</b> → <a href='{flink}'>Store Link</a> | <a href='https://t.me/share/url?url={flink}'>Share Link</a>"
                     fmsg += "\n"
                     if len(fmsg.encode() + msg.encode()) > 4000:
-                        await send_message(log_chat, msg + fmsg)
+                        log_msg = msg + fmsg
+                        await send_message(log_chat, log_msg)
+                        await self._send_mirror_log(log_msg)
                         await sleep(1)
                         fmsg = ""
                 if fmsg != "":
-                    await send_message(log_chat, msg + fmsg)
+                    log_msg = msg + fmsg
+                    await send_message(log_chat, log_msg)
+                    await self._send_mirror_log(log_msg)
         else:
             msg += f"\n│\n┟ <b>Type</b> → {mime_type}"
             if mime_type == "Folder":
@@ -569,8 +581,7 @@ class TaskListener(TaskConfig):
             if self.bot_pm and self.is_super_chat:
                 await send_message(self.user_id, msg, button)
 
-            if hasattr(Config, "MIRROR_LOG_ID") and Config.MIRROR_LOG_ID:
-                await send_message(Config.MIRROR_LOG_ID, msg, button)
+            await self._send_mirror_log(msg, button)
 
             await send_message(self.message, group_msg, button)
         if self.seed:
