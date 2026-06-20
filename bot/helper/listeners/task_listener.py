@@ -310,13 +310,19 @@ class TaskListener(TaskConfig):
             self.clear()
 
         if self.compress:
+            original_up_path = up_path
             up_path = await self.proceed_compress(
                 up_path,
                 gid,
             )
-            self.is_file = await aiopath.isfile(up_path)
             if self.is_cancelled:
                 return
+            if not up_path or up_path == original_up_path:
+                await self.on_upload_error(
+                    "Archive failed, so the original files were not uploaded. Check logs for the 7z error."
+                )
+                return
+            self.is_file = await aiopath.isfile(up_path)
             self.clear()
 
         self.name = up_path.replace(f"{up_dir}/", "").split("/", 1)[0]
@@ -402,6 +408,13 @@ class TaskListener(TaskConfig):
             del RCTransfer
         return
 
+    async def _send_mirror_log(self, text, buttons=None):
+        if not getattr(Config, "MIRROR_LOG_ID", None):
+            return
+        res = await send_message(Config.MIRROR_LOG_ID, text, buttons)
+        if isinstance(res, str):
+            LOGGER.warning(f"Failed to send mirror log: {res}")
+
     async def on_upload_complete(
         self, link, files, folders, mime_type, rclone_path="", dir_id=""
     ):
@@ -461,6 +474,7 @@ class TaskListener(TaskConfig):
 
             if not files and not self.is_super_chat:
                 await send_message(self.message, msg)
+                await self._send_mirror_log(msg)
             else:
                 log_chat = self.user_id if self.bot_pm else self.message
                 msg += "〶 <b><u>Files List :</u></b>\n"
@@ -477,11 +491,15 @@ class TaskListener(TaskConfig):
                         fmsg += f"\n┖ <b>Get Media</b> → <a href='{flink}'>Store Link</a> | <a href='https://t.me/share/url?url={flink}'>Share Link</a>"
                     fmsg += "\n"
                     if len(fmsg.encode() + msg.encode()) > 4000:
-                        await send_message(log_chat, msg + fmsg)
+                        log_msg = msg + fmsg
+                        await send_message(log_chat, log_msg)
+                        await self._send_mirror_log(log_msg)
                         await sleep(1)
                         fmsg = ""
                 if fmsg != "":
-                    await send_message(log_chat, msg + fmsg)
+                    log_msg = msg + fmsg
+                    await send_message(log_chat, log_msg)
+                    await self._send_mirror_log(log_msg)
         else:
             msg += f"\n│\n┟ <b>Type</b> → {mime_type}"
             if mime_type == "Folder":
@@ -557,10 +575,13 @@ class TaskListener(TaskConfig):
                     msg += f"\n┃\n┠ Path: <code>{rclone_path}</code>"
                 button = None
             msg += f"\n┃\n┖ <b>Task By</b> → {self.tag}\n\n"
-            group_msg = (
-                msg + "〶 <b><u>Action Performed :</u></b>\n"
-                "⋗ <i>Cloud link(s) have been sent to User PM</i>\n\n"
-            )
+            if self.bot_pm and self.is_super_chat:
+                group_msg = (
+                    msg + "〶 <b><u>Action Performed :</u></b>\n"
+                    "⋗ <i>Cloud link(s) have been sent to User PM</i>\n\n"
+                )
+            else:
+                group_msg = msg
 
             if multi_link_msg:
                 group_msg += multi_link_msg + "\n"
@@ -569,8 +590,7 @@ class TaskListener(TaskConfig):
             if self.bot_pm and self.is_super_chat:
                 await send_message(self.user_id, msg, button)
 
-            if hasattr(Config, "MIRROR_LOG_ID") and Config.MIRROR_LOG_ID:
-                await send_message(Config.MIRROR_LOG_ID, msg, button)
+            await self._send_mirror_log(msg, button)
 
             await send_message(self.message, group_msg, button)
         if self.seed:
@@ -665,7 +685,9 @@ class TaskListener(TaskConfig):
             if self.mid in task_dict:
                 del task_dict[self.mid]
             count = len(task_dict)
-        await send_message(self.message, f"{self.tag} {escape(str(error))}")
+        error_msg = f"{self.tag} {escape(str(error))}"
+        await send_message(self.message, error_msg)
+        await self._send_mirror_log(error_msg)
         await delete_links(self.message)
         if count == 0:
             await self.clean()
