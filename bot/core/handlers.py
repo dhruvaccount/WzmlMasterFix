@@ -1,6 +1,6 @@
 # ruff: noqa: F403, F405
 
-from pyrogram.filters import command, regex
+from pyrogram.filters import command, private, regex
 from pyrogram.handlers import CallbackQueryHandler, EditedMessageHandler, MessageHandler
 from pyrogram.types import BotCommand
 
@@ -58,9 +58,7 @@ def add_handlers():
     TgClient.bot.add_handler(
         MessageHandler(
             black_listed,
-            filters=regex(r"^/")
-            & CustomFilters.authorized
-            & CustomFilters.blacklisted,
+            filters=regex(r"^/") & CustomFilters.authorized & CustomFilters.blacklisted,
         )
     )
     TgClient.bot.add_handler(
@@ -413,13 +411,15 @@ def add_handlers():
     TgClient.bot.add_handler(
         MessageHandler(
             gen_pyro_string,
-            filters=command(BotCommands.GenPyroSessCommand, case_sensitive=True),
+            filters=command(BotCommands.GenPyroSessCommand, case_sensitive=True)
+            & private,
         )
     )
     TgClient.bot.add_handler(
         MessageHandler(
             change_category,
-            filters=command(BotCommands.CategorySelectCommand) & CustomFilters.authorized,
+            filters=command(BotCommands.CategorySelectCommand)
+            & CustomFilters.authorized,
         )
     )
     TgClient.bot.add_handler(
