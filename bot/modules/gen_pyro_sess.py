@@ -17,6 +17,7 @@ from pyrogram.errors import (
 
 from ..core.tg_client import TgClient
 from ..core.config_manager import Config
+from .. import sudo_users, user_data
 from ..helper.ext_utils.bot_utils import new_task
 from ..helper.ext_utils.status_utils import get_readable_time
 from ..helper.telegram_helper.button_build import ButtonMaker
@@ -125,10 +126,20 @@ async def _stop_or_timeout(value, msg, h, c, pyro_client=None):
 
 @new_task
 async def gen_pyro_string(_, message):
-    if message.chat.type != ChatType.PRIVATE:
-        return
-
     user_id = message.from_user.id
+    if (
+        message.chat.type != ChatType.PRIVATE
+        or (
+            user_id != Config.OWNER_ID
+            and user_id not in sudo_users
+            and not user_data.get(user_id, {}).get("SUDO")
+        )
+    ):
+        return await send_message(
+            message,
+            "<i>This command is only for <b>Owner</b> &amp; <b>Sudo</b> users in <b>Private Chat</b>.</i>",
+        )
+
     user_name = message.from_user.first_name or "User"
     btns = _stop_btns()
     h = _header(user_name)
