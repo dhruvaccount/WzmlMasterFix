@@ -126,10 +126,13 @@ async def _stop_or_timeout(value, msg, h, c, pyro_client=None):
 @new_task
 async def gen_pyro_string(_, message):
     if message.chat.type != ChatType.PRIVATE:
-        return
+        return await send_message(
+            message,
+            "<i>This command can only be used in <b>Private Chat</b>.</i>",
+        )
 
-    user_id = message.from_user.id
     user_name = message.from_user.first_name or "User"
+    user_id = message.from_user.id
     btns = _stop_btns()
     h = _header(user_name)
 
