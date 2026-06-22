@@ -126,21 +126,18 @@ async def _stop_or_timeout(value, msg, h, c, pyro_client=None):
 
 @new_task
 async def gen_pyro_string(_, message):
-    if message.chat.type != ChatType.PRIVATE:
-        return await send_message(
-            message,
-            "<i>This command can only be used in <b>Private Chat</b>.</i>",
-        )
-
     user_id = message.from_user.id
     if (
-        user_id != Config.OWNER_ID
-        and user_id not in sudo_users
-        and not user_data.get(user_id, {}).get("SUDO")
+        message.chat.type != ChatType.PRIVATE
+        or (
+            user_id != Config.OWNER_ID
+            and user_id not in sudo_users
+            and not user_data.get(user_id, {}).get("SUDO")
+        )
     ):
         return await send_message(
             message,
-            "<i>This command is only for <b>Owner</b> &amp; <b>Sudo</b> users.</i>",
+            "<i>This command is only for <b>Owner</b> &amp; <b>Sudo</b> users in <b>Private Chat</b>.</i>",
         )
 
     user_name = message.from_user.first_name or "User"
