@@ -73,10 +73,7 @@ def authenticate(creds_file, token_path):
                         "https://www.googleapis.com/auth/admin.directory.group.member",
                     ],
                 )
-                auth_url, _ = flow.authorization_url(prompt="consent")
-                print(f"\n[INFO] Visit this URL to authenticate:\n{auth_url}\n")
-                code = input("[INPUT] Paste the authorization code: ").strip()
-                creds = flow.fetch_token(code=code)
+                creds = flow.run_console()
             with open(token_path, "wb") as token_file:
                 pickle_dump(creds, token_file)
         print("[OK] Authentication successful!")
