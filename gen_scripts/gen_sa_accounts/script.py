@@ -284,7 +284,14 @@ def serviceaccountfactory(
                 creds.refresh(Request())
             else:
                 flow = InstalledAppFlow.from_client_secrets_file(credentials, SCOPES)
-                creds = flow.run_local_server(port=0, open_browser=False)
+                try:
+                    creds = flow.run_local_server(port=0, open_browser=False)
+                except Exception:
+                    print("Local server failed, falling back to manual auth...")
+                    auth_url, _ = flow.authorization_url(prompt="consent")
+                    print(f"\nVisit this URL to authenticate:\n{auth_url}\n")
+                    code = input("Paste the authorization code: ").strip()
+                    creds = flow.fetch_token(code=code)
             with open(token, "wb") as t:
                 dump(creds, t)
         except Exception as e:
