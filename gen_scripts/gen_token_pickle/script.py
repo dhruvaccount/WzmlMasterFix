@@ -115,10 +115,10 @@ def run_flow():
             print(f"[WARN] Browser auth failed: {e}")
             print("[INFO] Falling back to console authentication...")
 
-    # Fallback to console auth
+    # Fallback to local server auth
     try:
-        print("[INFO] Running console authentication...")
-        return flow.run_console()
+        print("[INFO] Running local server authentication...")
+        return flow.run_local_server(open_browser=False)
     except Exception:
         print("\n[ERROR] OAuth authentication failed!")
         print("\nTroubleshooting:")
