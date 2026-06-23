@@ -8,8 +8,6 @@ for use with other Google Drive-related scripts.
 
 import sys
 import pickle
-import socket
-import webbrowser
 
 from os.path import exists
 from google.auth.transport.requests import Request
@@ -35,20 +33,6 @@ def print_header(title: str) -> None:
 def print_step(step: int, total: int, message: str) -> None:
     """Print a step indicator."""
     print(f"\n[{step}/{total}] {message}")
-
-
-def port_available(port: int) -> bool:
-    """Check if a port is available for use."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        return s.connect_ex(("localhost", port)) != 0
-
-
-def find_port(start: int = 8080, end: int = 8090) -> int:
-    """Find an available port in the given range."""
-    for port in range(start, end):
-        if port_available(port):
-            return port
-    return None
 
 
 def load_token() -> pickle:
@@ -98,37 +82,10 @@ def run_flow():
     print("\n[INFO] Starting OAuth authentication...")
     flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
 
-    # Try browser-based auth first
-    port = find_port()
-    if port:
-        try:
-            print("\n[INFO] Opening browser for authentication...")
-            auth_url, _ = flow.authorization_url(prompt="consent")
-            try:
-                webbrowser.open(auth_url)
-            except Exception:
-                pass
-            print(f"[INFO] If browser didn't open, visit: {auth_url}")
-            print(f"[INFO] Waiting for authentication on port {port}...")
-            return flow.run_local_server(port=port, open_browser=False)
-        except Exception as e:
-            print(f"[WARN] Browser auth failed: {e}")
-            print("[INFO] Falling back to console authentication...")
-
-    # Fallback to manual code entry for restricted environments
-    try:
-        print("[INFO] Running manual authentication...")
-        auth_url, _ = flow.authorization_url(prompt="consent")
-        print(f"\n[INFO] Visit this URL to authenticate:\n{auth_url}\n")
-        code = input("[INPUT] Paste the authorization code: ").strip()
-        return flow.fetch_token(code=code)
-    except Exception:
-        print("\n[ERROR] OAuth authentication failed!")
-        print("\nTroubleshooting:")
-        print("- Check your credentials.json is valid")
-        print("- Ensure Google Drive API is enabled")
-        print("- Check your internet connection")
-        sys.exit(1)
+    auth_url, _ = flow.authorization_url(prompt="consent")
+    print(f"\n[INFO] Visit this URL to authenticate:\n{auth_url}\n")
+    code = input("[INPUT] Paste the authorization code: ").strip()
+    return flow.fetch_token(code=code)
 
 
 def get_credentials():
