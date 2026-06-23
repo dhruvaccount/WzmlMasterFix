@@ -73,7 +73,14 @@ def authenticate(creds_file, token_path):
                         "https://www.googleapis.com/auth/admin.directory.group.member",
                     ],
                 )
-                creds = flow.run_local_server(open_browser=False)
+                try:
+                    creds = flow.run_local_server(open_browser=False)
+                except Exception:
+                    print("[INFO] Local server failed, falling back to manual auth...")
+                    auth_url, _ = flow.authorization_url(prompt="consent")
+                    print(f"\n[INFO] Visit this URL to authenticate:\n{auth_url}\n")
+                    code = input("[INPUT] Paste the authorization code: ").strip()
+                    creds = flow.fetch_token(code=code)
             with open(token_path, "wb") as token_file:
                 pickle_dump(creds, token_file)
         print("[OK] Authentication successful!")

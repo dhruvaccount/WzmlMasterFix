@@ -115,10 +115,13 @@ def run_flow():
             print(f"[WARN] Browser auth failed: {e}")
             print("[INFO] Falling back to console authentication...")
 
-    # Fallback to local server auth
+    # Fallback to manual code entry for restricted environments
     try:
-        print("[INFO] Running local server authentication...")
-        return flow.run_local_server(open_browser=False)
+        print("[INFO] Running manual authentication...")
+        auth_url, _ = flow.authorization_url(prompt="consent")
+        print(f"\n[INFO] Visit this URL to authenticate:\n{auth_url}\n")
+        code = input("[INPUT] Paste the authorization code: ").strip()
+        return flow.fetch_token(code=code)
     except Exception:
         print("\n[ERROR] OAuth authentication failed!")
         print("\nTroubleshooting:")
