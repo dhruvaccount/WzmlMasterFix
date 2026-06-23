@@ -86,6 +86,10 @@ class GoogleDriveHelper:
                 credentials = pload(f)
         else:
             LOGGER.error("token.pickle not found!")
+        if credentials is None:
+            raise ValueError(
+                "No valid credentials found. Provide a token.pickle or enable service accounts."
+            )
         return build("drive", "v3", credentials=credentials, cache_discovery=False)
 
     def switch_service_account(self):

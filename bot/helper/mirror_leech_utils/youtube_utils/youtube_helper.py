@@ -74,6 +74,8 @@ class YouTubeHelper:
             LOGGER.error(f"YouTube token file {token_path} not found!")
             raise FileNotFoundError(f"YouTube token file {token_path} not found!")
 
+        if credentials is None:
+            raise ValueError(f"YouTube token file {token_path} is empty or invalid.")
         return build("youtube", "v3", credentials=credentials, cache_discovery=False)
 
     def get_video_id_from_url(self, url):
