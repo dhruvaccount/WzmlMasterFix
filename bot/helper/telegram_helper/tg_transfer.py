@@ -1,12 +1,14 @@
-from asyncio import Event, Lock, gather, sleep
+from asyncio import Event, Lock, gather, sleep, open_connection, wait_for
 from concurrent.futures import ThreadPoolExecutor
 from os import cpu_count
 
 import pyrogram
 import socket
-from pyrogram import raw, utils
+from pyrogram import Client, raw, utils
 from pyrogram.connection import Connection
+from pyrogram.connection.transport.tcp import TCPAbridgedO
 from pyrogram.connection.transport.tcp.tcp import TCP
+from pyrogram.crypto import aes
 from pyrogram.errors import AuthBytesInvalid, AuthKeyDuplicated, RPCError
 from pyrogram.file_id import FileType, ThumbnailSource
 from pyrogram.raw.all import layer
@@ -16,21 +18,34 @@ from pyrogram.session.internals import DataCenter
 from ... import LOGGER
 from ...core.tg_client import TgClient
 
+MB = 1024 * 1024
+
+_crypto_workers = min(4, max(2, cpu_count() or 4))
 pyrogram.crypto_executor = ThreadPoolExecutor(
-    max_workers=min(16, (cpu_count() or 4) * 2), thread_name_prefix="crypto"
+    max_workers=_crypto_workers, thread_name_prefix="crypto"
 )
+Client.MAX_CONCURRENT_TRANSMISSIONS = 1000
 
-_orig_tcp_connect = TCP.connect
-
-
-async def _tcp_tuned_connect(self, address):
-    await _orig_tcp_connect(self, address)
-    sock = None
-    if self.writer:
-        try:
-            sock = self.writer.get_extra_info("socket")
-        except Exception as e:
-            LOGGER.info(f"HypertgTCP get socket err: {e}")
+async def _native_connect(self, address):
+    host, port = address
+    family = socket.AF_INET6 if self.ipv6 else socket.AF_INET
+    if self.proxy:
+        import socks
+        scheme = self.proxy.get("scheme")
+        pt = getattr(socks, scheme.upper())
+        sock = socks.socksocket(family)
+        sock.set_proxy(
+            proxy_type=pt, addr=self.proxy["hostname"], port=self.proxy["port"]
+        )
+        sock.settimeout(10)
+        await self.loop.sock_connect(sock, (host, port))
+        sock.setblocking(False)
+        self.reader, self.writer = await open_connection(sock=sock)
+    else:
+        self.reader, self.writer = await wait_for(
+            open_connection(host=host, port=port, family=family), 10
+        )
+    sock = self.writer.get_extra_info("socket")
     if sock:
         try:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -39,42 +54,78 @@ async def _tcp_tuned_connect(self, address):
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
-        except OSError as e:
-            LOGGER.info(f"HypertgTCP socket tune failed: {e}")
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * MB)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * MB)
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NOTSENT_LOWAT, 64 * 1024)
+        except (OSError, AttributeError):
+            pass
 
+def _native_close(self):
+    if self.writer:
+        self.writer.close()
+
+_orig_tcp_init = TCP.__init__
+
+def _tcp_init_patched(self, ipv6, proxy):
+    _orig_tcp_init(self, ipv6, proxy)
+    self.ipv6 = ipv6
+    self.proxy = proxy
+
+TCP.connect = _native_connect
+TCP.close = _native_close
+TCP.__init__ = _tcp_init_patched
+
+async def _safe_abridged_send(self, data):
+    length = len(data) // 4
+    header = bytes([length]) if length <= 126 else b"\x7f" + length.to_bytes(3, "little")
+    data = header + data
+    async with self.lock:
+        payload = await self.loop.run_in_executor(
+            pyrogram.crypto_executor, aes.ctr256_encrypt, data, *self.encrypt
+        )
+        self.writer.write(payload)
+        await self.writer.drain()
+
+TCPAbridgedO.send = _safe_abridged_send
+
+_orig_session_init = Session.__init__
+
+def _session_init_patched(self, client, dc_id, auth_key, test_mode, is_media=False, is_cdn=False):
+    _orig_session_init(self, client, dc_id, auth_key, test_mode, is_media, is_cdn)
+    self._start_lock = Lock()
+    self._stop_lock = Lock()
+
+Session.__init__ = _session_init_patched
+
+_orig_session_start = Session.start
+
+async def _safe_session_start(self):
+    async with self._start_lock:
+        await _orig_session_start(self)
+
+Session.start = _safe_session_start
+
+_orig_session_stop = Session.stop
+
+async def _safe_session_stop(self):
+    async with self._stop_lock:
+        await _orig_session_stop(self)
+
+Session.stop = _safe_session_stop
 
 _orig_dc_new = DataCenter.__new__
 
-
-def _dc_alt_port(cls, dc_id, test_mode, ipv6, media):
+def _dc_media_port(cls, dc_id, test_mode, ipv6, media):
     ip, port = _orig_dc_new(cls, dc_id, test_mode, ipv6, media)
     if media and not test_mode:
         port = 5222
     return ip, port
 
-
-TCP.connect = _tcp_tuned_connect
-_hyper_patches_applied = False
-
-
-def _apply_hyper_patches():
-    global _hyper_patches_applied
-    if _hyper_patches_applied:
-        return
-    try:
-        DataCenter.__new__ = staticmethod(_dc_alt_port)
-        _hyper_patches_applied = True
-        LOGGER.info("Applied Hyper DC media port 5222")
-    except Exception as e:
-        LOGGER.warning(f"Failed to apply Hyper DC port patch: {e}")
-
-
-MB = 1024 * 1024
+DataCenter.__new__ = staticmethod(_dc_media_port)
 
 
 class HypertgTransfer:
     def __init__(self, obj):
-        _apply_hyper_patches()
         self._obj = obj
         self._listener = obj._listener
         self.clients = TgClient.helper_bots
