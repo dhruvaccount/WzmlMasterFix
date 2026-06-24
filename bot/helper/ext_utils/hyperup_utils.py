@@ -71,6 +71,7 @@ class HypertgUpload(HypertgTransfer):
         )
 
     async def _upload_file(self, client, file_path):
+        global _ul_slots
         file_size = ospath.getsize(file_path)
         file_total_parts = ceil(file_size / PART_SIZE)
         file_id = client.rnd_id()
