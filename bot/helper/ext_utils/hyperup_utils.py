@@ -2,7 +2,6 @@ from asyncio import (
     CancelledError,
     Lock,
     Queue,
-    QueueFull,
     QueueShutDown,
     Semaphore,
     create_task,
@@ -24,7 +23,7 @@ from ..telegram_helper.tg_transfer import MB, HypertgTransfer
 from .bot_utils import sync_to_async
 
 _ul_load_lock = Lock()
-_ul_slots = [None]
+_ul_slots: Semaphore | None = None
 _ul_slots_lock = Lock()
 
 
@@ -80,9 +79,9 @@ class HypertgUpload(HypertgTransfer):
 
         _slot_acquired = False
         async with _ul_slots_lock:
-            if _ul_slots[0] is None:
-                _ul_slots[0] = Semaphore(max(1, self.num_clients))
-        await _ul_slots[0].acquire()
+            if _ul_slots is None:
+                _ul_slots = Semaphore(max(1, self.num_clients))
+        await _ul_slots.acquire()
         _slot_acquired = True
 
         ul_ci = None
@@ -105,10 +104,8 @@ class HypertgUpload(HypertgTransfer):
                 )
             else:
                 up_client = client
-                _concurrent = 1
 
-            _is_bot = bool(getattr(getattr(up_client, "me", None), "is_bot", True))
-            n_workers = max(1, (4 if _is_bot else 2) // _concurrent)
+            n_workers = 4
 
             fp = open(file_path, "rb", buffering=4 * 1024 * 1024)
             q = Queue(n_workers * 4)
@@ -202,12 +199,7 @@ class HypertgUpload(HypertgTransfer):
                         file_total_parts=file_total_parts,
                         bytes=chunk,
                     )
-                    while True:
-                        try:
-                            q.put_nowait(rpc)
-                            break
-                        except QueueFull:
-                            await sleep(0)
+                    await q.put(rpc)
                     acc += len(chunk)
                     if part & 7 == 7:
                         self._obj._processed_bytes += acc
@@ -245,7 +237,7 @@ class HypertgUpload(HypertgTransfer):
                 async with _ul_load_lock:
                     self.work_loads[ul_ci] = max(0, self.work_loads.get(ul_ci, 0) - 1)
             if _slot_acquired:
-                _ul_slots[0].release()
+                _ul_slots.release()
             if q:
                 q.shutdown(immediate=True)
             if workers:
