@@ -207,13 +207,16 @@ class HypertgUpload(HypertgTransfer):
                 f"fp={ospath.basename(file_path)} parts={file_total_parts}"
             )
             last_wait_log = 0
-            while not all(t.done() for t in workers):
+            while True:
                 for t in workers:
-                    exc = t.exception()
-                    if exc is not None and not isinstance(exc, CancelledError):
-                        for t2 in workers:
-                            t2.cancel()
-                        raise exc
+                    if t.done():
+                        exc = t.exception()
+                        if exc is not None and not isinstance(exc, CancelledError):
+                            for t2 in workers:
+                                t2.cancel()
+                            raise exc
+                if all(t.done() for t in workers):
+                    break
                 elapsed = _time.monotonic() - _t0
                 if elapsed - last_wait_log > 30:
                     done = sum(1 for t in workers if t.done())
