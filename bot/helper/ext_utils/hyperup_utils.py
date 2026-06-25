@@ -1,3 +1,4 @@
+import asyncio
 from asyncio import (
     CancelledError,
     Lock,
@@ -78,15 +79,24 @@ class HypertgUpload(HypertgTransfer):
             _pool_locks[key] = Lock()
         async with _pool_locks[key]:
             pool = _session_pool.get(key, [])
+            before = len(pool)
             pool[:] = [s for s in pool if s.is_connected and not s.instant_stop]
+            dropped = before - len(pool)
             while len(pool) < n_sessions:
                 s = await self._mk_session(client, dc_id, mode=mode)
                 pool.append(s)
+            created = len(pool) - (before - dropped)
             _session_pool[key] = pool
+            LOGGER.info(
+                f"HypertgUL pool key={key} size={len(pool)} "
+                f"dropped={dropped} created={created}"
+            )
             return list(pool)
 
     async def _upload_file(self, client, file_path):
         global _ul_slots
+        import time as _time
+        _t0 = _time.monotonic()
         file_size = ospath.getsize(file_path)
         file_total_parts = ceil(file_size / PART_SIZE)
         file_id = client.rnd_id()
@@ -145,6 +155,7 @@ class HypertgUpload(HypertgTransfer):
 
             async def _worker(session):
                 _pool_key = (id(up_client), dc_id)
+                parts_done = 0
                 while True:
                     data = await q.get()
                     try:
@@ -153,6 +164,7 @@ class HypertgUpload(HypertgTransfer):
                         for attempt in range(5):
                             try:
                                 await session.invoke(data)
+                                parts_done += 1
                                 break
                             except StopTransmission:
                                 raise
@@ -188,32 +200,80 @@ class HypertgUpload(HypertgTransfer):
             progress_interval = max(1, file_total_parts // 10)
             parts_sent = 0
 
-            LOGGER.info(f"HypertgUL start read {ospath.basename(file_path)}")
+            LOGGER.info(
+                f"HypertgUL start read "
+                f"fp={ospath.basename(file_path)} parts={file_total_parts}"
+            )
+            last_log = 0
             while True:
                 chunk = await sync_to_async(fp.read, PART_SIZE)
                 if not chunk:
+                    LOGGER.info(
+                        f"HypertgUL read EOF {ospath.basename(file_path)}"
+                    )
                     break
 
                 if self._listener.is_cancelled:
+                    LOGGER.warning(
+                        f"HypertgUL cancelled during read "
+                        f"{ospath.basename(file_path)}"
+                    )
                     raise StopTransmission()
 
                 if all(t.done() for t in workers):
                     for t in workers:
                         exc = t.exception()
                         if exc is not None:
+                            LOGGER.error(
+                                f"HypertgUL worker dead: {type(exc).__name__}: {exc}"
+                            )
                             raise exc
                     raise RuntimeError("All upload workers exited prematurely")
 
-                await q.put(_make_rpc(chunk, parts_sent))
+                rpc = _make_rpc(chunk, parts_sent)
+                try:
+                    await asyncio.wait_for(q.put(rpc), timeout=300)
+                except asyncio.TimeoutError:
+                    LOGGER.error(
+                        f"HypertgUL q.put timeout after 300s "
+                        f"parts_sent={parts_sent} queue_size={q.qsize()} "
+                        f"workers_alive={sum(1 for t in workers if not t.done())}/{n_workers}"
+                    )
+                    raise
                 parts_sent += 1
+
+                if parts_sent - last_log >= 100:
+                    last_log = parts_sent
+                    elapsed = _time.monotonic() - _t0
+                    mb_done = parts_sent * PART_SIZE / (1024 * 1024)
+                    mb_total = file_size / (1024 * 1024)
+                    speed = mb_done / elapsed if elapsed > 0 else 0
+                    LOGGER.info(
+                        f"HypertgUL progress "
+                        f"{ospath.basename(file_path)} "
+                        f"parts={parts_sent}/{file_total_parts} "
+                        f"MB={mb_done:.0f}/{mb_total:.0f} "
+                        f"speed={speed:.1f}MB/s "
+                        f"workers_alive={sum(1 for t in workers if not t.done())}/{n_workers}"
+                    )
 
                 if parts_sent % progress_interval == 0:
                     self._obj._processed_bytes = min(
                         parts_sent * PART_SIZE, file_size
                     )
 
+            LOGGER.info(
+                f"HypertgUL read done "
+                f"{ospath.basename(file_path)} "
+                f"parts={parts_sent}/{file_total_parts} "
+                f"sending sentinels to {n_workers} workers"
+            )
             for _ in range(n_workers):
                 await q.put(None)
+            LOGGER.info(
+                f"HypertgUL waiting for {n_workers} workers to finish "
+                f"{ospath.basename(file_path)}"
+            )
             worker_results = await gather(*workers, return_exceptions=True)
             for r in worker_results:
                 if isinstance(r, BaseException) and not isinstance(r, CancelledError):
