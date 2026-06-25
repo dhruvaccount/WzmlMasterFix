@@ -7,13 +7,9 @@ from time import time
 from aioshutil import rmtree
 from natsort import natsorted
 from PIL import Image
-from pyrogram import StopTransmission
+from pyrogram import StopTransmission, raw
 from pyrogram.errors import BadRequest, FloodPremiumWait, FloodWait, RPCError
-from pyrogram.raw.types import (
-    DocumentAttributeAudio,
-    DocumentAttributeFilename,
-    DocumentAttributeVideo,
-)
+
 from aiofiles.os import (
     path as aiopath,
     remove,
@@ -27,7 +23,6 @@ from pyrogram.types import (
 
 from ....core.config_manager import Config
 from ....core.tg_client import TgClient
-from ...ext_utils.hyperup_utils import HypertgUpload
 from ...ext_utils.bot_utils import sync_to_async
 from ...ext_utils.files_utils import get_base_name, is_archive
 from ...ext_utils.status_utils import get_readable_file_size, get_readable_time
@@ -41,6 +36,7 @@ from ...ext_utils.media_utils import (
     get_md5_hash,
 )
 from ...telegram_helper.message_utils import delete_message
+from ...ext_utils.hyperup_utils import HypertgUpload
 
 LOGGER = getLogger(__name__)
 
@@ -71,14 +67,8 @@ class TelegramUploader:
         self._sent_msg = None
         self._log_msg = None
         self._user_session = self._listener.transmission_mode in ("user", "both")
+        self._hu: HypertgUpload | None = None
         self._error = ""
-        self._hu = (
-            HypertgUpload(self)
-            if Config.USE_HYPER
-            and Config.LEECH_DUMP_CHAT
-            and len(TgClient.helper_bots) != 0
-            else None
-        )
 
     async def _user_settings(self):
         settings_map = {
@@ -416,13 +406,10 @@ class TelegramUploader:
                                 message_ids=self._sent_msg.id,
                             )
                     self._last_msg_in_group = False
-                    if self._hu is not None:
-                        task = ensure_future(
-                            self._upload_file_task(file_, f_path, dirpath)
-                        )
-                        upload_tasks.append(task)
-                    else:
-                        await self._upload_file_task(file_, f_path, dirpath)
+                    task = ensure_future(
+                        self._upload_file_task(file_, f_path, dirpath)
+                    )
+                    upload_tasks.append(task)
                     if self._listener.is_cancelled:
                         return
                 except Exception as err:
@@ -480,129 +467,116 @@ class TelegramUploader:
         artist="",
         title="",
     ):
-        attr_base = [DocumentAttributeFilename(file_name=file)]
-        if key == "videos":
-            attrs = [
-                DocumentAttributeVideo(
-                    duration=duration or 0,
-                    w=width or 480,
-                    h=height or 320,
-                    supports_streaming=True,
-                ),
-                *attr_base,
-            ]
-            mtype = "video"
-        elif key == "audios":
-            attrs = [
-                DocumentAttributeAudio(
-                    duration=duration or 0, performer=artist or "", title=title or ""
-                ),
-                *attr_base,
-            ]
-            mtype = "audio"
-        elif key == "documents":
-            attrs = attr_base
-            mtype = "document"
-        else:
-            mtype = "photo"
-            attrs = None
-        target_client = TgClient.user if self._user_session else self._listener.client
-        if self._hu is None:
-            sent = None
+        f_path = f_path or self._up_path
+        up_size = await aiopath.getsize(f_path)
+
+        if up_size > 10 * 1024 * 1024:
             try:
+                if self._hu is None:
+                    self._hu = HypertgUpload(self)
+
+                media_type = {
+                    "videos": "video", "audios": "audio",
+                    "documents": "document", "photos": "photo",
+                }[key]
+                attributes = []
                 if key == "videos":
-                    sent = await self._sent_msg.reply_video(
-                        video=f_path or self._up_path,
-                        caption=cap_mono,
-                        duration=duration or 0,
-                        width=width or 480,
-                        height=height or 320,
-                        thumb=thumb if thumb and thumb != "none" else None,
+                    attributes.append(raw.types.DocumentAttributeVideo(
+                        duration=duration, w=width, h=height,
                         supports_streaming=True,
-                        disable_notification=True,
-                        progress=self._upload_progress,
-                    )
+                    ))
                 elif key == "audios":
-                    sent = await self._sent_msg.reply_audio(
-                        audio=f_path or self._up_path,
-                        caption=cap_mono,
-                        duration=duration or 0,
-                        performer=artist or "",
-                        title=title or "",
-                        thumb=thumb if thumb and thumb != "none" else None,
-                        disable_notification=True,
-                        progress=self._upload_progress,
+                    attributes.append(raw.types.DocumentAttributeAudio(
+                        duration=duration, performer=artist, title=title,
+                    ))
+                if key in ("videos", "audios", "documents"):
+                    attributes.append(
+                        raw.types.DocumentAttributeFilename(file_name=file)
                     )
-                elif key == "documents":
-                    sent = await self._sent_msg.reply_document(
-                        document=f_path or self._up_path,
-                        caption=cap_mono,
-                        thumb=thumb if thumb and thumb != "none" else None,
-                        disable_notification=True,
-                        progress=self._upload_progress,
-                    )
-                else:
-                    sent = await self._sent_msg.reply_photo(
-                        photo=f_path or self._up_path,
-                        caption=cap_mono,
-                        disable_notification=True,
-                        progress=self._upload_progress,
-                    )
-            except (FloodWait, FloodPremiumWait) as f:
-                LOGGER.warning(str(f))
-                await sleep(f.value * 1.3)
-                return await self._hyperul_upload(
-                    cap_mono,
-                    file,
-                    thumb,
-                    key,
-                    f_path=f_path,
-                    duration=duration,
-                    width=width,
-                    height=height,
-                    artist=artist,
-                    title=title,
+
+                sent = await self._hu.upload(
+                    target_client=self._sent_msg._client,
+                    target_chat_id=self._sent_msg.chat.id,
+                    file_path=f_path,
+                    dump_chat_id=0,
+                    media_type=media_type,
+                    attributes=attributes,
+                    thumb_path=thumb if thumb and thumb != "none" else None,
+                    caption=cap_mono,
+                    reply_to_message_id=self._sent_msg.id,
                 )
-            except OSError as e:
-                LOGGER.warning(f"Transport error during upload, retrying: {e}")
-                await sleep(5)
-                return await self._hyperul_upload(
-                    cap_mono,
-                    file,
-                    thumb,
-                    key,
-                    f_path=f_path,
-                    duration=duration,
-                    width=width,
-                    height=height,
-                    artist=artist,
-                    title=title,
+                LOGGER.info(f"HypertgUL uploaded {file}")
+                return sent
+            except Exception as e:
+                LOGGER.warning(
+                    f"HypertgUL fail for {file}, "
+                    f"falling back to reply path: {type(e).__name__}: {e}"
                 )
-            except BadRequest:
-                if key != "documents":
-                    LOGGER.error(
-                        f"Retrying As Document. Path: {f_path or self._up_path}"
-                    )
-                    return await self._hyperul_upload(
-                        cap_mono,
-                        file,
-                        thumb,
-                        "documents",
-                        f_path=f_path,
-                    )
-                raise
-            return sent
-        return await self._hu.upload(
-            target_client=target_client,
-            target_chat_id=self._sent_msg.chat.id,
-            file_path=f_path or self._up_path,
-            dump_chat_id=Config.LEECH_DUMP_CHAT,
-            media_type=mtype,
-            attributes=attrs,
-            thumb_path=thumb if thumb and thumb != "none" else None,
-            caption=cap_mono,
-            reply_to_message_id=self._sent_msg.id,
-        )
+
+        sent = None
+        try:
+            if key == "videos":
+                sent = await self._sent_msg.reply_video(
+                    video=f_path,
+                    caption=cap_mono,
+                    duration=duration or 0,
+                    width=width or 480,
+                    height=height or 320,
+                    thumb=thumb if thumb and thumb != "none" else None,
+                    supports_streaming=True,
+                    disable_notification=True,
+                    progress=self._upload_progress,
+                )
+            elif key == "audios":
+                sent = await self._sent_msg.reply_audio(
+                    audio=f_path,
+                    caption=cap_mono,
+                    duration=duration or 0,
+                    performer=artist or "",
+                    title=title or "",
+                    thumb=thumb if thumb and thumb != "none" else None,
+                    disable_notification=True,
+                    progress=self._upload_progress,
+                )
+            elif key == "documents":
+                sent = await self._sent_msg.reply_document(
+                    document=f_path,
+                    caption=cap_mono,
+                    thumb=thumb if thumb and thumb != "none" else None,
+                    disable_notification=True,
+                    progress=self._upload_progress,
+                )
+            else:
+                sent = await self._sent_msg.reply_photo(
+                    photo=f_path,
+                    caption=cap_mono,
+                    disable_notification=True,
+                    progress=self._upload_progress,
+                )
+        except (FloodWait, FloodPremiumWait) as f:
+            LOGGER.warning(str(f))
+            await sleep(f.value * 1.3)
+            return await self._hyperul_upload(
+                cap_mono, file, thumb, key, f_path=f_path,
+                duration=duration, width=width, height=height,
+                artist=artist, title=title,
+            )
+        except OSError as e:
+            LOGGER.warning(f"Transport error during upload, retrying: {e}")
+            await sleep(5)
+            return await self._hyperul_upload(
+                cap_mono, file, thumb, key, f_path=f_path,
+                duration=duration, width=width, height=height,
+                artist=artist, title=title,
+            )
+        except BadRequest:
+            if key != "documents":
+                LOGGER.error(f"Retrying As Document. Path: {f_path}")
+                return await self._hyperul_upload(
+                    cap_mono, file, thumb, "documents", f_path=f_path,
+                )
+            raise
+        return sent
 
     async def _upload_file(self, cap_mono, file, o_path, force_document=False):
         if self._sent_msg is None:

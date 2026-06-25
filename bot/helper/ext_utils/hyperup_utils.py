@@ -2,7 +2,6 @@ from asyncio import (
     CancelledError,
     Lock,
     Queue,
-    QueueShutDown,
     Semaphore,
     create_task,
     gather,
@@ -26,6 +25,9 @@ _ul_load_lock = Lock()
 _ul_slots: Semaphore | None = None
 _ul_slots_lock = Lock()
 
+WORKERS_PER_SESSION = 4
+_session_pool: dict[tuple[int, int], list[Session]] = {}
+_pool_locks: dict[tuple[int, int], Lock] = {}
 
 KB = 1024
 PART_SIZE = 512 * KB
@@ -70,6 +72,19 @@ class HypertgUpload(HypertgTransfer):
             force_file=media_type == "document",
         )
 
+    async def _ensure_session_pool(self, client, dc_id, n_sessions=4):
+        key = (id(client), dc_id)
+        if key not in _pool_locks:
+            _pool_locks[key] = Lock()
+        async with _pool_locks[key]:
+            pool = _session_pool.get(key, [])
+            pool[:] = [s for s in pool if s.is_connected and not s.instant_stop]
+            while len(pool) < n_sessions:
+                s = await self._mk_session(client, dc_id)
+                pool.append(s)
+            _session_pool[key] = pool
+            return list(pool)
+
     async def _upload_file(self, client, file_path):
         global _ul_slots
         file_size = ospath.getsize(file_path)
@@ -89,6 +104,7 @@ class HypertgUpload(HypertgTransfer):
         fp = None
         q = None
         workers = []
+        pool = []
 
         try:
             if self.clients:
@@ -106,35 +122,33 @@ class HypertgUpload(HypertgTransfer):
             else:
                 up_client = client
 
-            n_workers = 4
+            n_sessions = 4
+            n_workers = n_sessions * WORKERS_PER_SESSION
+            pool = await self._ensure_session_pool(up_client, dc_id, n_sessions)
 
-            fp = open(file_path, "rb", buffering=4 * 1024 * 1024)
-            q = Queue(n_workers * 4)
+            fp = open(file_path, "rb", buffering=PART_SIZE)
+            q = Queue(n_workers)
 
-            tm = await client.storage.test_mode()
-            ak, is_cross = await self.create_auth(client, dc_id, tm)
-            ea = None
-            if is_cross:
-                ea = await client.invoke(
-                    raw.functions.auth.ExportAuthorization(dc_id=dc_id)
+            def _make_rpc(chunk, part_idx):
+                if is_big:
+                    return raw.functions.upload.SaveBigFilePart(
+                        file_id=file_id, file_part=part_idx,
+                        file_total_parts=file_total_parts, bytes=chunk,
+                    )
+                return raw.functions.upload.SaveFilePart(
+                    file_id=file_id, file_part=part_idx, bytes=chunk,
                 )
 
-            async def _worker(wid):
-                s = Session(up_client, dc_id, ak, tm, is_media=True)
-                await self.start_session(s, mode=1)
-                if ea is not None:
-                    await s.invoke(
-                        raw.functions.auth.ImportAuthorization(id=ea.id, bytes=ea.bytes)
-                    )
-                try:
-                    while True:
-                        try:
-                            data = await q.get()
-                        except QueueShutDown:
+            async def _worker(session):
+                _pool_key = (id(up_client), dc_id)
+                while True:
+                    data = await q.get()
+                    try:
+                        if data is None:
                             return
                         for attempt in range(5):
                             try:
-                                await s.invoke(data)
+                                await session.invoke(data)
                                 break
                             except StopTransmission:
                                 raise
@@ -142,91 +156,75 @@ class HypertgUpload(HypertgTransfer):
                                 return
                             except (OSError, TimeoutError, ConnectionError):
                                 LOGGER.warning(
-                                    f"HypertgUL worker {wid} transport error "
+                                    f"HypertgUL transport error "
                                     f"attempt {attempt + 1}/5 — reconnecting"
                                 )
+                                if attempt == 4:
+                                    raise
                                 try:
-                                    await s.stop()
+                                    await session.stop()
                                 except Exception:
                                     pass
-                                s = Session(up_client, dc_id, ak, tm, is_media=True)
-                                await self.start_session(s, mode=1)
-                                if ea is not None:
-                                    await s.invoke(
-                                        raw.functions.auth.ImportAuthorization(
-                                            id=ea.id, bytes=ea.bytes
-                                        )
-                                    )
+                                session = await self._mk_session(up_client, dc_id)
+                                if _pool_key in _session_pool:
+                                    _session_pool[_pool_key].append(session)
                                 await sleep(1)
                             except Exception:
                                 if attempt == 4:
-                                    break
+                                    raise
                                 await sleep(2**attempt)
-                finally:
-                    try:
-                        await s.stop()
-                    except Exception:
-                        pass
+                    finally:
+                        q.task_done()
 
-            workers = [create_task(_worker(i)) for i in range(n_workers)]
+            workers = [
+                create_task(_worker(pool[i % n_sessions]))
+                for i in range(n_workers)
+            ]
 
-            rpc_fn = (
-                raw.functions.upload.SaveBigFilePart
-                if is_big
-                else raw.functions.upload.SaveFilePart
-            )
-            POOL = 4 * 1024 * 1024
-            acc = 0
-            part = 0
+            progress_interval = max(1, file_total_parts // 10)
+            parts_sent = 0
 
-            buf_fut = await sync_to_async(fp.read, POOL, wait=False)
             while True:
-                buf = await buf_fut
-                if not buf:
+                chunk = await sync_to_async(fp.read, PART_SIZE)
+                if not chunk:
                     break
-                buf_fut = await sync_to_async(fp.read, POOL, wait=False)
 
                 if self._listener.is_cancelled:
                     raise StopTransmission()
 
-                off = 0
-                n = len(buf)
-                while off < n:
-                    end = off + PART_SIZE
-                    chunk = buf[off:end]
-                    rpc = rpc_fn(
-                        file_id=file_id,
-                        file_part=part,
-                        file_total_parts=file_total_parts,
-                        bytes=chunk,
+                if all(t.done() for t in workers):
+                    for t in workers:
+                        exc = t.exception()
+                        if exc is not None:
+                            raise exc
+                    raise RuntimeError("All upload workers exited prematurely")
+
+                await q.put(_make_rpc(chunk, parts_sent))
+                parts_sent += 1
+
+                if parts_sent % progress_interval == 0:
+                    self._obj._processed_bytes = min(
+                        parts_sent * PART_SIZE, file_size
                     )
-                    await q.put(rpc)
-                    acc += len(chunk)
-                    if part & 7 == 7:
-                        self._obj._processed_bytes += acc
-                        acc = 0
-                    part += 1
-                    off = end
 
-            if acc:
-                self._obj._processed_bytes += acc
-
-            q.shutdown()
-            await gather(*workers)
+            for _ in range(n_workers):
+                await q.put(None)
+            worker_results = await gather(*workers, return_exceptions=True)
+            for r in worker_results:
+                if isinstance(r, BaseException) and not isinstance(r, CancelledError):
+                    LOGGER.warning(f"HypertgUL worker exited with: {type(r).__name__}")
+            self._obj._processed_bytes = file_size
 
             if is_big:
-                result = raw.types.InputFileBig(
-                    id=file_id,
-                    parts=file_total_parts,
+                return raw.types.InputFileBig(
+                    id=file_id, parts=file_total_parts,
                     name=ospath.basename(file_path),
                 )
-            else:
-                result = raw.types.InputFile(
-                    id=file_id,
-                    parts=file_total_parts,
-                    name=ospath.basename(file_path),
-                )
-            return result
+            return raw.types.InputFile(
+                id=file_id, parts=file_total_parts,
+                name=ospath.basename(file_path),
+                md5_checksum=md5().hexdigest(),
+            )
         except StopTransmission:
             LOGGER.warning("HypertgUL upload cancelled (StopTransmission)")
             raise
@@ -240,7 +238,11 @@ class HypertgUpload(HypertgTransfer):
             if _slot_acquired:
                 _ul_slots.release()
             if q:
-                q.shutdown(immediate=True)
+                for _ in range(n_workers if workers else 16):
+                    try:
+                        q.put_nowait(None)
+                    except Exception:
+                        pass
             if workers:
                 await gather(*workers, return_exceptions=True)
             if fp:
