@@ -72,7 +72,7 @@ class HypertgUpload(HypertgTransfer):
             force_file=media_type == "document",
         )
 
-    async def _ensure_session_pool(self, client, dc_id, n_sessions=4):
+    async def _ensure_session_pool(self, client, dc_id, n_sessions=4, mode=1):
         key = (id(client), dc_id)
         if key not in _pool_locks:
             _pool_locks[key] = Lock()
@@ -80,7 +80,7 @@ class HypertgUpload(HypertgTransfer):
             pool = _session_pool.get(key, [])
             pool[:] = [s for s in pool if s.is_connected and not s.instant_stop]
             while len(pool) < n_sessions:
-                s = await self._mk_session(client, dc_id)
+                s = await self._mk_session(client, dc_id, mode=mode)
                 pool.append(s)
             _session_pool[key] = pool
             return list(pool)
@@ -124,7 +124,11 @@ class HypertgUpload(HypertgTransfer):
 
             n_sessions = 4
             n_workers = n_sessions * WORKERS_PER_SESSION
-            pool = await self._ensure_session_pool(up_client, dc_id, n_sessions)
+            pool = await self._ensure_session_pool(up_client, dc_id, n_sessions, mode=1)
+            LOGGER.info(
+                f"HypertgUL pool ready dc={dc_id} "
+                f"sessions={len(pool)} workers={n_workers} {ospath.basename(file_path)}"
+            )
 
             fp = open(file_path, "rb", buffering=PART_SIZE)
             q = Queue(n_workers)
@@ -165,7 +169,7 @@ class HypertgUpload(HypertgTransfer):
                                     await session.stop()
                                 except Exception:
                                     pass
-                                session = await self._mk_session(up_client, dc_id)
+                                session = await self._mk_session(up_client, dc_id, mode=1)
                                 if _pool_key in _session_pool:
                                     _session_pool[_pool_key].append(session)
                                 await sleep(1)
@@ -184,6 +188,7 @@ class HypertgUpload(HypertgTransfer):
             progress_interval = max(1, file_total_parts // 10)
             parts_sent = 0
 
+            LOGGER.info(f"HypertgUL start read {ospath.basename(file_path)}")
             while True:
                 chunk = await sync_to_async(fp.read, PART_SIZE)
                 if not chunk:
