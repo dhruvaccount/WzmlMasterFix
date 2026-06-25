@@ -1,11 +1,4 @@
-from asyncio import (
-    CancelledError,
-    Lock,
-    Semaphore,
-    create_task,
-    gather,
-    sleep,
-)
+from asyncio import CancelledError, sleep
 from hashlib import md5
 from math import ceil
 from mimetypes import guess_type
@@ -14,18 +7,9 @@ from re import search as research
 
 from pyrogram import StopTransmission, raw, utils
 from pyrogram.errors import FilePartMissing, FloodPremiumWait, FloodWait
-from pyrogram.session import Session
 
 from ... import LOGGER
 from ..telegram_helper.tg_transfer import MB, HypertgTransfer
-
-_ul_load_lock = Lock()
-_ul_slots: Semaphore | None = None
-_ul_slots_lock = Lock()
-
-WORKERS_PER_SESSION = 4
-_session_pool: dict[tuple[int, int], list[Session]] = {}
-_pool_locks: dict[tuple[int, int], Lock] = {}
 
 KB = 1024
 PART_SIZE = 512 * KB
@@ -91,151 +75,93 @@ class HypertgUpload(HypertgTransfer):
             return list(pool)
 
     async def _upload_file(self, client, file_path):
-        global _ul_slots
         import time as _time
         _t0 = _time.monotonic()
         file_size = ospath.getsize(file_path)
         file_total_parts = ceil(file_size / PART_SIZE)
         file_id = client.rnd_id()
         dc_id = await client.storage.dc_id()
+        from pyrogram.errors import UserMigrate
         is_big = file_size > 10 * MB
 
-        _slot_acquired = False
-        async with _ul_slots_lock:
-            if _ul_slots is None:
-                _ul_slots = Semaphore(max(1, self.num_clients))
-        await _ul_slots.acquire()
-        _slot_acquired = True
-
-        ul_ci = None
-        fp = None
-        workers = []
-        pool = []
+        fp = open(file_path, "rb", buffering=PART_SIZE)
+        session = await self._mk_session(client, dc_id, mode=1)
 
         try:
-            if self.clients:
-                async with _ul_load_lock:
-                    ul_ci = min(
-                        self.clients.keys(), key=lambda i: self.work_loads.get(i, 0)
-                    )
-                    self.work_loads[ul_ci] = self.work_loads.get(ul_ci, 0) + 1
-                    _concurrent = sum(1 for v in self.work_loads.values() if v > 0)
-                up_client = self.clients[ul_ci]
-                LOGGER.info(
-                    f"HypertgUL client={ul_ci} loads={dict(self.work_loads)} "
-                    f"bots={len(self.clients)} concurrent={_concurrent}"
-                )
-            else:
-                up_client = client
+            for part in range(file_total_parts):
+                if self._listener.is_cancelled:
+                    raise StopTransmission()
+                fp.seek(part * PART_SIZE)
+                chunk = fp.read(PART_SIZE)
+                if not chunk:
+                    break
 
-            n_sessions = 4
-            n_workers = n_sessions
-            pool = await self._ensure_session_pool(up_client, dc_id, n_sessions, mode=1)
-            LOGGER.info(
-                f"HypertgUL pool ready dc={dc_id} "
-                f"sessions={len(pool)} workers={n_workers} {ospath.basename(file_path)}"
-            )
-
-            fp = open(file_path, "rb", buffering=PART_SIZE)
-
-            def _make_rpc(chunk, part_idx):
                 if is_big:
-                    return raw.functions.upload.SaveBigFilePart(
-                        file_id=file_id, file_part=part_idx,
+                    rpc = raw.functions.upload.SaveBigFilePart(
+                        file_id=file_id, file_part=part,
                         file_total_parts=file_total_parts, bytes=chunk,
                     )
-                return raw.functions.upload.SaveFilePart(
-                    file_id=file_id, file_part=part_idx, bytes=chunk,
+                else:
+                    rpc = raw.functions.upload.SaveFilePart(
+                        file_id=file_id, file_part=part, bytes=chunk,
+                    )
+
+                for attempt in range(5):
+                    try:
+                        await session.invoke(rpc)
+                        break
+                    except UserMigrate as e:
+                        new_dc = getattr(e, "value", None)
+                        if not isinstance(new_dc, int):
+                            raise
+                        LOGGER.info(
+                            f"HypertgUL migrating DC {dc_id} → {new_dc} "
+                            f"part={part}/{file_total_parts}"
+                        )
+                        dc_id = new_dc
+                        await client.storage.dc_id(new_dc)
+                        await session.stop()
+                        session = await self._mk_session(client, dc_id, mode=1)
+                    except StopTransmission:
+                        raise
+                    except CancelledError:
+                        return
+                    except (OSError, TimeoutError, ConnectionError):
+                        LOGGER.warning(
+                            f"HypertgUL transport error part={part} "
+                            f"attempt {attempt + 1}/5"
+                        )
+                        if attempt == 4:
+                            raise
+                        try:
+                            await session.stop()
+                        except Exception:
+                            pass
+                        session = await self._mk_session(client, dc_id, mode=1)
+                        await sleep(1)
+                    except Exception:
+                        if attempt == 4:
+                            raise
+                        await sleep(2**attempt)
+
+                self._obj._processed_bytes = min(
+                    (part + 1) * PART_SIZE, file_size
                 )
 
-            session_locks = [Lock() for _ in range(n_sessions)]
-
-            async def _worker(worker_id, session):
-                parts_done = 0
-                rng_start = worker_id
-                rng_step = n_workers
-                for idx in range(rng_start, file_total_parts, rng_step):
-                    if self._listener.is_cancelled:
-                        raise StopTransmission()
-                    fp.seek(idx * PART_SIZE)
-                    chunk = fp.read(PART_SIZE)
-                    if not chunk:
-                        break
-                    rpc = _make_rpc(chunk, idx)
-                    for attempt in range(5):
-                        try:
-                            async with session_locks[worker_id]:
-                                await session.invoke(rpc)
-                            parts_done += 1
-                            break
-                        except StopTransmission:
-                            raise
-                        except CancelledError:
-                            return
-                        except (OSError, TimeoutError, ConnectionError):
-                            LOGGER.warning(
-                                f"HypertgUL worker {worker_id} transport error "
-                                f"attempt {attempt + 1}/5 — reconnecting"
-                            )
-                            if attempt == 4:
-                                raise
-                            try:
-                                await session.stop()
-                            except Exception:
-                                pass
-                            session = await self._mk_session(up_client, dc_id, mode=1)
-                            await sleep(1)
-                        except Exception:
-                            if attempt == 4:
-                                raise
-                            await sleep(2**attempt)
-                    if parts_done % 50 == 0 and parts_done > 0:
-                        elapsed = _time.monotonic() - _t0
-                        LOGGER.info(
-                            f"HypertgUL worker {worker_id} "
-                            f"parts={parts_done} elapsed={elapsed:.1f}s"
-                        )
-                LOGGER.info(f"HypertgUL worker {worker_id} done parts={parts_done}")
-
-            workers = [
-                create_task(_worker(i, pool[i]))
-                for i in range(n_workers)
-            ]
-
-            LOGGER.info(
-                f"HypertgUL start {n_workers} workers "
-                f"fp={ospath.basename(file_path)} parts={file_total_parts}"
-            )
-            last_wait_log = 0
-            while True:
-                for t in workers:
-                    if t.done():
-                        exc = t.exception()
-                        if exc is not None and not isinstance(exc, CancelledError):
-                            for t2 in workers:
-                                t2.cancel()
-                            raise exc
-                if all(t.done() for t in workers):
-                    break
-                elapsed = _time.monotonic() - _t0
-                if elapsed - last_wait_log > 30:
-                    done = sum(1 for t in workers if t.done())
+                if part > 0 and part % max(1, file_total_parts // 10) == 0:
+                    elapsed = _time.monotonic() - _t0
+                    mb_done = self._obj._processed_bytes / (1024 * 1024)
+                    mb_total = file_size / (1024 * 1024)
+                    speed = mb_done / elapsed if elapsed > 0 else 0
                     LOGGER.info(
-                        f"HypertgUL waiting workers={done}/{n_workers} "
-                        f"elapsed={elapsed:.0f}s {ospath.basename(file_path)}"
+                        f"HypertgUL {ospath.basename(file_path)} "
+                        f"part={part}/{file_total_parts} "
+                        f"MB={mb_done:.0f}/{mb_total:.0f} speed={speed:.1f}MB/s"
                     )
-                    last_wait_log = elapsed
-                await sleep(2)
 
-            worker_results = await gather(*workers, return_exceptions=True)
-            for r in worker_results:
-                if isinstance(r, BaseException) and not isinstance(r, CancelledError):
-                    LOGGER.warning(f"HypertgUL worker exited with: {type(r).__name__}")
             self._obj._processed_bytes = file_size
-
             LOGGER.info(
-                f"HypertgUL upload complete "
-                f"{ospath.basename(file_path)} "
+                f"HypertgUL done {ospath.basename(file_path)} "
                 f"elapsed={_time.monotonic() - _t0:.1f}s"
             )
 
@@ -256,20 +182,14 @@ class HypertgUpload(HypertgTransfer):
             LOGGER.error(f"HypertgUL upload fail: {type(e).__name__}: {e}")
             raise
         finally:
-            if ul_ci is not None:
-                async with _ul_load_lock:
-                    self.work_loads[ul_ci] = max(0, self.work_loads.get(ul_ci, 0) - 1)
-            if _slot_acquired:
-                _ul_slots.release()
-            if workers:
-                for t in workers:
-                    t.cancel()
-                await gather(*workers, return_exceptions=True)
-            if fp:
-                try:
-                    fp.close()
-                except Exception:
-                    pass
+            try:
+                await session.stop()
+            except Exception:
+                pass
+            try:
+                fp.close()
+            except Exception:
+                pass
 
     async def _upload_small(self, client, file_path):
         file_size = ospath.getsize(file_path)
