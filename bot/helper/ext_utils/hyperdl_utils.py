@@ -68,6 +68,7 @@ class HypertgDownload(HypertgTransfer):
         base_pipe = max(Config.HYPER_PIPELINE or _DEFAULT_PIPELINE, _MIN_PIPELINE)
         self.pipeline_depth = max(base_pipe // max(self.num_parts, 1), _MIN_PIPELINE)
         self.message = None
+        self.media = None
         self.dump_chat = None
         self.directory = None
         self.file_name = ""
@@ -85,33 +86,21 @@ class HypertgDownload(HypertgTransfer):
             self._ref_cache.pop(next(iter(self._ref_cache)))
         self._ref_cache[idx] = data
 
-    async def _fetch_ref(self, idx, client, retries=3, force=False):
+    async def _fetch_ref(self, idx, client, force=False):
         if not force:
             cached = self._ref_get(idx)
             if cached is not None:
                 return cached
-        last_err = None
-        for attempt in range(retries):
-            try:
-                msg = await client.get_messages(self.dump_chat, self.message.id)
-                if msg is None:
-                    raise ValueError(
-                        f"msg {self.message.id} not found in {self.dump_chat}"
-                    )
-                media = self._media_of(msg)
-                fid_str = media.file_id if hasattr(media, "file_id") else None
-                if not fid_str:
-                    raise ValueError(f"no file_id in media from msg {self.message.id}")
-                fid = FileId.decode(fid_str)
-                self._ref_put(idx, fid)
-                return fid
-            except Exception as e:
-                last_err = e
-                if attempt < retries - 1:
-                    await sleep(attempt + 1)
-        raise ValueError(
-            f"Failed to get file ref with {client.me.username}: {last_err}"
-        )
+        msg = await client.get_messages(self.dump_chat, self.message.id)
+        if msg is None:
+            raise ValueError(f"msg {self.message.id} not found in {self.dump_chat}")
+        media = self._media_of(msg)
+        fid_str = media.file_id if hasattr(media, "file_id") else None
+        if not fid_str:
+            raise ValueError(f"no file_id in media from msg {self.message.id}")
+        fid = FileId.decode(fid_str)
+        self._ref_put(idx, fid)
+        return fid
 
     @staticmethod
     def _media_of(message):
@@ -125,10 +114,11 @@ class HypertgDownload(HypertgTransfer):
             "voice",
             "video_note",
             "new_chat_photo",
+            "story",
         ):
             if m := getattr(message, attr, None):
                 return m
-        raise ValueError("No downloadable media")
+        raise ValueError(f"No downloadable media in msg {message.id} (type: {message.media})")
 
     async def _do_req(self, sess, client, location, off, csz, attempt=0):
         try:
@@ -740,6 +730,8 @@ class HypertgDownload(HypertgTransfer):
                     dump_chat = int(dump_chat)
                 except (ValueError, TypeError):
                     dump_chat = None
+            if dump_chat and dump_chat == message.chat.id:
+                dump_chat = None
             if dump_chat:
                 try:
                     self.message = await TgClient.bot.copy_message(
@@ -755,7 +747,8 @@ class HypertgDownload(HypertgTransfer):
                     raise RuntimeError(f"Cannot copy to dump chat: {e}") from e
             self.dump_chat = dump_chat or message.chat.id
             self.message = self.message or message
-            media = self._media_of(self.message)
+            self.media = self._media_of(self.message)
+            media = self.media
             fid_str = media if isinstance(media, str) else media.file_id
             fid_obj = FileId.decode(fid_str)
             ftype = fid_obj.file_type

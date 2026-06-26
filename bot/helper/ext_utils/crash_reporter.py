@@ -4,7 +4,7 @@ from datetime import datetime
 from gzip import compress as gzip_compress
 from hashlib import sha256
 from hmac import new as hmac_new
-from logging import Formatter, Handler, getLogger
+from logging import ERROR, Formatter, Handler, getLogger
 from sys import platform
 from traceback import format_exception
 
@@ -33,6 +33,37 @@ _log_handler.setFormatter(
     Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 )
 getLogger().addHandler(_log_handler)
+
+_sending_report = False
+
+
+class _ErrorTriggerHandler(Handler):
+    def emit(self, record):
+        global _sending_report
+        if _sending_report or record.levelno < ERROR:
+            return
+        if not Config.ENABLE_TELEMETRY:
+            return
+        _sending_report = True
+        try:
+            exc_type, exc_value, exc_tb = record.exc_info or (None, None, None)
+            if exc_type and exc_value:
+                payload = _make_payload(exc_type, exc_value, exc_tb)
+            else:
+                payload = _make_payload(
+                    type("LoggedError", (Exception,), {}),
+                    Exception(record.getMessage()),
+                    None,
+                )
+                payload["traceback"] = (
+                    f"Logged at {record.pathname}:{record.lineno} in {record.funcName}"
+                )
+            bot_loop.create_task(_post_report(payload))
+        finally:
+            _sending_report = False
+
+
+getLogger().addHandler(_ErrorTriggerHandler(level=ERROR))
 
 
 def _make_payload(exc_type, exc_value, exc_traceback):
