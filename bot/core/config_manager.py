@@ -143,6 +143,7 @@ class Config:
     USER_SESSION_STRING = ""
     TRANSMISSION_MODE = "both"
     USE_SERVICE_ACCOUNTS = False
+    ENABLE_TELEMETRY = True
     WEB_ACCESS_PASSWORD = ""
     WEB_PINCODE = True
     YT_DLP_OPTIONS = {}
