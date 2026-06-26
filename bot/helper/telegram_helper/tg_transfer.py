@@ -46,7 +46,7 @@ async def _native_connect(self, address):
             open_connection(host=host, port=port, family=family), 10
         )
     sock = self.writer.get_extra_info("socket")
-    if sock:
+    if False:
         try:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_QUICKACK, 1)
