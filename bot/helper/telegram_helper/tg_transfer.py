@@ -88,18 +88,11 @@ async def _safe_abridged_send(self, data):
 
 TCPAbridgedO.send = _safe_abridged_send
 
-_orig_session_init = Session.__init__
-
-def _session_init_patched(self, client, dc_id, auth_key, test_mode, is_media=False, is_cdn=False):
-    _orig_session_init(self, client, dc_id, auth_key, test_mode, is_media, is_cdn)
-    self._start_lock = Lock()
-    self._stop_lock = Lock()
-
-Session.__init__ = _session_init_patched
-
 _orig_session_start = Session.start
 
 async def _safe_session_start(self):
+    if not hasattr(self, '_start_lock'):
+        self._start_lock = Lock()
     async with self._start_lock:
         await _orig_session_start(self)
 
@@ -108,6 +101,8 @@ Session.start = _safe_session_start
 _orig_session_stop = Session.stop
 
 async def _safe_session_stop(self):
+    if not hasattr(self, '_stop_lock'):
+        self._stop_lock = Lock()
     async with self._stop_lock:
         await _orig_session_stop(self)
 
