@@ -6,6 +6,7 @@ from hashlib import sha256
 from hmac import new as hmac_new
 from logging import ERROR, Formatter, Handler, getLogger
 from sys import platform
+from time import time
 from traceback import format_exception
 
 from httpx import AsyncClient
@@ -38,12 +39,21 @@ _sending_report = False
 
 
 class _ErrorTriggerHandler(Handler):
+    _last_sent = {}
+    _debounce = 300
+
     def emit(self, record):
         global _sending_report
         if _sending_report or record.levelno < ERROR:
             return
         if not Config.ENABLE_TELEMETRY:
             return
+        exc_type = record.exc_info[0] if record.exc_info else None
+        key = (exc_type.__name__ if exc_type else "no_exc", record.name)
+        now = time()
+        if now - self._last_sent.get(key, 0) < self._debounce:
+            return
+        self._last_sent[key] = now
         _sending_report = True
         try:
             exc_type, exc_value, exc_tb = record.exc_info or (None, None, None)

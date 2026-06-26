@@ -15,7 +15,8 @@ async def get_download(tag, old_info=None):
         res = (await TorrentManager.qbittorrent.torrents.info(tag=tag))[0]
         return res or old_info
     except Exception as e:
-        LOGGER.error(f"{e}: Qbittorrent, while getting torrent info. Tag: {tag}")
+        LOGGER.warning(f"{e}: Qbittorrent, while getting torrent info. Tag: {tag}")
+        await TorrentManager.ensure_qbit()
         return old_info
 
 

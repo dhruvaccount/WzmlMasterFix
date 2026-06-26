@@ -58,6 +58,7 @@ class HypertgUpload(HypertgTransfer):
 
     async def _upload_file(self, client, file_path):
         import time as _time
+
         _t0 = _time.monotonic()
         file_size = ospath.getsize(file_path)
         file_total_parts = ceil(file_size / PART_SIZE)
@@ -78,11 +79,15 @@ class HypertgUpload(HypertgTransfer):
         def _make_rpc(chunk, part_idx):
             if is_big:
                 return raw.functions.upload.SaveBigFilePart(
-                    file_id=file_id, file_part=part_idx,
-                    file_total_parts=file_total_parts, bytes=chunk,
+                    file_id=file_id,
+                    file_part=part_idx,
+                    file_total_parts=file_total_parts,
+                    bytes=chunk,
                 )
             return raw.functions.upload.SaveFilePart(
-                file_id=file_id, file_part=part_idx, bytes=chunk,
+                file_id=file_id,
+                file_part=part_idx,
+                bytes=chunk,
             )
 
         async def _worker(wid, session):
@@ -179,11 +184,9 @@ class HypertgUpload(HypertgTransfer):
                         f"HypertgUL {ospath.basename(file_path)} "
                         f"part={parts_sent}/{file_total_parts} "
                         f"MB={mb_done:.0f}/{mb_total:.0f} "
-                        f"speed={mb_done/elapsed:.1f}MB/s"
+                        f"speed={mb_done / elapsed:.1f}MB/s"
                     )
-                self._obj._processed_bytes = min(
-                    parts_sent * PART_SIZE, file_size
-                )
+                self._obj._processed_bytes = min(parts_sent * PART_SIZE, file_size)
 
             await q.join()
             for _ in workers:
@@ -194,16 +197,18 @@ class HypertgUpload(HypertgTransfer):
             elapsed = _time.monotonic() - _t0
             LOGGER.info(
                 f"HypertgUL done {ospath.basename(file_path)} "
-                f"elapsed={elapsed:.1f}s speed={file_size/(1024*1024)/elapsed:.1f}MB/s"
+                f"elapsed={elapsed:.1f}s speed={file_size / (1024 * 1024) / elapsed:.1f}MB/s"
             )
 
             if is_big:
                 return raw.types.InputFileBig(
-                    id=file_id, parts=file_total_parts,
+                    id=file_id,
+                    parts=file_total_parts,
                     name=ospath.basename(file_path),
                 )
             return raw.types.InputFile(
-                id=file_id, parts=file_total_parts,
+                id=file_id,
+                parts=file_total_parts,
                 name=ospath.basename(file_path),
                 md5_checksum=md5().hexdigest(),
             )
@@ -216,7 +221,6 @@ class HypertgUpload(HypertgTransfer):
         finally:
             for t in workers:
                 t.cancel()
-            await asyncio.gather(*workers, return_exceptions=True)
             for s in pool:
                 try:
                     await s.stop()

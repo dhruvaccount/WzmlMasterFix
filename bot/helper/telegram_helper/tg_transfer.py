@@ -26,11 +26,13 @@ pyrogram.crypto_executor = ThreadPoolExecutor(
 )
 Client.MAX_CONCURRENT_TRANSMISSIONS = 1000
 
+
 async def _native_connect(self, address):
     host, port = address
     family = socket.AF_INET6 if self.ipv6 else socket.AF_INET
     if self.proxy:
         import socks
+
         scheme = self.proxy.get("scheme")
         pt = getattr(socks, scheme.upper())
         sock = socks.socksocket(family)
@@ -46,7 +48,7 @@ async def _native_connect(self, address):
             open_connection(host=host, port=port, family=family), 10
         )
     sock = self.writer.get_extra_info("socket")
-    if False:
+    if sock:
         try:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_QUICKACK, 1)
@@ -60,24 +62,31 @@ async def _native_connect(self, address):
         except (OSError, AttributeError):
             pass
 
+
 def _native_close(self):
     if self.writer:
         self.writer.close()
 
+
 _orig_tcp_init = TCP.__init__
+
 
 def _tcp_init_patched(self, ipv6, proxy):
     _orig_tcp_init(self, ipv6, proxy)
     self.ipv6 = ipv6
     self.proxy = proxy
 
+
 TCP.connect = _native_connect
 TCP.close = _native_close
 TCP.__init__ = _tcp_init_patched
 
+
 async def _safe_abridged_send(self, data):
     length = len(data) // 4
-    header = bytes([length]) if length <= 126 else b"\x7f" + length.to_bytes(3, "little")
+    header = (
+        bytes([length]) if length <= 126 else b"\x7f" + length.to_bytes(3, "little")
+    )
     data = header + data
     async with self.lock:
         payload = await self.loop.run_in_executor(
@@ -86,35 +95,42 @@ async def _safe_abridged_send(self, data):
         self.writer.write(payload)
         await self.writer.drain()
 
+
 TCPAbridgedO.send = _safe_abridged_send
 
 _orig_session_start = Session.start
 
+
 async def _safe_session_start(self):
-    if not hasattr(self, '_start_lock'):
+    if not hasattr(self, "_start_lock"):
         self._start_lock = Lock()
     async with self._start_lock:
         await _orig_session_start(self)
+
 
 Session.start = _safe_session_start
 
 _orig_session_stop = Session.stop
 
+
 async def _safe_session_stop(self):
-    if not hasattr(self, '_stop_lock'):
+    if not hasattr(self, "_stop_lock"):
         self._stop_lock = Lock()
     async with self._stop_lock:
         await _orig_session_stop(self)
 
+
 Session.stop = _safe_session_stop
 
 _orig_dc_new = DataCenter.__new__
+
 
 def _dc_media_port(cls, dc_id, test_mode, ipv6, media):
     ip, port = _orig_dc_new(cls, dc_id, test_mode, ipv6, media)
     if media and not test_mode:
         port = 5222
     return ip, port
+
 
 DataCenter.__new__ = staticmethod(_dc_media_port)
 
@@ -123,8 +139,13 @@ class HypertgTransfer:
     def __init__(self, obj):
         self._obj = obj
         self._listener = obj._listener
-        self.clients = TgClient.helper_bots
-        self.work_loads = TgClient.helper_loads
+        self.clients = dict(TgClient.helper_bots)
+        self.work_loads = dict(TgClient.helper_loads)
+        if TgClient.helper_users:
+            for no, client in TgClient.helper_users.items():
+                self.clients[-no] = client
+            for no, load in TgClient.helper_user_loads.items():
+                self.work_loads[-no] = load
         self.num_clients = len(self.clients)
         self._sessions = {}
         self._session_locks = {}

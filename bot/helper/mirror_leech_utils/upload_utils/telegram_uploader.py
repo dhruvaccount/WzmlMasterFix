@@ -405,10 +405,20 @@ class TelegramUploader:
                                 chat_id=self._sent_msg.chat.id,
                                 message_ids=self._sent_msg.id,
                             )
+                    elif (
+                        not self._user_session
+                        and f_size > 2097152000
+                        and TgClient.user is not None
+                    ):
+                        user_msg = await TgClient.user.get_messages(
+                            chat_id=self._sent_msg.chat.id,
+                            message_ids=self._sent_msg.id,
+                        )
+                        if user_msg is not None:
+                            self._user_session = True
+                            self._sent_msg = user_msg
                     self._last_msg_in_group = False
-                    task = ensure_future(
-                        self._upload_file_task(file_, f_path, dirpath)
-                    )
+                    task = ensure_future(self._upload_file_task(file_, f_path, dirpath))
                     upload_tasks.append(task)
                     if self._listener.is_cancelled:
                         return
@@ -470,25 +480,45 @@ class TelegramUploader:
         f_path = f_path or self._up_path
         up_size = await aiopath.getsize(f_path)
 
+        if up_size > (TgClient.MAX_SPLIT_SIZE if self._user_session else 2097152000):
+            if not self._user_session and TgClient.user is not None:
+                user_msg = await TgClient.user.get_messages(
+                    chat_id=self._sent_msg.chat.id,
+                    message_ids=self._sent_msg.id,
+                )
+                if user_msg is not None:
+                    self._user_session = True
+                    self._sent_msg = user_msg
+
         if Config.USE_HYPER and up_size > 10 * 1024 * 1024:
             try:
                 if self._hu is None:
                     self._hu = HypertgUpload(self)
 
                 media_type = {
-                    "videos": "video", "audios": "audio",
-                    "documents": "document", "photos": "photo",
+                    "videos": "video",
+                    "audios": "audio",
+                    "documents": "document",
+                    "photos": "photo",
                 }[key]
                 attributes = []
                 if key == "videos":
-                    attributes.append(raw.types.DocumentAttributeVideo(
-                        duration=duration, w=width, h=height,
-                        supports_streaming=True,
-                    ))
+                    attributes.append(
+                        raw.types.DocumentAttributeVideo(
+                            duration=duration,
+                            w=width,
+                            h=height,
+                            supports_streaming=True,
+                        )
+                    )
                 elif key == "audios":
-                    attributes.append(raw.types.DocumentAttributeAudio(
-                        duration=duration, performer=artist, title=title,
-                    ))
+                    attributes.append(
+                        raw.types.DocumentAttributeAudio(
+                            duration=duration,
+                            performer=artist,
+                            title=title,
+                        )
+                    )
                 if key in ("videos", "audios", "documents"):
                     attributes.append(
                         raw.types.DocumentAttributeFilename(file_name=file)
@@ -557,23 +587,41 @@ class TelegramUploader:
             LOGGER.warning(str(f))
             await sleep(f.value * 1.3)
             return await self._hyperul_upload(
-                cap_mono, file, thumb, key, f_path=f_path,
-                duration=duration, width=width, height=height,
-                artist=artist, title=title,
+                cap_mono,
+                file,
+                thumb,
+                key,
+                f_path=f_path,
+                duration=duration,
+                width=width,
+                height=height,
+                artist=artist,
+                title=title,
             )
         except OSError as e:
             LOGGER.warning(f"Transport error during upload, retrying: {e}")
             await sleep(5)
             return await self._hyperul_upload(
-                cap_mono, file, thumb, key, f_path=f_path,
-                duration=duration, width=width, height=height,
-                artist=artist, title=title,
+                cap_mono,
+                file,
+                thumb,
+                key,
+                f_path=f_path,
+                duration=duration,
+                width=width,
+                height=height,
+                artist=artist,
+                title=title,
             )
         except BadRequest:
             if key != "documents":
                 LOGGER.error(f"Retrying As Document. Path: {f_path}")
                 return await self._hyperul_upload(
-                    cap_mono, file, thumb, "documents", f_path=f_path,
+                    cap_mono,
+                    file,
+                    thumb,
+                    "documents",
+                    f_path=f_path,
                 )
             raise
         return sent

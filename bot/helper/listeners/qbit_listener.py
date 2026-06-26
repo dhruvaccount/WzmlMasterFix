@@ -204,6 +204,7 @@ async def _qb_listener():
                         await sleep(0.5)
             except (ClientError, TimeoutError, Exception, AQError) as e:
                 LOGGER.error(str(e))
+                await TorrentManager.ensure_qbit()
         await sleep(3)
 
 
