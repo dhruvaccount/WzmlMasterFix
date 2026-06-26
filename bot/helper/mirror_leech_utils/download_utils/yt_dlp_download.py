@@ -193,7 +193,13 @@ class YoutubeDLHelper:
                     ydl.download([self._listener.link])
                 except DownloadError as e:
                     if not self._listener.is_cancelled:
-                        self._on_download_error(str(e))
+                        error_msg = str(e)
+                        if error_msg.startswith("Postprocessing:"):
+                            if not self._recover_postprocess_error(path, error_msg):
+                                return
+                        else:
+                            self._on_download_error(error_msg)
+                            return
                     return
             if self.is_playlist and (
                 not ospath.exists(path) or len(listdir(path)) == 0
@@ -206,6 +212,32 @@ class YoutubeDLHelper:
                 return
             async_to_sync(self._listener.on_download_complete)
         return
+
+    def _recover_postprocess_error(self, path, error_msg):
+        expected = ospath.join(path, self._listener.name)
+        if ospath.exists(expected):
+            LOGGER.warning(f"Postprocessing error ignored — file exists: {error_msg}")
+            return True
+        for fname in listdir(path):
+            if fname.endswith(".unknown_video"):
+                src = ospath.join(path, fname)
+                new_name = fname.replace(".unknown_video", "")
+                if not new_name:
+                    new_name = fname
+                dst = ospath.join(path, new_name)
+                try:
+                    from shutil import move as os_move
+
+                    os_move(src, dst)
+                    self._listener.name = new_name
+                    LOGGER.warning(f"Recovered unknown_video → {new_name}: {error_msg}")
+                    return True
+                except Exception as mv_err:
+                    LOGGER.error(f"Failed to recover unknown_video: {mv_err}")
+                    self._on_download_error(error_msg)
+                    return False
+        self._on_download_error(error_msg)
+        return False
 
     async def add_download(self, path, qual, playlist, options):
         if playlist:

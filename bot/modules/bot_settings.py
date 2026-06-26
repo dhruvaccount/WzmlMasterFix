@@ -38,13 +38,14 @@ from .. import (
     excluded_extensions,
     auth_chats,
     sudo_users,
+    var_list,
 )
 from ..helper.ext_utils.bot_utils import (
     SetInterval,
     new_task,
 )
 from ..core.config_manager import Config
-from ..core.tg_client import TgClient
+from ..core.tg_client import TgClient, db_partition_id
 from ..core.torrent_manager import TorrentManager
 from ..core.startup import update_qb_options, update_nzb_options, update_variables
 from ..helper.ext_utils.db_handler import database
@@ -1430,6 +1431,11 @@ async def send_bot_settings(_, message):
 
 
 async def load_config():
+    import importlib
+    import sys
+
+    if "config" in sys.modules:
+        importlib.reload(sys.modules["config"])
     Config.load()
     drives_ids.clear()
     drives_names.clear()
@@ -1471,8 +1477,44 @@ async def load_config():
 
     if Config.DATABASE_URL:
         await database.connect()
-        config_dict = Config.get_all()
-        await database.update_config(config_dict)
+
+        from os import environ
+
+        settings = sys.modules.get("config")
+        config_file = {}
+        if settings:
+            config_file = {
+                k: v.strip() if isinstance(v, str) else v
+                for k, v in vars(settings).items()
+                if not k.startswith("__")
+            }
+        config_file.update({k: environ[k].strip() for k in var_list if k in environ})
+
+        part = db_partition_id((Config.BOT_TOKEN or "").split(":", 1)[0])
+        deploy_filter = {"_id": part}
+
+        old_config = await database.db.settings.deployConfig.find_one(
+            deploy_filter, {"_id": 0}
+        )
+        db_config = (
+            await database.db.settings.config.find_one(deploy_filter, {"_id": 0}) or {}
+        )
+
+        if old_config is None:
+            for k, v in config_file.items():
+                if v is not None:
+                    db_config.setdefault(k, v)
+        elif old_config != config_file:
+            for k, v in config_file.items():
+                if k not in old_config or old_config.get(k) != v:
+                    if v is not None:
+                        db_config[k] = v
+
+        Config.load_dict(db_config)
+        await database.db.settings.deployConfig.replace_one(
+            deploy_filter, config_file, upsert=True
+        )
+        await database.update_config(Config.get_all())
     else:
         await database.disconnect()
     await gather(initiate_search_tools(), start_from_queued(), rclone_serve_booter())

@@ -27,7 +27,10 @@ for _h in getLogger().handlers:
             pass
         break
 from .core.tg_client import TgClient
-from .helper.ext_utils.crash_reporter import send_unhandled_exception, send_async_exception
+from .helper.ext_utils.crash_reporter import (
+    send_unhandled_exception,
+    send_async_exception,
+)
 
 sys.excepthook = send_unhandled_exception
 

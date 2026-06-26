@@ -1,9 +1,9 @@
 import os
+from itertools import cycle
 from asyncio import (
     FIRST_COMPLETED,
     CancelledError,
     Lock,
-    Queue,
     create_task,
     ensure_future,
     gather,
@@ -40,12 +40,6 @@ from ...core.tg_client import TgClient
 from ..telegram_helper.tg_transfer import MB, HypertgTransfer
 
 KB = 1024
-_MIN_CHUNK = 64 * KB
-_DEFAULT_PIPELINE = 32
-_MIN_PIPELINE = 4
-_MAX_PIPELINE_MULT = 4
-_LOW_WORKERS = 2
-_HIGH_WORKERS = max(8, (cpu_count() or 4) * 2)
 _load_lock = Lock()
 
 
@@ -59,14 +53,27 @@ async def _pick_clients(wl, clients, count):
 
 
 class HypertgDownload(HypertgTransfer):
+    KB = 1024
+    _MIN_CHUNK = 64 * KB
+    _DEFAULT_PIPELINE = 32
+    _MIN_PIPELINE = 4
+    _MAX_PIPELINE_MULT = 4
+    _LOW_WORKERS = 2
+    _HIGH_WORKERS = max(8, (cpu_count() or 4) * 2)
+    _MAX_RETRIES = 4
+
     def __init__(self, obj):
         super().__init__(obj)
-        self.chunk_size = max(Config.HYPER_CHUNK or 256 * KB, _MIN_CHUNK)
+        self.chunk_size = max(Config.HYPER_CHUNK or 256 * self.KB, self._MIN_CHUNK)
         self.num_parts = Config.HYPER_THREADS or max(
-            _LOW_WORKERS, min(_HIGH_WORKERS, self.num_clients)
+            self._LOW_WORKERS, min(self._HIGH_WORKERS, self.num_clients)
         )
-        base_pipe = max(Config.HYPER_PIPELINE or _DEFAULT_PIPELINE, _MIN_PIPELINE)
-        self.pipeline_depth = max(base_pipe // max(self.num_parts, 1), _MIN_PIPELINE)
+        base_pipe = max(
+            Config.HYPER_PIPELINE or self._DEFAULT_PIPELINE, self._MIN_PIPELINE
+        )
+        self.pipeline_depth = max(
+            base_pipe // max(self.num_parts, 1), self._MIN_PIPELINE
+        )
         self.message = None
         self.media = None
         self.dump_chat = None
@@ -118,7 +125,9 @@ class HypertgDownload(HypertgTransfer):
         ):
             if m := getattr(message, attr, None):
                 return m
-        raise ValueError(f"No downloadable media in msg {message.id} (type: {message.media})")
+        raise ValueError(
+            f"No downloadable media in msg {message.id} (type: {message.media})"
+        )
 
     async def _do_req(self, sess, client, location, off, csz, attempt=0):
         try:
@@ -231,7 +240,7 @@ class HypertgDownload(HypertgTransfer):
                     await sleep(1)
         return None
 
-    async def _pipeline_fetch(self, idx, location, start, end, fid, queue, csz):
+    async def _pipeline_fetch(self, idx, location, start, end, fid, csz, fd):
         cname = self.clients[idx].me.username
         sess = await self._get_session(idx, fid.dc_id)
         loc = location
@@ -239,8 +248,8 @@ class HypertgDownload(HypertgTransfer):
         first_trim = start - first_off
         last_byte = end - 1
         window = self.pipeline_depth
-        min_win = _MIN_PIPELINE
-        max_win = window * _MAX_PIPELINE_MULT
+        min_win = self._MIN_PIPELINE
+        max_win = window * self._MAX_PIPELINE_MULT
         inflight = set()
         _inflight_offsets = {}
         cur = first_off
@@ -250,6 +259,20 @@ class HypertgDownload(HypertgTransfer):
         timeout_count = 0
         pipe_timeouts = 0
         bot_down = False
+
+        async def _write(roff, chunk):
+            if roff == first_off and roff + csz >= end:
+                chunk = chunk[first_trim : last_byte - roff + 1]
+                await self._pwrite(fd, start, chunk)
+            elif roff == first_off:
+                chunk = chunk[first_trim:]
+                await self._pwrite(fd, start, chunk)
+            elif roff + csz > end:
+                chunk = chunk[: end - roff]
+                await self._pwrite(fd, roff, chunk)
+            else:
+                await self._pwrite(fd, roff, chunk)
+            self._obj._processed_bytes += len(chunk)
 
         async def _req(off, s):
             nonlocal \
@@ -344,30 +367,17 @@ class HypertgDownload(HypertgTransfer):
                                 if not chunk:
                                     failed_offsets.add(roff)
                                     continue
-                                if roff == first_off and roff + csz >= end:
-                                    chunk = chunk[first_trim : last_byte - roff + 1]
-                                    await queue.put((start, chunk))
-                                elif roff == first_off:
-                                    chunk = chunk[first_trim:]
-                                    await queue.put((start, chunk))
-                                elif roff + csz > end:
-                                    chunk = chunk[: end - roff]
-                                    await queue.put((roff, chunk))
-                                else:
-                                    await queue.put((roff, chunk))
+                                await _write(roff, chunk)
                             except CancelledError:
                                 raise
                             except Exception:
                                 roff = _inflight_offsets.get(f)
                                 if roff is not None:
                                     failed_offsets.add(roff)
-                    remaining = []
                     c = cur
                     while c <= last_byte:
-                        remaining.append(c)
+                        failed_offsets.add(c)
                         c += csz
-                    if remaining:
-                        failed_offsets.update(remaining)
                     break
                 while len(inflight) < window and cur <= last_byte:
                     if self._cancel.is_set():
@@ -389,21 +399,11 @@ class HypertgDownload(HypertgTransfer):
                     if ok_count >= window:
                         window = min(window + 2, max_win)
                         ok_count = 0
-                    if roff == first_off and roff + csz >= end:
-                        chunk = chunk[first_trim : last_byte - roff + 1]
-                        await queue.put((start, chunk))
-                    elif roff == first_off:
-                        chunk = chunk[first_trim:]
-                        await queue.put((start, chunk))
-                    elif roff + csz > end:
-                        chunk = chunk[: end - roff]
-                        await queue.put((roff, chunk))
-                    else:
-                        await queue.put((roff, chunk))
+                    await _write(roff, chunk)
         except CancelledError:
             raise
         except Exception as e:
-            if "Flood" in type(e).__name__:
+            if isinstance(e, (FloodWait, FloodPremiumWait)):
                 window = max(min_win, window // 2)
                 ok_count = 0
             LOGGER.error(f"HypertgDL pipeline fail client={cname}: {e}")
@@ -416,66 +416,19 @@ class HypertgDownload(HypertgTransfer):
 
     async def _part(self, start, end, final_path, ci, fid, csz):
         cname = self.clients[ci].me.username
-        q = Queue(maxsize=self.pipeline_depth + 1)
-        err = [None]
-        failed_offsets = set()
-        completed_offsets = set()
-
-        async def _producer():
-            nonlocal failed_offsets
-            try:
-                result = await self._pipeline_fetch(
-                    ci, self._location(fid), start, end, fid, q, csz
-                )
-                if isinstance(result, set):
-                    failed_offsets = result
-            except CancelledError:
-                pass
-            except Exception as e:
-                err[0] = e
-                LOGGER.error(f"HypertgDL part fail ci={ci} client={cname}: {e}")
-            finally:
-                await q.put(None)
-
-        async def _consumer():
-            fd = await to_thread(os.open, final_path, os.O_WRONLY)
-            try:
-                while True:
-                    item = await q.get()
-                    if item is None:
-                        break
-                    roff, chunk = item
-                    await self._pwrite(fd, chunk, roff)
-                    self._obj._processed_bytes += len(chunk)
-                    completed_offsets.add(roff)
-            except Exception as e:
-                LOGGER.error(f"HypertgDL consumer err ci={ci}: {e}")
-                raise
-            finally:
-                await to_thread(os.close, fd)
-
-        prod = ensure_future(_producer())
+        fd = await to_thread(os.open, final_path, os.O_WRONLY)
         try:
-            await _consumer()
-            if err[0] is not None:
-                if not failed_offsets:
-                    first_off = start - (start % csz)
-                    c = first_off
-                    while c < end:
-                        if c not in completed_offsets:
-                            failed_offsets.add(c)
-                        c += csz
-                err[0].failed_offsets = failed_offsets
-                raise err[0]
-        except CancelledError:
-            prod.cancel()
-            raise
-        except Exception:
-            prod.cancel()
+            failed_offsets = await self._pipeline_fetch(
+                ci, self._location(fid), start, end, fid, csz, fd
+            )
+        except Exception as e:
+            first_off = start - (start % csz)
+            failed_offsets = set(range(first_off, end, csz))
+            LOGGER.error(f"HypertgDL part fail ci={ci} client={cname}: {e}")
+            e.failed_offsets = failed_offsets
             raise
         finally:
-            if not prod.done():
-                prod.cancel()
+            await to_thread(os.close, fd)
         return failed_offsets
 
     @staticmethod
@@ -488,6 +441,130 @@ class HypertgDownload(HypertgTransfer):
                 raise OSError(f"pwrite returned 0 at offset {offset + written}")
             written += n
 
+    async def _retry_failed_offsets(
+        self,
+        all_failed_offsets,
+        bad_bots,
+        ranges,
+        assigns,
+        fid_map,
+        final,
+        cidx=None,
+    ):
+        pool = cidx or list(self.clients.keys())
+        retry_round = 0
+        all_bad_mode = False
+        while all_failed_offsets:
+            retry_round += 1
+            await sleep(1)
+
+            good_bots = sorted(
+                [i for i in pool if i not in bad_bots],
+                key=lambda i: self.work_loads.get(i, 0),
+            )
+            if not good_bots:
+                fallback = max(bad_bots)
+                LOGGER.warning(
+                    f"HypertgDL retry: all bots bad, "
+                    f"falling back to {self.clients[fallback].me.username}"
+                )
+                good_bots = [fallback]
+                all_bad_mode = True
+
+            if retry_round > self._MAX_RETRIES and not all_bad_mode:
+                break
+
+            range_buckets = {i: [] for i in range(len(ranges))}
+            for off in all_failed_offsets:
+                for i, (s, e) in enumerate(ranges):
+                    if s <= off < e:
+                        range_buckets[i].append(off)
+                        break
+                else:
+                    LOGGER.error(f"HypertgDL retry: offset {off} outside all ranges")
+                    range_buckets[0].append(off)
+
+            LOGGER.warning(
+                f"HypertgDL retry round {retry_round}: "
+                f"{len(all_failed_offsets)} failed offsets"
+                f"{' (bad bots: ' + str(bad_bots) + ')' if bad_bots else ''}"
+            )
+
+            sorted_buckets = sorted(
+                [(i, offs) for i, offs in range_buckets.items() if offs],
+                key=lambda x: x[0],
+            )
+            good_bot_cycle = cycle(good_bots) if good_bots else None
+            bot_task_map = []
+            still_failed = set()
+            for i, bucket in sorted_buckets:
+                bot_idx = assigns[i]
+                if bot_idx in bad_bots:
+                    if not good_bot_cycle:
+                        still_failed |= set(bucket)
+                        continue
+                    bot_idx = next(good_bot_cycle)
+
+                if bot_idx not in fid_map:
+                    try:
+                        fid_map[bot_idx] = await self._fetch_ref(
+                            bot_idx, self.clients[bot_idx]
+                        )
+                    except Exception:
+                        bad_bots.add(bot_idx)
+                        still_failed |= set(bucket)
+                        continue
+                retry_start = min(bucket)
+                retry_end = min(max(bucket) + self.chunk_size, self.file_size)
+                task = create_task(
+                    self._part(
+                        retry_start,
+                        retry_end,
+                        final,
+                        bot_idx,
+                        fid_map[bot_idx],
+                        self.chunk_size,
+                    )
+                )
+                bot_task_map.append((bot_idx, bucket, task))
+
+            if not bot_task_map:
+                LOGGER.error("HypertgDL retry: no bots available for retry")
+                break
+
+            retry_results = await gather(
+                *[t for _, _, t in bot_task_map], return_exceptions=True
+            )
+            for (bot_idx, bucket, _), r in zip(bot_task_map, retry_results):
+                if isinstance(r, BaseException):
+                    LOGGER.error(
+                        f"HypertgDL retry ci={bot_idx} "
+                        f"client={self.clients[bot_idx].me.username} "
+                        f"failed: {r}"
+                    )
+                    if hasattr(r, "failed_offsets") and r.failed_offsets:
+                        still_failed |= r.failed_offsets
+                    else:
+                        still_failed |= set(bucket)
+                    bad_bots.add(bot_idx)
+                elif isinstance(r, set) and r:
+                    still_failed |= r
+                    bad_bots.add(bot_idx)
+            all_failed_offsets = still_failed
+
+        if all_failed_offsets:
+            n_bad = len(bad_bots)
+            bad_detail = (
+                f" ({n_bad} bot{'s' if n_bad != 1 else ''} exhausted)" if n_bad else ""
+            )
+            LOGGER.error(
+                f"HypertgDL {len(all_failed_offsets)} offsets still failed "
+                f"after {self._MAX_RETRIES} retry rounds — file may be incomplete"
+                f"{bad_detail}"
+            )
+
+        return all_failed_offsets, bad_bots
+
     async def handle_download(self):
         self._cancel.clear()
         self._obj._processed_bytes = 0
@@ -496,9 +573,32 @@ class HypertgDownload(HypertgTransfer):
             sub("\\\\", "/", os.path.join(self.directory, self.file_name))
         )
 
-        n_use = min(self.num_parts, self.num_clients)
-        cidx = await _pick_clients(self.work_loads, self.clients, n_use)
+        mode = getattr(self._listener, "transmission_mode", "bot")
+        bot_clients = {k: v for k, v in self.clients.items() if k > 0}
+        user_clients = {k: v for k, v in self.clients.items() if k < 0}
 
+        if mode == "bot":
+            use_clients = bot_clients
+        elif mode == "user":
+            use_clients = user_clients
+        else:
+            use_clients = self.clients
+
+        if not use_clients:
+            LOGGER.error(f"HypertgDL no clients for mode {mode}")
+            return None
+
+        use_count = min(self.num_parts, len(use_clients))
+
+        if mode == "both" and bot_clients and user_clients:
+            n_bot = min(len(bot_clients), max(1, use_count // 2))
+            n_user = min(len(user_clients), use_count - n_bot)
+            cidx = await _pick_clients(self.work_loads, bot_clients, n_bot)
+            cidx.extend(await _pick_clients(self.work_loads, user_clients, n_user))
+        else:
+            cidx = await _pick_clients(self.work_loads, use_clients, use_count)
+
+        n_use = len(cidx)
         min_part = 1 * MB
         n_parts = (
             min(n_use, max(1, self.file_size // min_part))
@@ -565,135 +665,15 @@ class HypertgDownload(HypertgTransfer):
                 elif isinstance(r, set) and r:
                     all_failed_offsets.update(r)
                     bad_bots.add(assigns[i])
-            max_retries = 4
-            retry_round = 0
-            all_bad_mode = False
-            while all_failed_offsets:
-                retry_round += 1
-
-                await sleep(1)
-
-                good_bots = sorted(
-                    [i for i in self.clients.keys() if i not in bad_bots],
-                    key=lambda i: self.work_loads.get(i, 0),
-                )
-                if not good_bots:
-                    fallback = max(bad_bots)
-                    LOGGER.warning(
-                        f"HypertgDL retry: all bots bad, "
-                        f"falling back to {self.clients[fallback].me.username}"
-                    )
-                    good_bots = [fallback]
-                    all_bad_mode = True
-
-                if retry_round > max_retries and not all_bad_mode:
-                    break
-
-                range_buckets = {i: [] for i in range(len(ranges))}
-                orphans = 0
-                for off in all_failed_offsets:
-                    matched = False
-                    for i, (s, e) in enumerate(ranges):
-                        if s <= off < e:
-                            range_buckets[i].append(off)
-                            matched = True
-                            break
-                    if not matched:
-                        LOGGER.error(
-                            f"HypertgDL retry: offset {off} outside all ranges"
-                        )
-                        range_buckets[0].append(off)
-                        orphans += 1
-
-                orphans_str = f" {orphans} orphans" if orphans else ""
-                LOGGER.warning(
-                    f"HypertgDL retry round {retry_round}: "
-                    f"{len(all_failed_offsets)} failed offsets"
-                    f"{orphans_str}"
-                    f"{' (bad bots: ' + str(bad_bots) + ')' if bad_bots else ''}"
-                )
-
-                sorted_buckets = sorted(
-                    [(i, offs) for i, offs in range_buckets.items() if offs],
-                    key=lambda x: x[0],
-                )
-                assigned = set()
-                bot_task_map = []
-                still_failed = set()
-                for i, bucket in sorted_buckets:
-                    bot_idx = assigns[i]
-                    if bot_idx in bad_bots or bot_idx in assigned:
-                        for gb in good_bots:
-                            if gb not in bad_bots and gb not in assigned:
-                                bot_idx = gb
-                                assigned.add(gb)
-                                break
-                        else:
-                            still_failed |= set(bucket)
-                            continue
-                    else:
-                        assigned.add(bot_idx)
-
-                    if bot_idx not in fid_map:
-                        try:
-                            fid_map[bot_idx] = await self._fetch_ref(
-                                bot_idx, self.clients[bot_idx]
-                            )
-                        except Exception:
-                            bad_bots.add(bot_idx)
-                            still_failed |= set(bucket)
-                            continue
-                    retry_start = min(bucket)
-                    retry_end = min(max(bucket) + self.chunk_size, self.file_size)
-                    task = create_task(
-                        self._part(
-                            retry_start,
-                            retry_end,
-                            final,
-                            bot_idx,
-                            fid_map[bot_idx],
-                            self.chunk_size,
-                        )
-                    )
-                    bot_task_map.append((bot_idx, bucket, task))
-
-                if not bot_task_map:
-                    LOGGER.error("HypertgDL retry: no bots available for retry")
-                    break
-
-                retry_results = await gather(
-                    *[t for _, _, t in bot_task_map], return_exceptions=True
-                )
-                for (bot_idx, bucket, _), r in zip(bot_task_map, retry_results):
-                    if isinstance(r, BaseException):
-                        LOGGER.error(
-                            f"HypertgDL retry ci={bot_idx} "
-                            f"client={self.clients[bot_idx].me.username} "
-                            f"failed: {r}"
-                        )
-                        if hasattr(r, "failed_offsets") and r.failed_offsets:
-                            still_failed |= r.failed_offsets
-                        else:
-                            still_failed |= set(bucket)
-                        bad_bots.add(bot_idx)
-                    elif isinstance(r, set):
-                        if r:
-                            still_failed |= r
-                            bad_bots.add(bot_idx)
-                all_failed_offsets = still_failed
-
-            if all_failed_offsets:
-                n_bad = len(bad_bots)
-                bad_detail = (
-                    f" ({n_bad} bot{'s' if n_bad != 1 else ''} exhausted)"
-                    if n_bad
-                    else ""
-                )
-                LOGGER.error(
-                    f"HypertgDL {len(all_failed_offsets)} offsets still failed "
-                    f"after {max_retries} retry rounds — file may be incomplete"
-                    f"{bad_detail}"
-                )
+            all_failed_offsets, bad_bots = await self._retry_failed_offsets(
+                all_failed_offsets,
+                bad_bots,
+                ranges,
+                assigns,
+                fid_map,
+                final,
+                cidx=cidx,
+            )
 
             return final
         except FloodWait:

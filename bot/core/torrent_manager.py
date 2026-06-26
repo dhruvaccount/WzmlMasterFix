@@ -16,6 +16,7 @@ from tenacity import (
 )
 
 from .. import LOGGER, aria2_options
+from ..helper.ext_utils.bot_utils import derive_service_password
 from .config_manager import BinConfig, Config
 
 
@@ -38,6 +39,13 @@ def wrap_with_retry(obj, max_retries=3):
     return obj
 
 
+def _qbit_password():
+    return derive_service_password(
+        (Config.BOT_TOKEN or "").split(":", 1)[0] or "0",
+        "qbit",
+    )
+
+
 async def _connect_aria2(retries=5, delay=2):
     from aioaria2.exceptions import Aria2rpcException
 
@@ -56,6 +64,17 @@ class TorrentManager:
     _qbit_process = None
     _last_qbit_restart = 0
     _restart_debounce = 60
+
+    @classmethod
+    async def _auth_qbit(cls):
+        if cls.qbittorrent is None:
+            return False
+        pwd = _qbit_password()
+        try:
+            await cls.qbittorrent.auth.login("admin", pwd)
+            return True
+        except Exception:
+            return False
 
     @classmethod
     async def initiate(cls):
@@ -77,6 +96,7 @@ class TorrentManager:
 
             cls.qbittorrent = await create_client("http://localhost:8090/api/v2/")
             cls.qbittorrent = wrap_with_retry(cls.qbittorrent)
+            await cls._auth_qbit()
 
         except Exception as e:
             LOGGER.error(f"Error during initialization: {e}")
@@ -125,6 +145,7 @@ class TorrentManager:
             await sleep(3)
             cls.qbittorrent = await create_client("http://localhost:8090/api/v2/")
             cls.qbittorrent = wrap_with_retry(cls.qbittorrent)
+            await cls._auth_qbit()
             LOGGER.info("qBittorrent (re)started successfully")
             return True
         except Exception as e:

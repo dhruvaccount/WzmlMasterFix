@@ -111,8 +111,11 @@ def send_async_exception(context):
 
 async def _upload_logs(log_lines):
     from .telegraph_helper import telegraph
+
     try:
-        html = "<pre>" + "".join(_esc_html(line) + "\n" for line in log_lines) + "</pre>"
+        html = (
+            "<pre>" + "".join(_esc_html(line) + "\n" for line in log_lines) + "</pre>"
+        )
         page = await telegraph.create_page(title="Crash Logs", content=html)
         return page["url"]
     except Exception as e:

@@ -363,7 +363,11 @@ class TaskListener(TaskConfig):
             tg = TelegramUploader(self, up_dir)
             async with task_dict_lock:
                 task_dict[self.mid] = TelegramStatus(
-                    self, tg, gid, "up", "hul" if Config.USE_HYPER and TgClient.helper_bots else ""
+                    self,
+                    tg,
+                    gid,
+                    "up",
+                    "hul" if Config.USE_HYPER and TgClient.helper_bots else "",
                 )
             await gather(
                 update_status_message(self.message.chat.id),

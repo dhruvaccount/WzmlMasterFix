@@ -57,10 +57,12 @@ async def update_qb_options():
                 del qbit_options[k]
         qbit_options["web_ui_password"] = pwd
         await TorrentManager.qbittorrent.app.set_preferences({"web_ui_password": pwd})
+        await TorrentManager._auth_qbit()
     else:
         if qbit_options.get("web_ui_password") in ("admin", "admin1", ""):
             qbit_options["web_ui_password"] = pwd
         await TorrentManager.qbittorrent.app.set_preferences(qbit_options)
+        await TorrentManager._auth_qbit()
 
 
 async def update_aria2_options():
@@ -411,6 +413,7 @@ async def load_configurations():
             await TorrentManager.qbittorrent.app.set_preferences(qbit_options)
         except Exception as e:
             LOGGER.error(f"Failed to configure qBittorrent: {e}")
+        await TorrentManager._auth_qbit()
 
     PORT = getenv("PORT", "") or "8080"
     if PORT:
