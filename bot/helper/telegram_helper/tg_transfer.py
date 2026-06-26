@@ -20,7 +20,7 @@ from ...core.tg_client import TgClient
 
 MB = 1024 * 1024
 
-_crypto_workers = min(4, max(2, cpu_count() or 4))
+_crypto_workers = min(6, max(2, cpu_count() or 4))
 pyrogram.crypto_executor = ThreadPoolExecutor(
     max_workers=_crypto_workers, thread_name_prefix="crypto"
 )
@@ -225,7 +225,6 @@ class HypertgTransfer:
                 await s.stop()
                 LOGGER.error(f"HypertgTransfer mk_session dc={dc_id} auth failed")
                 raise AuthBytesInvalid
-        client.media_sessions[dc_id] = s
         return s
 
     async def _get_session(self, idx, dc_id, force=False):

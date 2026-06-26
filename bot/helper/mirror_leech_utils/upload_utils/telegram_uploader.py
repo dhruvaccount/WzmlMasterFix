@@ -470,7 +470,7 @@ class TelegramUploader:
         f_path = f_path or self._up_path
         up_size = await aiopath.getsize(f_path)
 
-        if up_size > 10 * 1024 * 1024:
+        if Config.USE_HYPER and up_size > 10 * 1024 * 1024:
             try:
                 if self._hu is None:
                     self._hu = HypertgUpload(self)
