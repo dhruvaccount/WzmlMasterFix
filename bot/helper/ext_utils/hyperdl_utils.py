@@ -263,15 +263,15 @@ class HypertgDownload(HypertgTransfer):
         async def _write(roff, chunk):
             if roff == first_off and roff + csz >= end:
                 chunk = chunk[first_trim : last_byte - roff + 1]
-                await self._pwrite(fd, start, chunk)
+                await self._pwrite(fd, chunk, start)
             elif roff == first_off:
                 chunk = chunk[first_trim:]
-                await self._pwrite(fd, start, chunk)
+                await self._pwrite(fd, chunk, start)
             elif roff + csz > end:
                 chunk = chunk[: end - roff]
-                await self._pwrite(fd, roff, chunk)
+                await self._pwrite(fd, chunk, roff)
             else:
-                await self._pwrite(fd, roff, chunk)
+                await self._pwrite(fd, chunk, roff)
             self._obj._processed_bytes += len(chunk)
 
         async def _req(off, s):
