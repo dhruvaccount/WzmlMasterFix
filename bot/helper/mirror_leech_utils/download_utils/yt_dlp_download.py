@@ -165,7 +165,9 @@ class YoutubeDLHelper:
                 for entry in result["entries"]:
                     if not entry:
                         continue
-                    elif "filesize_approx" in entry:
+                    if entry.get("ext") == "unknown_video":
+                        entry["ext"] = "mp4"
+                    if "filesize_approx" in entry:
                         self._listener.size += entry.get("filesize_approx", 0) or 0
                     elif "filesize" in entry:
                         self._listener.size += entry.get("filesize", 0) or 0
@@ -177,6 +179,8 @@ class YoutubeDLHelper:
                         if not self._ext:
                             self._ext = ext
             else:
+                if result.get("ext") == "unknown_video":
+                    result["ext"] = "mp4"
                 outtmpl_ = "%(title,fulltitle,alt_title)s%(season_number& |)s%(season_number&S|)s%(season_number|)02d%(episode_number&E|)s%(episode_number|)02d%(height& |)s%(height|)s%(height&p|)s%(fps|)s%(fps&fps|)s%(tbr& |)s%(tbr|)d.%(ext)s"
                 realName = ydl.prepare_filename(result, outtmpl=outtmpl_)
                 ext = ospath.splitext(realName)[-1]
@@ -193,13 +197,7 @@ class YoutubeDLHelper:
                     ydl.download([self._listener.link])
                 except DownloadError as e:
                     if not self._listener.is_cancelled:
-                        error_msg = str(e)
-                        if error_msg.startswith("Postprocessing:"):
-                            if not self._recover_postprocess_error(path, error_msg):
-                                return
-                        else:
-                            self._on_download_error(error_msg)
-                            return
+                        self._on_download_error(str(e))
                     return
             if self.is_playlist and (
                 not ospath.exists(path) or len(listdir(path)) == 0
@@ -212,32 +210,6 @@ class YoutubeDLHelper:
                 return
             async_to_sync(self._listener.on_download_complete)
         return
-
-    def _recover_postprocess_error(self, path, error_msg):
-        expected = ospath.join(path, self._listener.name)
-        if ospath.exists(expected):
-            LOGGER.warning(f"Postprocessing error ignored — file exists: {error_msg}")
-            return True
-        for fname in listdir(path):
-            if fname.endswith(".unknown_video"):
-                src = ospath.join(path, fname)
-                new_name = fname.replace(".unknown_video", "")
-                if not new_name:
-                    new_name = fname
-                dst = ospath.join(path, new_name)
-                try:
-                    from shutil import move as os_move
-
-                    os_move(src, dst)
-                    self._listener.name = new_name
-                    LOGGER.warning(f"Recovered unknown_video → {new_name}: {error_msg}")
-                    return True
-                except Exception as mv_err:
-                    LOGGER.error(f"Failed to recover unknown_video: {mv_err}")
-                    self._on_download_error(error_msg)
-                    return False
-        self._on_download_error(error_msg)
-        return False
 
     async def add_download(self, path, qual, playlist, options):
         if playlist:

@@ -146,6 +146,10 @@ class HypertgTransfer:
                 self.clients[-no] = client
             for no, load in TgClient.helper_user_loads.items():
                 self.work_loads[-no] = load
+        if TgClient.user and all(c is not TgClient.user for c in self.clients.values()):
+            key = -(len(TgClient.helper_users) + 1)
+            self.clients[key] = TgClient.user
+            self.work_loads[key] = 0
         self.num_clients = len(self.clients)
         self._sessions = {}
         self._session_locks = {}
