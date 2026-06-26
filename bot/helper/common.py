@@ -167,15 +167,22 @@ class TaskConfig:
         self.mode = tuple()
 
     def _set_mode_engine(self):
-        self.source_url = (
-            self.link
-            if len(self.link) > 0 and self.link.startswith("http")
-            else (
-                f"https://t.me/share/url?url={self.link}"
-                if self.link
-                else self.message.link
+        if self.is_nzb and self.link and "/getnzb/api/" in self.link:
+            try:
+                nzb_id = self.link.split("/getnzb/api/")[1].split("?")[0]
+                self.source_url = f"NZB: {nzb_id}"
+            except Exception:
+                self.source_url = "NZB Link"
+        else:
+            self.source_url = (
+                self.link
+                if len(self.link) > 0 and self.link.startswith("http")
+                else (
+                    f"https://t.me/share/url?url={self.link}"
+                    if self.link
+                    else self.message.link
+                )
             )
-        )
 
         out_mode = f"#{'Leech' if self.is_leech else 'UphosterUpload' if self.is_uphoster else 'Clone' if self.is_clone else 'Mega' if self.up_dest in ('mega', 'mega:') else 'RClone' if self.up_dest.startswith('mrcc:') or is_rclone_path(self.up_dest) else 'GDrive' if self.up_dest.startswith(('mtp:', 'tp:', 'sa:')) or is_gdrive_id(self.up_dest) else 'UpHosters'}"
         out_mode += " (Zip)" if self.compress else " (Unzip)" if self.extract else ""
@@ -192,8 +199,7 @@ class TaskConfig:
         if dest.startswith("mtp:"):
             return f"tokens/{self.user_id}.pickle"
         elif Config.USE_SERVICE_ACCOUNTS and (
-            dest.startswith("sa:")
-            or not dest.startswith("tp:")
+            dest.startswith("sa:") or not dest.startswith("tp:")
         ):
             return "accounts"
         else:
@@ -299,7 +305,9 @@ class TaskConfig:
                 self.up_dest = merged_cats[self.category]["drive_id"]
                 self.index_link = merged_cats[self.category].get("index_link", "")
             else:
-                drive_id, index_link, is_cancelled = await open_category_btns(self.message)
+                drive_id, index_link, is_cancelled = await open_category_btns(
+                    self.message
+                )
                 if is_cancelled:
                     self.is_cancelled = True
                     return
@@ -343,14 +351,20 @@ class TaskConfig:
                     self.user_dict.get("DEFAULT_UPLOAD", "") or Config.DEFAULT_UPLOAD
                 )
                 if not self.is_uphoster and (
-                    (not self.up_dest and default_upload == "rc") or self.up_dest == "rc"
+                    (not self.up_dest and default_upload == "rc")
+                    or self.up_dest == "rc"
                 ):
-                    self.up_dest = self.user_dict.get("RCLONE_PATH") or Config.RCLONE_PATH
+                    self.up_dest = (
+                        self.user_dict.get("RCLONE_PATH") or Config.RCLONE_PATH
+                    )
                 elif not self.is_uphoster and (
-                    (not self.up_dest and default_upload == "gd") or self.up_dest == "gd"
+                    (not self.up_dest and default_upload == "gd")
+                    or self.up_dest == "gd"
                 ):
                     self.up_dest = self.user_dict.get("GDRIVE_ID") or Config.GDRIVE_ID
-                elif (not self.up_dest and default_upload == "mega") or self.up_dest == "mega":
+                elif (
+                    not self.up_dest and default_upload == "mega"
+                ) or self.up_dest == "mega":
                     self.up_dest = "mega:"
 
                 if self.is_uphoster and not self.up_dest:
@@ -399,7 +413,11 @@ class TaskConfig:
             else:
                 raise ValueError("Wrong Upload Destination!")
 
-            if self.up_dest not in ["rcl", "gdl"] and not self.is_uphoster and self.up_dest != "mega:":
+            if (
+                self.up_dest not in ["rcl", "gdl"]
+                and not self.is_uphoster
+                and self.up_dest != "mega:"
+            ):
                 await self.is_token_exists(self.up_dest, "up")
 
             if self.up_dest == "rcl":
@@ -553,7 +571,9 @@ class TaskConfig:
                 and "EQUAL_SPLITS" not in self.user_dict
             )
             self.max_split_size = (
-                TgClient.MAX_SPLIT_SIZE if self.transmission_mode in ("user", "both") else 2097152000
+                TgClient.MAX_SPLIT_SIZE
+                if self.transmission_mode in ("user", "both")
+                else 2097152000
             )
             self.split_size = min(self.split_size, self.max_split_size)
 
@@ -726,7 +746,7 @@ class TaskConfig:
         except Exception:
             await send_message(
                 self.message,
-                "Reply to text file or to telegram message that have links seperated by new line!",
+                "Reply to text file or to telegram message that has links separated by new line!",
             )
 
     async def proceed_extract(self, dl_path, gid):
