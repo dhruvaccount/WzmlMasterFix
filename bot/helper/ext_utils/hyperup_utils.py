@@ -2,7 +2,7 @@ import asyncio
 from hashlib import md5
 from math import ceil
 from mimetypes import guess_type
-from os import path as ospath
+from os import cpu_count, path as ospath
 from re import search as research
 
 from pyrogram import StopTransmission, raw, utils
@@ -66,8 +66,8 @@ class HypertgUpload(HypertgTransfer):
         dc_id = await client.storage.dc_id()
         is_big = file_size > 10 * MB
 
-        n_sessions = 4
-        n_workers = n_sessions * WORKERS_PER_SESSION
+        n_sessions = max(3, (cpu_count() or 4))
+        n_workers = n_sessions * 4
         q = asyncio.Queue(64)
         fp = open(file_path, "rb", buffering=4 * 1024 * 1024)
 
@@ -75,6 +75,8 @@ class HypertgUpload(HypertgTransfer):
             return await self._mk_session(client, dc_id, mode=1)
 
         pool = [await _make_session() for _ in range(n_sessions)]
+
+        bytes_uploaded = 0
 
         def _make_rpc(chunk, part_idx):
             if is_big:
@@ -91,8 +93,8 @@ class HypertgUpload(HypertgTransfer):
             )
 
         async def _worker(wid, session):
-            nonlocal dc_id
-            completed = 0
+            nonlocal dc_id, bytes_uploaded
+            slot = wid % n_sessions
             while True:
                 data = await q.get()
                 try:
@@ -102,8 +104,8 @@ class HypertgUpload(HypertgTransfer):
                     rpc = _make_rpc(chunk, part_idx)
                     for attempt in range(5):
                         try:
-                            await session.invoke(rpc, retries=0)
-                            completed += 1
+                            await session.invoke(rpc)
+                            bytes_uploaded += len(chunk)
                             break
                         except UserMigrate as e:
                             nd = getattr(e, "value", None)
@@ -116,14 +118,16 @@ class HypertgUpload(HypertgTransfer):
                             await client.storage.dc_id(nd)
                             await session.stop()
                             session = await _make_session()
+                            pool[slot] = session
+                            continue
                         except StopTransmission:
                             raise
                         except asyncio.CancelledError:
                             return
-                        except (OSError, TimeoutError, ConnectionError):
+                        except (OSError, TimeoutError, ConnectionError) as e:
                             LOGGER.warning(
                                 f"HypertgUL worker {wid} transport "
-                                f"attempt {attempt + 1}/5"
+                                f"err={type(e).__name__} attempt {attempt + 1}/5"
                             )
                             if attempt == 4:
                                 raise
@@ -132,6 +136,7 @@ class HypertgUpload(HypertgTransfer):
                             except Exception:
                                 pass
                             session = await _make_session()
+                            pool[slot] = session
                             await asyncio.sleep(1)
                         except Exception:
                             if attempt == 4:
@@ -140,10 +145,7 @@ class HypertgUpload(HypertgTransfer):
                 finally:
                     q.task_done()
 
-        workers = [
-            asyncio.create_task(_worker(i, pool[i % n_sessions]))
-            for i in range(n_workers)
-        ]
+        workers = [asyncio.create_task(_worker(i, pool[i])) for i in range(n_workers)]
 
         LOGGER.info(
             f"HypertgUL start "
@@ -153,14 +155,11 @@ class HypertgUpload(HypertgTransfer):
 
         try:
             parts_sent = 0
-            next_chunk_task = None
+            next_chunk_task = asyncio.create_task(asyncio.to_thread(fp.read, PART_SIZE))
             for part in range(file_total_parts):
                 if self._listener.is_cancelled:
                     raise StopTransmission()
-                if next_chunk_task:
-                    chunk = await next_chunk_task
-                else:
-                    chunk = await asyncio.to_thread(fp.read, PART_SIZE)
+                chunk = await next_chunk_task
                 if not chunk:
                     break
                 if all(t.done() for t in workers):
@@ -169,16 +168,18 @@ class HypertgUpload(HypertgTransfer):
                         if exc is not None:
                             raise exc
                     raise RuntimeError("All upload workers exited")
-                await q.put((chunk, part))
                 if part + 1 < file_total_parts:
                     next_chunk_task = asyncio.create_task(
                         asyncio.to_thread(fp.read, PART_SIZE)
                     )
+                else:
+                    next_chunk_task = None
+                await q.put((chunk, part))
                 parts_sent += 1
 
                 if parts_sent > 0 and parts_sent % max(1, file_total_parts // 10) == 0:
                     elapsed = _time.monotonic() - _t0
-                    mb_done = parts_sent * PART_SIZE / (1024 * 1024)
+                    mb_done = bytes_uploaded / (1024 * 1024)
                     mb_total = file_size / (1024 * 1024)
                     LOGGER.info(
                         f"HypertgUL {ospath.basename(file_path)} "
@@ -186,7 +187,7 @@ class HypertgUpload(HypertgTransfer):
                         f"MB={mb_done:.0f}/{mb_total:.0f} "
                         f"speed={mb_done / elapsed:.1f}MB/s"
                     )
-                self._obj._processed_bytes = min(parts_sent * PART_SIZE, file_size)
+                self._obj._processed_bytes = min(bytes_uploaded, file_size)
 
             await q.join()
             for _ in workers:
