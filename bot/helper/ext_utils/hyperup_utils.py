@@ -92,7 +92,7 @@ class HypertgUpload(HypertgTransfer):
                 bytes=chunk,
             )
 
-        async def _worker(wid, session):
+        async def _worker(wid):
             nonlocal dc_id, bytes_uploaded
             slot = wid % n_sessions
             while True:
@@ -102,6 +102,7 @@ class HypertgUpload(HypertgTransfer):
                         return
                     chunk, part_idx = data
                     rpc = _make_rpc(chunk, part_idx)
+                    session = pool[slot]
                     for attempt in range(5):
                         try:
                             await session.invoke(rpc)
@@ -145,7 +146,10 @@ class HypertgUpload(HypertgTransfer):
                 finally:
                     q.task_done()
 
-        workers = [asyncio.create_task(_worker(i, pool[i])) for i in range(n_workers)]
+        workers = [
+            asyncio.create_task(_worker(i))
+            for i in range(n_workers)
+        ]
 
         LOGGER.info(
             f"HypertgUL start "

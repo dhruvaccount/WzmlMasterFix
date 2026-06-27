@@ -86,10 +86,10 @@ async def _safe_abridged_send(self, data):
         bytes([length]) if length <= 126 else b"\x7f" + length.to_bytes(3, "little")
     )
     data = header + data
+    payload = await self.loop.run_in_executor(
+        pyrogram.crypto_executor, aes.ctr256_encrypt, data, *self.encrypt
+    )
     async with self.lock:
-        payload = await self.loop.run_in_executor(
-            pyrogram.crypto_executor, aes.ctr256_encrypt, data, *self.encrypt
-        )
         self.writer.write(payload)
         await self.writer.drain()
 
@@ -119,6 +119,18 @@ async def _safe_session_stop(self):
 
 
 Session.stop = _safe_session_stop
+
+_orig_restart = Session.restart
+
+
+async def _safe_restart(self):
+    try:
+        await _orig_restart(self)
+    except Exception as e:
+        LOGGER.warning(f"Session restart fail dc={self.dc_id}: {type(e).__name__}: {e}")
+
+
+Session.restart = _safe_restart
 
 _orig_dc_new = DataCenter.__new__
 

@@ -39,7 +39,7 @@ class TelegramDownloadHelper:
             and Config.LEECH_DUMP_CHAT
             and (
                 (tm in ("bot", "both") and len(TgClient.helper_bots) != 0)
-                or (tm in ("user", "both") and len(TgClient.helper_users) != 0)
+                or (tm in ("user", "both") and (len(TgClient.helper_users) != 0 or TgClient.user is not None))
             )
         )
         self._hyper_dl_instance = None
