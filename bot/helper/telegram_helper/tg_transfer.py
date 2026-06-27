@@ -51,12 +51,8 @@ async def _native_connect(self, address):
     if sock:
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 60)
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10)
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * MB)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * MB)
-            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NOTSENT_LOWAT, 64 * 1024)
         except (OSError, AttributeError):
             pass
 
@@ -124,10 +120,17 @@ _orig_restart = Session.restart
 
 
 async def _safe_restart(self):
-    try:
-        await _orig_restart(self)
-    except Exception as e:
-        LOGGER.warning(f"Session restart fail dc={self.dc_id}: {type(e).__name__}: {e}")
+    for attempt in range(3):
+        try:
+            await _orig_restart(self)
+            return
+        except Exception as e:
+            LOGGER.warning(
+                f"Session restart dc={self.dc_id} attempt {attempt+1}/3 "
+                f"{type(e).__name__}: {e}"
+            )
+            if attempt < 2:
+                await sleep(2 ** attempt)
 
 
 Session.restart = _safe_restart

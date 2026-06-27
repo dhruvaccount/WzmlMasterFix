@@ -206,7 +206,7 @@ async def edit_message(message, text, buttons=None, block=True, photo=None):
             return str(f)
         await sleep(f.value * 1.2)
         return await edit_message(message, text, buttons, block, photo)
-    except ConnectionError:
+    except OSError:
         return
     except Exception as e:
         LOGGER.error(str(e), exc_info=True)
@@ -222,7 +222,7 @@ async def edit_reply_markup(message, buttons):
         LOGGER.warning(str(f))
         await sleep(f.value * 1.2)
         return await edit_reply_markup(message, buttons)
-    except ConnectionError:
+    except OSError:
         return
     except Exception as e:
         LOGGER.error(str(e), exc_info=True)
