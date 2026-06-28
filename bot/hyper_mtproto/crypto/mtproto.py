@@ -37,8 +37,4 @@ def unpack(packet, auth_key):
     msg_key_check = msg_key_large[8:24]
     if msg_key_check != msg_key:
         raise ValueError("msg_key mismatch")
-    msg_id = decrypted[16:24]
-    seq_no = struct.unpack("<I", decrypted[24:28])[0]
-    msg_len = struct.unpack("<I", decrypted[28:32])[0]
-    msg_data = decrypted[32 : 32 + msg_len]
-    return msg_id, seq_no, msg_data
+    return msg_key, None, decrypted

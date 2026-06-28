@@ -7,7 +7,7 @@ from io import BytesIO
 
 from pyrogram import raw
 from pyrogram.raw.all import layer
-from pyrogram.raw.core import TLObject
+from pyrogram.raw.core import Message, FutureSalts
 
 from .connection import Connection
 from .crypto import mtproto as mtproto_crypto
@@ -239,46 +239,69 @@ class Session:
     async def handle_packet(self, data):
         loop = asyncio.get_running_loop()
         try:
-            msg_id, seq_no, msg_bytes = await loop.run_in_executor(
+            _, _, plain_text = await loop.run_in_executor(
                 self._executor, mtproto_crypto.unpack, data, self.auth_key
             )
         except ValueError as e:
             log.warning("Session DC%d unpack failed: %s", self.dc_id, e)
             return
 
-        result = await loop.run_in_executor(
-            self._executor, TLObject.read, BytesIO(msg_bytes)
+        message = await loop.run_in_executor(
+            self._executor, Message.read, BytesIO(plain_text)
         )
 
-        rtype = type(result).__name__
+        rtype = type(message.body).__name__
         log.info("Session DC%d recv: %s", self.dc_id, rtype)
 
-        if isinstance(result, raw.types.MsgsAck):
-            return
+        messages = (
+            message.body.messages
+            if isinstance(message.body, raw.types.MsgContainer)
+            else [message]
+        )
 
-        if isinstance(result, raw.types.NewSessionCreated):
-            self.salt = result.server_salt
-            log.info("Session DC%d NewSessionCreated salt=%d", self.dc_id, self.salt)
-            return
+        for msg in messages:
+            if isinstance(msg.body, raw.types.MsgsAck):
+                continue
 
-        if isinstance(result, (raw.types.BadMsgNotification, raw.types.BadServerSalt)):
-            msg_id = result.bad_msg_id
-        elif isinstance(result, raw.types.RpcResult):
-            msg_id = result.req_msg_id
-        else:
-            # Fallback: match by transport msg_id for Pong etc.
-            msg_id = int.from_bytes(msg_id, "little", signed=True)
+            if isinstance(msg.body, raw.types.NewSessionCreated):
+                self.salt = msg.body.server_salt
+                log.info(
+                    "Session DC%d NewSessionCreated salt=%d", self.dc_id, self.salt
+                )
+                continue
 
-        if msg_id in self._pending:
-            self._pending[msg_id].value = getattr(result, "result", result)
-            self._pending[msg_id].event.set()
-        else:
-            log.info(
-                "Session DC%d unmatched response msg_id=%d type=%s",
-                self.dc_id,
-                msg_id,
-                rtype,
-            )
+            if isinstance(
+                msg.body, (raw.types.MsgDetailedInfo, raw.types.MsgNewDetailedInfo)
+            ):
+                continue
+
+            match_id = None
+
+            if isinstance(
+                msg.body, (raw.types.BadMsgNotification, raw.types.BadServerSalt)
+            ):
+                match_id = msg.body.bad_msg_id
+            elif isinstance(msg.body, (raw.types.RpcResult, FutureSalts)):
+                match_id = msg.body.req_msg_id
+            elif isinstance(msg.body, raw.types.Pong):
+                match_id = msg.body.msg_id
+            else:
+                log.info(
+                    "Session DC%d unhandled body type=%s",
+                    self.dc_id,
+                    type(msg.body).__name__,
+                )
+
+            if match_id is not None and match_id in self._pending:
+                self._pending[match_id].value = getattr(msg.body, "result", msg.body)
+                self._pending[match_id].event.set()
+            elif match_id is not None:
+                log.info(
+                    "Session DC%d unmatched response msg_id=%d type=%s",
+                    self.dc_id,
+                    match_id,
+                    type(msg.body).__name__,
+                )
 
     async def _network_worker(self):
         log.info("Session DC%d NetworkTask started", self.dc_id)
