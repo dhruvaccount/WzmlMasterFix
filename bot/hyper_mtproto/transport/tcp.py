@@ -1,6 +1,9 @@
 import asyncio
+import logging
 import socket
 from asyncio import Lock, open_connection, wait_for
+
+log = logging.getLogger(__name__)
 
 MB = 1024 * 1024
 RECV_TIMEOUT = 60
@@ -17,6 +20,7 @@ class TCP:
 
     async def connect(self, address):
         host, port = address
+        log.info("TCP connect %s:%d", host, port)
         family = socket.AF_INET6 if self.ipv6 else socket.AF_INET
         if self.proxy:
             import socks

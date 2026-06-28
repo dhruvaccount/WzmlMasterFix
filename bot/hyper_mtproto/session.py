@@ -1,11 +1,11 @@
 import asyncio
+import logging
 import os
 from asyncio import Event, Lock, wait_for as async_wait
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 
 from pyrogram import raw
-from pyrogram.errors import FloodWait
 from pyrogram.raw.all import layer
 from pyrogram.raw.core import TLObject
 
@@ -13,6 +13,8 @@ from .connection import Connection
 from .crypto import mtproto as mtproto_crypto
 from .msg_id import generate_msg_id
 from .seq_no import SeqNo
+
+log = logging.getLogger(__name__)
 
 START_TIMEOUT = 30
 
@@ -22,7 +24,19 @@ class SaltRetry(Exception):
         self.new_salt = new_salt
 
 
+class Result:
+    def __init__(self):
+        self.value = None
+        self.event = asyncio.Event()
+
+
 class Session:
+    TRANSPORT_ERRORS = {
+        404: "auth key not found",
+        429: "transport flood",
+        444: "invalid DC",
+    }
+
     def __init__(
         self, client, dc_id, auth_key, test_mode, is_media=False, is_cdn=False
     ):
@@ -34,7 +48,7 @@ class Session:
         self.is_cdn = is_cdn
         self.connection = None
         self.session_id = os.urandom(8)
-        self.server_salt = None
+        self.salt = 0
         self.seq_no = SeqNo()
         self._pending = {}
         self._invoke_lock = Lock()
@@ -57,10 +71,13 @@ class Session:
                 mode=mode,
             )
             await self.connection.connect()
+            log.info("Session DC%d connected (mode=%d)", self.dc_id, mode)
 
             self.network_task = asyncio.create_task(self._network_worker())
 
+            log.info("Session DC%d sending Ping...", self.dc_id)
             await self.invoke(raw.functions.Ping(ping_id=0), timeout=START_TIMEOUT)
+            log.info("Session DC%d Ping OK", self.dc_id)
 
             if not self.is_cdn:
                 api_id = await self.client.storage.api_id()
@@ -82,7 +99,11 @@ class Session:
 
             self.ping_task = asyncio.create_task(self._ping_worker())
             self.is_connected.set()
+            log.info("Session DC%d started", self.dc_id)
         except Exception:
+            log.warning(
+                "Session DC%d start failed, stopping", self.dc_id, exc_info=True
+            )
             await self.stop()
             raise
 
@@ -119,130 +140,169 @@ class Session:
     async def _invoke(self, query, timeout=None, retries=0, sleep_threshold=0):
         loop = asyncio.get_running_loop()
         msg_id = generate_msg_id()
-
-        salt = self.server_salt if self.server_salt is not None else b"\x00" * 8
         seq_no = self.seq_no(is_content=True)
 
+        # Build message bytes: salt + session_id + msg_id + seq_no + length + body
+        salt_bytes = self.salt.to_bytes(8, "little", signed=True)
+        # msg_id already packed by generate_msg_id as bytes
         query_bytes = await loop.run_in_executor(self._executor, query.write)
-
         payload = await loop.run_in_executor(
             self._executor,
             mtproto_crypto.pack,
             query_bytes,
-            salt,
+            salt_bytes,
             self.session_id,
             self.auth_key,
             msg_id,
             seq_no,
         )
 
-        future = loop.create_future()
         int_msg_id = int.from_bytes(msg_id, "little", signed=True)
-        self._pending[int_msg_id] = (future, seq_no)
+        qname = (
+            query.QUALNAME.rsplit(".", 1)[-1]
+            if hasattr(query, "QUALNAME")
+            else type(query).__name__
+        )
+
+        self._pending[int_msg_id] = Result()
 
         try:
             await self.connection.send(payload)
+            log.info(
+                "Session DC%d sent %s msg_id=%d payload=%dB",
+                self.dc_id,
+                qname,
+                int_msg_id,
+                len(payload),
+            )
         except Exception:
             self._pending.pop(int_msg_id, None)
+            log.warning("Session DC%d send %s failed", self.dc_id, qname, exc_info=True)
             raise
 
         try:
-            return await async_wait(future, timeout=timeout)
-        except SaltRetry as e:
-            self.server_salt = e.new_salt
-            return await self._invoke(
-                query, timeout=timeout, sleep_threshold=sleep_threshold
+            result = await async_wait(
+                self._pending[int_msg_id].event.wait(), timeout=timeout
             )
-        except FloodWait as e:
-            if e.value <= sleep_threshold:
-                await asyncio.sleep(e.value)
-                return await self._invoke(
-                    query, timeout=timeout, sleep_threshold=sleep_threshold
-                )
-            raise
         except asyncio.TimeoutError:
+            log.warning(
+                "Session DC%d %s timeout msg_id=%d pending=%s",
+                self.dc_id,
+                qname,
+                int_msg_id,
+                {k: type(v).__name__ for k, v in self._pending.items()},
+            )
             self._pending.pop(int_msg_id, None)
             raise
 
+        result = self._pending.pop(int_msg_id).value
+
+        if isinstance(result, raw.types.BadServerSalt):
+            self.salt = result.new_server_salt
+            log.info(
+                "Session DC%d %s BadServerSalt -> new_salt=%d retry",
+                self.dc_id,
+                qname,
+                self.salt,
+            )
+            return await self._invoke(
+                query, timeout=timeout, sleep_threshold=sleep_threshold
+            )
+
+        if isinstance(result, raw.types.BadMsgNotification):
+            if result.error_code == 48:
+                log.info(
+                    "Session DC%d %s BadMsgNotification code=48 salt retry",
+                    self.dc_id,
+                    qname,
+                )
+                return await self._invoke(
+                    query, timeout=timeout, sleep_threshold=sleep_threshold
+                )
+            log.warning(
+                "Session DC%d %s BadMsgNotification code=%d",
+                self.dc_id,
+                qname,
+                result.error_code,
+            )
+
+        if isinstance(result, raw.types.RpcError):
+            from pyrogram.errors import RPCError as RPCErrorCls
+
+            RPCErrorCls.raise_it(result)
+
+        log.info(
+            "Session DC%d %s OK result=%s", self.dc_id, qname, type(result).__name__
+        )
+        return result
+
+    async def handle_packet(self, data):
+        loop = asyncio.get_running_loop()
+        try:
+            msg_id, seq_no, msg_bytes = await loop.run_in_executor(
+                self._executor, mtproto_crypto.unpack, data, self.auth_key
+            )
+        except ValueError as e:
+            log.warning("Session DC%d unpack failed: %s", self.dc_id, e)
+            return
+
+        result = await loop.run_in_executor(
+            self._executor, TLObject.read, BytesIO(msg_bytes)
+        )
+
+        rtype = type(result).__name__
+        log.info("Session DC%d recv: %s", self.dc_id, rtype)
+
+        if isinstance(result, raw.types.MsgsAck):
+            return
+
+        if isinstance(result, raw.types.NewSessionCreated):
+            self.salt = result.server_salt
+            log.info("Session DC%d NewSessionCreated salt=%d", self.dc_id, self.salt)
+            return
+
+        if isinstance(result, (raw.types.BadMsgNotification, raw.types.BadServerSalt)):
+            msg_id = result.bad_msg_id
+        elif isinstance(result, raw.types.RpcResult):
+            msg_id = result.req_msg_id
+        else:
+            # Fallback: match by transport msg_id for Pong etc.
+            msg_id = int.from_bytes(msg_id, "little", signed=True)
+
+        if msg_id in self._pending:
+            self._pending[msg_id].value = getattr(result, "result", result)
+            self._pending[msg_id].event.set()
+        else:
+            log.info(
+                "Session DC%d unmatched response msg_id=%d type=%s",
+                self.dc_id,
+                msg_id,
+                rtype,
+            )
+
     async def _network_worker(self):
+        log.info("Session DC%d NetworkTask started", self.dc_id)
         while not self._closed:
             try:
-                data = await self.connection.recv()
-                (
-                    msg_id,
-                    seq_no,
-                    msg_data,
-                ) = await asyncio.get_running_loop().run_in_executor(
-                    self._executor, mtproto_crypto.unpack, data, self.auth_key
-                )
-
-                result = await asyncio.get_running_loop().run_in_executor(
-                    self._executor, TLObject.read, BytesIO(msg_data)
-                )
-
-                if isinstance(result, raw.types.NewSessionCreated):
-                    self.server_salt = result.server_salt.to_bytes(
-                        8, "little", signed=True
-                    )
+                packet = await self.connection.recv()
+                transport_code = packet[:4]
+                if len(packet) == 4:
+                    code = int.from_bytes(transport_code, "little", signed=True)
+                    err = self.TRANSPORT_ERRORS.get(code, f"unknown error {code}")
+                    log.warning("Session DC%d transport error: %s", self.dc_id, err)
+                    if self.is_connected.is_set():
+                        break
                     continue
 
-                if isinstance(result, raw.types.BadServerSalt):
-                    new_salt_bytes = result.new_server_salt.to_bytes(
-                        8, "little", signed=True
-                    )
-                    self.server_salt = new_salt_bytes
-                    future, _ = self._pending.pop(result.bad_msg_id, (None, None))
-                    if future and not future.done():
-                        future.set_exception(SaltRetry(new_salt_bytes))
-                    continue
-
-                if isinstance(result, raw.types.BadMsgNotification):
-                    if result.error_code == 48:
-                        future, _ = self._pending.pop(result.bad_msg_id, (None, None))
-                        if future and not future.done():
-                            new_salt = self.server_salt or b"\x00" * 8
-                            future.set_exception(SaltRetry(new_salt))
-                    continue
-
-                # Server-initiated: ack — silently ignore
-                if isinstance(result, raw.types.MsgsAck):
-                    continue
-
-                # RPC result: match by req_msg_id, unwrap inner result
-                if isinstance(result, raw.types.RpcResult):
-                    future, _ = self._pending.pop(result.req_msg_id, (None, None))
-                    if future is None or future.done():
-                        continue
-                    inner = result.result
-                    if isinstance(inner, raw.types.RpcError):
-                        from pyrogram.errors import RPCError as RPCErrorCls
-
-                        try:
-                            RPCErrorCls.raise_it(inner)
-                        except Exception as exc:
-                            future.set_exception(exc)
-                    else:
-                        future.set_result(inner)
-                    continue
-
-                # Fallback: match by transport msg_id (Pong, etc.)
-                int_msg_id = int.from_bytes(msg_id, "little", signed=True)
-                future, _ = self._pending.pop(int_msg_id, (None, None))
-                if future and not future.done():
-                    if isinstance(result, raw.types.RpcError):
-                        from pyrogram.errors import RPCError as RPCErrorCls
-
-                        try:
-                            RPCErrorCls.raise_it(result)
-                        except Exception as exc:
-                            future.set_exception(exc)
-                    else:
-                        future.set_result(result)
+                await self.handle_packet(packet)
             except asyncio.CancelledError:
                 break
             except Exception:
                 if not self._closed:
                     self._closed = True
+                log.warning(
+                    "Session DC%d network_worker error", self.dc_id, exc_info=True
+                )
                 raise
 
     async def _ping_worker(self):

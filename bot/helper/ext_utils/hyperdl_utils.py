@@ -99,16 +99,45 @@ class HypertgDownload(HypertgTransfer):
             cached = self._ref_get(idx)
             if cached is not None:
                 return cached
-        msg = await client.get_messages(self.dump_chat, self.message.id)
-        if msg is None:
-            raise ValueError(f"msg {self.message.id} not found in {self.dump_chat}")
-        media = self._media_of(msg)
-        fid_str = media.file_id if hasattr(media, "file_id") else None
-        if not fid_str:
-            raise ValueError(f"no file_id in media from msg {self.message.id}")
-        fid = FileId.decode(fid_str)
-        self._ref_put(idx, fid)
-        return fid
+        # Try with the given client first
+        fid = await self._fetch_ref_try(client)
+        if fid:
+            self._ref_put(idx, fid)
+            return fid
+        # Fallback: try each available bot client
+        LOGGER.warning(
+            "HypertgDL ref ci=%d: client can't access dump_chat=%s, trying bots",
+            idx,
+            self.dump_chat,
+        )
+        for cix, cl in self.clients.items():
+            if cix > 0:  # bot clients only
+                fid = await self._fetch_ref_try(cl)
+                if fid:
+                    self._ref_put(idx, fid)
+                    return fid
+        raise ValueError(
+            f"no file_id in msg {self.message.id} in dump_chat={self.dump_chat} (all clients failed)"
+        )
+
+    async def _fetch_ref_try(self, client):
+        try:
+            msg = await client.get_messages(self.dump_chat, self.message.id)
+            if msg is None:
+                LOGGER.warning(
+                    "HypertgDL _fetch_ref_try: msg %s not found in %s",
+                    self.message.id,
+                    self.dump_chat,
+                )
+                return None
+            media = self._media_of(msg)
+            fid_str = media.file_id if hasattr(media, "file_id") else None
+            if not fid_str:
+                return None
+            return FileId.decode(fid_str)
+        except Exception as e:
+            LOGGER.warning("HypertgDL _fetch_ref_try: %s", e)
+            return None
 
     @staticmethod
     def _media_of(message):
@@ -123,6 +152,7 @@ class HypertgDownload(HypertgTransfer):
             "video_note",
             "new_chat_photo",
             "story",
+            "web_page",
         ):
             if m := getattr(message, attr, None):
                 return m

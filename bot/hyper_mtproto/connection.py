@@ -1,6 +1,10 @@
+import logging
+
 from .data_center import get_dc_address
 from .transport.tcp_abridged import TCPAbridged
 from .transport.tcp_abridged_o import TCPAbridgedO
+
+log = logging.getLogger(__name__)
 
 
 class Connection:
@@ -15,6 +19,9 @@ class Connection:
 
     async def connect(self):
         host, port = get_dc_address(self.dc_id, self.test_mode, media=self.is_media)
+
+        tmode = "TCPAbridgedO" if self.mode == 3 else "TCPAbridged"
+        log.info("Connecting DC%d %s:%d transport=%s", self.dc_id, host, port, tmode)
 
         if self.mode == 3:
             self.transport = TCPAbridgedO(ipv6=self.ipv6, proxy=self.proxy)

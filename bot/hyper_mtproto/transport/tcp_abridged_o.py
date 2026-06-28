@@ -1,7 +1,10 @@
+import logging
 import os
 
 from ..crypto.aes import ctr256_decrypt, ctr256_encrypt
 from .tcp import TCP
+
+log = logging.getLogger(__name__)
 
 RESERVED = (b"HEAD", b"POST", b"GET ", b"OPTI", b"\xee" * 4)
 
@@ -17,6 +20,7 @@ class TCPAbridgedO(TCP):
         self.dec_state = None
 
     async def connect(self, address):
+        log.info("TCPAbridgedO connect %s", address)
         await TCP.connect(self, address)
 
         while True:
@@ -47,6 +51,7 @@ class TCPAbridgedO(TCP):
         async with self.lock:
             self.writer.write(nonce)
             await self.writer.drain()
+        log.info("TCPAbridgedO nonce sent")
 
     async def send(self, data):
         length = len(data) // 4
@@ -60,6 +65,7 @@ class TCPAbridgedO(TCP):
         async with self.lock:
             self.writer.write(payload)
             await self.writer.drain()
+        log.info("TCPAbridgedO sent %dB enc", len(data))
 
     async def recv(self):
         length = await self.reader.readexactly(1)
@@ -70,4 +76,6 @@ class TCPAbridgedO(TCP):
             length = ctr256_decrypt(length, self.dec_key, self.dec_iv, self.dec_state)
 
         data = await self.reader.readexactly(int.from_bytes(length, "little") * 4)
-        return ctr256_decrypt(data, self.dec_key, self.dec_iv, self.dec_state)
+        decrypted = ctr256_decrypt(data, self.dec_key, self.dec_iv, self.dec_state)
+        log.info("TCPAbridgedO recv %dB enc→%dB dec", len(data), len(decrypted))
+        return decrypted
