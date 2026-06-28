@@ -51,7 +51,7 @@ class Session:
         self.salt = 0
         self.seq_no = SeqNo()
         self._pending = {}
-        self._invoke_lock = Lock()
+        self._send_lock = Lock()
         self._closed = False
         self.is_connected = Event()
         self.network_task = None
@@ -132,19 +132,16 @@ class Session:
         self._executor.shutdown(wait=False)
 
     async def invoke(self, query, timeout=None, retries=0, sleep_threshold=0):
-        async with self._invoke_lock:
-            return await self._invoke(
-                query, timeout=timeout, retries=retries, sleep_threshold=sleep_threshold
-            )
+        return await self._invoke(
+            query, timeout=timeout, retries=retries, sleep_threshold=sleep_threshold
+        )
 
     async def _invoke(self, query, timeout=None, retries=0, sleep_threshold=0):
         loop = asyncio.get_running_loop()
         msg_id = generate_msg_id()
         seq_no = self.seq_no(is_content=True)
 
-        # Build message bytes: salt + session_id + msg_id + seq_no + length + body
         salt_bytes = self.salt.to_bytes(8, "little", signed=True)
-        # msg_id already packed by generate_msg_id as bytes
         query_bytes = await loop.run_in_executor(self._executor, query.write)
         payload = await loop.run_in_executor(
             self._executor,
@@ -166,19 +163,22 @@ class Session:
 
         self._pending[int_msg_id] = Result()
 
-        try:
-            await self.connection.send(payload)
-            log.info(
-                "Session DC%d sent %s msg_id=%d payload=%dB",
-                self.dc_id,
-                qname,
-                int_msg_id,
-                len(payload),
-            )
-        except Exception:
-            self._pending.pop(int_msg_id, None)
-            log.warning("Session DC%d send %s failed", self.dc_id, qname, exc_info=True)
-            raise
+        async with self._send_lock:
+            try:
+                await self.connection.send(payload)
+                log.info(
+                    "Session DC%d sent %s msg_id=%d payload=%dB",
+                    self.dc_id,
+                    qname,
+                    int_msg_id,
+                    len(payload),
+                )
+            except Exception:
+                self._pending.pop(int_msg_id, None)
+                log.warning(
+                    "Session DC%d send %s failed", self.dc_id, qname, exc_info=True
+                )
+                raise
 
         try:
             result = await async_wait(
@@ -326,6 +326,9 @@ class Session:
                 log.warning(
                     "Session DC%d network_worker error", self.dc_id, exc_info=True
                 )
+                for pending in self._pending.values():
+                    pending.event.set()
+                self._pending.clear()
                 raise
 
     async def _ping_worker(self):
