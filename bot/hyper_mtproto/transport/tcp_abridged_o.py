@@ -1,9 +1,9 @@
-import hashlib
 import os
-import struct
 
-from ..crypto.aes import ctr256_encrypt as ctr_enc, ige_decrypt, ige_encrypt
+from ..crypto.aes import ctr256_decrypt, ctr256_encrypt
 from .tcp_abridged import TCPAbridged
+
+RESERVED = (b"HEAD", b"POST", b"GET ", b"OPTI", b"\xee" * 4)
 
 
 class TCPAbridgedO(TCPAbridged):
@@ -11,30 +11,42 @@ class TCPAbridgedO(TCPAbridged):
         super().__init__(ipv6, proxy)
         self.enc_key = None
         self.enc_iv = None
+        self.enc_state = None
         self.dec_key = None
         self.dec_iv = None
+        self.dec_state = None
 
     async def connect(self, address):
         await TCPAbridged.connect(self, address)
-        temp = bytearray(os.urandom(64))
-        temp[0] = 0xEF
-        temp[56:60] = temp[60:64][::-1]
 
-        temp_key = hashlib.sha256(temp[8:40]).digest()
-        temp_iv = hashlib.sha256(temp[40:56] + temp[0:8]).digest()[:16]
-        encrypted = ige_encrypt(bytes(temp[:56]), temp_key, temp_iv)
-        header = encrypted + bytes(temp[56:64])
+        while True:
+            nonce = bytearray(os.urandom(64))
 
-        self.writer.write(header)
-        await self.writer.drain()
+            if (
+                nonce[0] != 0xEF
+                and nonce[:4] not in RESERVED
+                and nonce[4:8] != b"\x00" * 4
+            ):
+                nonce[56] = nonce[57] = nonce[58] = nonce[59] = 0xEF
+                break
 
-        response = bytearray(await self.reader.readexactly(64))
+        temp = bytearray(nonce[55:7:-1])
 
-        self.enc_key = bytes(temp[8:40])
-        self.enc_iv = bytearray(temp[40:56])
-        server_decrypted = ige_decrypt(bytes(response[:56]), temp_key, temp_iv)
-        self.dec_key = server_decrypted[8:40]
-        self.dec_iv = bytearray(server_decrypted[40:56])
+        self.enc_key = bytes(nonce[8:40])
+        self.enc_iv = bytearray(nonce[40:56])
+        self.enc_state = bytearray(1)
+
+        self.dec_key = bytes(temp[0:32])
+        self.dec_iv = bytearray(temp[32:48])
+        self.dec_state = bytearray(1)
+
+        nonce[56:64] = ctr256_encrypt(
+            nonce, self.enc_key, self.enc_iv, self.enc_state
+        )[56:64]
+
+        async with self.lock:
+            self.writer.write(nonce)
+            await self.writer.drain()
 
     async def send(self, data):
         length = len(data) // 4
@@ -42,17 +54,24 @@ class TCPAbridgedO(TCPAbridged):
             header = bytes([length])
         else:
             header = b"\x7f" + length.to_bytes(3, "little")
-        payload = ctr_enc(header + data, self.enc_key, self.enc_iv)
+        payload = ctr256_encrypt(
+            header + data, self.enc_key, self.enc_iv, self.enc_state
+        )
         async with self.lock:
             self.writer.write(payload)
             await self.writer.drain()
 
     async def recv(self):
-        encrypted_len = await self.reader.readexactly(4)
-        decrypted_len = ctr_enc(encrypted_len, self.dec_key, self.dec_iv)
-        length = decrypted_len[0]
-        if length == 0x7F:
-            length = struct.unpack("<I", decrypted_len[1:4] + b"\x00")[0]
-        data_length = length * 4
-        encrypted_data = await self.reader.readexactly(data_length)
-        return ctr_enc(encrypted_data, self.dec_key, self.dec_iv)
+        length = await self.reader.readexactly(1)
+        length = ctr256_decrypt(length, self.dec_key, self.dec_iv, self.dec_state)
+
+        if length == b"\x7f":
+            length = await self.reader.readexactly(3)
+            length = ctr256_decrypt(
+                length, self.dec_key, self.dec_iv, self.dec_state
+            )
+
+        data = await self.reader.readexactly(
+            int.from_bytes(length, "little") * 4
+        )
+        return ctr256_decrypt(data, self.dec_key, self.dec_iv, self.dec_state)

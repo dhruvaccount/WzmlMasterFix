@@ -1,7 +1,7 @@
 import hashlib
 import struct
 
-from .aes import ige_decrypt, ige_encrypt
+from .aes import ige256_decrypt, ige256_encrypt
 
 
 def _calc_key(auth_key, msg_key, is_client):
@@ -28,7 +28,7 @@ def pack(message_data, salt, session_id, auth_key, msg_id, seq_no):
     msg_key = hashlib.sha1(data).digest()[4:20]
 
     aes_key, aes_iv = _calc_key(auth_key, msg_key, is_client=True)
-    encrypted = ige_encrypt(data, aes_key, aes_iv)
+    encrypted = ige256_encrypt(data, aes_key, aes_iv)
 
     auth_key_id = hashlib.sha1(auth_key).digest()[-8:]
 
@@ -40,7 +40,7 @@ def unpack(packet, auth_key):
     encrypted_data = packet[24:]
 
     aes_key, aes_iv = _calc_key(auth_key, msg_key, is_client=False)
-    decrypted = ige_decrypt(encrypted_data, aes_key, aes_iv)
+    decrypted = ige256_decrypt(encrypted_data, aes_key, aes_iv)
 
     msg_key_check = hashlib.sha1(decrypted).digest()[4:20]
     if msg_key_check != msg_key:

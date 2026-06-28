@@ -2,16 +2,16 @@ import tgcrypto
 
 
 def ctr256_encrypt(data, key, iv, state=None):
-    return tgcrypto.ctr256_encrypt(data, key, iv, state)
+    return tgcrypto.ctr256_encrypt(data, key, iv, state or bytearray(1))
 
 
 def ctr256_decrypt(data, key, iv, state=None):
-    return tgcrypto.ctr256_decrypt(data, key, iv, state)
+    return tgcrypto.ctr256_decrypt(data, key, iv, state or bytearray(1))
 
 
-def ige_encrypt(data, key, iv):
-    return tgcrypto.ige_encrypt(data, key, iv)
+def ige256_encrypt(data, key, iv):
+    return tgcrypto.ige256_encrypt(data, key, iv)
 
 
-def ige_decrypt(data, key, iv):
-    return tgcrypto.ige_decrypt(data, key, iv)
+def ige256_decrypt(data, key, iv):
+    return tgcrypto.ige256_decrypt(data, key, iv)
