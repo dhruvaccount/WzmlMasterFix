@@ -154,7 +154,7 @@ def _dc_media_port(cls, dc_id, test_mode, ipv6, media):
     return ip, port
 
 
-DataCenter.__new__ = staticmethod(_dc_media_port)
+#DataCenter.__new__ = staticmethod(_dc_media_port)
 
 
 class HypertgTransfer:

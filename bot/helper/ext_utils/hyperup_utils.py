@@ -2,7 +2,7 @@ import asyncio
 from hashlib import md5
 from math import ceil
 from mimetypes import guess_type
-from os import cpu_count, path as ospath
+from os import path as ospath
 from re import search as research
 
 from pyrogram import StopTransmission, raw, utils
@@ -66,13 +66,13 @@ class HypertgUpload(HypertgTransfer):
         dc_id = await client.storage.dc_id()
         is_big = file_size > 10 * MB
 
-        n_sessions = max(3, (cpu_count() or 4))
+        n_sessions = 4
         n_workers = n_sessions * 4
         q = asyncio.Queue(64)
         fp = open(file_path, "rb", buffering=4 * 1024 * 1024)
 
         async def _make_session():
-            return await self._mk_session(client, dc_id, mode=1)
+            return await self._mk_session(client, dc_id)
 
         pool = [await _make_session() for _ in range(n_sessions)]
 
