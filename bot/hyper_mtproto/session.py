@@ -7,7 +7,7 @@ from io import BytesIO
 
 from pyrogram import raw
 from pyrogram.raw.all import layer
-from pyrogram.raw.core import Message, FutureSalts
+from pyrogram.raw.core import Message, MsgContainer, FutureSalts
 
 from .connection import Connection
 from .crypto import mtproto as mtproto_crypto
@@ -255,7 +255,7 @@ class Session:
 
         messages = (
             message.body.messages
-            if isinstance(message.body, raw.types.MsgContainer)
+            if isinstance(message.body, MsgContainer)
             else [message]
         )
 
