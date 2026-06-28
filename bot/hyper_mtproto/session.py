@@ -247,7 +247,7 @@ class Session:
             return
 
         message = await loop.run_in_executor(
-            self._executor, Message.read, BytesIO(plain_text)
+            self._executor, Message.read, BytesIO(plain_text[16:])
         )
 
         rtype = type(message.body).__name__
