@@ -1,12 +1,12 @@
 import os
 
 from ..crypto.aes import ctr256_decrypt, ctr256_encrypt
-from .tcp_abridged import TCPAbridged
+from .tcp import TCP
 
 RESERVED = (b"HEAD", b"POST", b"GET ", b"OPTI", b"\xee" * 4)
 
 
-class TCPAbridgedO(TCPAbridged):
+class TCPAbridgedO(TCP):
     def __init__(self, ipv6=False, proxy=None):
         super().__init__(ipv6, proxy)
         self.enc_key = None
@@ -17,7 +17,7 @@ class TCPAbridgedO(TCPAbridged):
         self.dec_state = None
 
     async def connect(self, address):
-        await TCPAbridged.connect(self, address)
+        await TCP.connect(self, address)
 
         while True:
             nonce = bytearray(os.urandom(64))
@@ -40,9 +40,9 @@ class TCPAbridgedO(TCPAbridged):
         self.dec_iv = bytearray(temp[32:48])
         self.dec_state = bytearray(1)
 
-        nonce[56:64] = ctr256_encrypt(
-            nonce, self.enc_key, self.enc_iv, self.enc_state
-        )[56:64]
+        nonce[56:64] = ctr256_encrypt(nonce, self.enc_key, self.enc_iv, self.enc_state)[
+            56:64
+        ]
 
         async with self.lock:
             self.writer.write(nonce)
@@ -67,11 +67,7 @@ class TCPAbridgedO(TCPAbridged):
 
         if length == b"\x7f":
             length = await self.reader.readexactly(3)
-            length = ctr256_decrypt(
-                length, self.dec_key, self.dec_iv, self.dec_state
-            )
+            length = ctr256_decrypt(length, self.dec_key, self.dec_iv, self.dec_state)
 
-        data = await self.reader.readexactly(
-            int.from_bytes(length, "little") * 4
-        )
+        data = await self.reader.readexactly(int.from_bytes(length, "little") * 4)
         return ctr256_decrypt(data, self.dec_key, self.dec_iv, self.dec_state)

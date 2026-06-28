@@ -1,6 +1,7 @@
 from asyncio import Event, gather, sleep
 
 from pyrogram import raw, utils
+from pyrogram.connection import Connection
 from pyrogram.errors import AuthBytesInvalid
 from pyrogram.file_id import FileType, ThumbnailSource
 
@@ -9,6 +10,16 @@ from ...core.tg_client import TgClient
 from ...hyper_mtproto import MtprotoPool
 from ...hyper_mtproto.auth import get_auth_key
 from ...hyper_mtproto.session import Session as HyperSession
+
+_orig_connection_close = Connection.close
+
+
+def _safe_connection_close(self):
+    if self.protocol is not None:
+        return _orig_connection_close(self)
+
+
+Connection.close = _safe_connection_close
 
 MB = 1024 * 1024
 

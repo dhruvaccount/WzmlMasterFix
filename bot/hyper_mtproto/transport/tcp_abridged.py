@@ -1,13 +1,10 @@
-
 from .tcp import TCP
 
 
 class TCPAbridged(TCP):
     async def connect(self, address):
         await super().connect(address)
-        self.writer.write(b"\xef\xef\xef\xef")
-        await self.writer.drain()
-        await self.reader.readexactly(4)
+        await super().send(b"\xef")
 
     async def send(self, data):
         length = len(data) // 4

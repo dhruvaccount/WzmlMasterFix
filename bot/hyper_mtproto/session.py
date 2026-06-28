@@ -47,40 +47,44 @@ class Session:
         )
 
     async def start(self, mode=3):
-        self.connection = Connection(
-            self.dc_id,
-            self.test_mode,
-            self.client.ipv6,
-            self.client.proxy,
-            self.is_media,
-            mode=mode,
-        )
-        await self.connection.connect()
-
-        self.network_task = asyncio.create_task(self._network_worker())
-
-        await self.invoke(raw.functions.Ping(ping_id=0), timeout=START_TIMEOUT)
-
-        if not self.is_cdn:
-            api_id = await self.client.storage.api_id()
-            cl = self.client
-            init = raw.functions.InvokeWithLayer(
-                layer=layer,
-                query=raw.functions.InitConnection(
-                    api_id=api_id,
-                    app_version=cl.app_version,
-                    device_model=cl.device_model,
-                    system_version=cl.system_version,
-                    system_lang_code=cl.lang_code,
-                    lang_code=cl.lang_code,
-                    lang_pack="",
-                    query=raw.functions.help.GetConfig(),
-                ),
+        try:
+            self.connection = Connection(
+                self.dc_id,
+                self.test_mode,
+                self.client.ipv6,
+                self.client.proxy,
+                self.is_media,
+                mode=mode,
             )
-            await self.invoke(init, timeout=START_TIMEOUT)
+            await self.connection.connect()
 
-        self.ping_task = asyncio.create_task(self._ping_worker())
-        self.is_connected.set()
+            self.network_task = asyncio.create_task(self._network_worker())
+
+            await self.invoke(raw.functions.Ping(ping_id=0), timeout=START_TIMEOUT)
+
+            if not self.is_cdn:
+                api_id = await self.client.storage.api_id()
+                cl = self.client
+                init = raw.functions.InvokeWithLayer(
+                    layer=layer,
+                    query=raw.functions.InitConnection(
+                        api_id=api_id,
+                        app_version=cl.app_version,
+                        device_model=cl.device_model,
+                        system_version=cl.system_version,
+                        system_lang_code=cl.lang_code,
+                        lang_code=cl.lang_code,
+                        lang_pack="",
+                        query=raw.functions.help.GetConfig(),
+                    ),
+                )
+                await self.invoke(init, timeout=START_TIMEOUT)
+
+            self.ping_task = asyncio.create_task(self._ping_worker())
+            self.is_connected.set()
+        except Exception:
+            await self.stop()
+            raise
 
     async def stop(self):
         self._closed = True
@@ -176,20 +180,22 @@ class Session:
                     self._executor, TLObject.read, BytesIO(msg_data)
                 )
 
-                # Server-initiated: new session salt
                 if isinstance(result, raw.types.NewSessionCreated):
-                    self.server_salt = result.server_salt
+                    self.server_salt = result.server_salt.to_bytes(
+                        8, "little", signed=True
+                    )
                     continue
 
-                # Server-initiated: bad server salt — update and retry
                 if isinstance(result, raw.types.BadServerSalt):
-                    self.server_salt = result.new_server_salt
+                    new_salt_bytes = result.new_server_salt.to_bytes(
+                        8, "little", signed=True
+                    )
+                    self.server_salt = new_salt_bytes
                     future, _ = self._pending.pop(result.bad_msg_id, (None, None))
                     if future and not future.done():
-                        future.set_exception(SaltRetry(result.new_server_salt))
+                        future.set_exception(SaltRetry(new_salt_bytes))
                     continue
 
-                # Server-initiated: bad msg notification (error 48 = bad salt)
                 if isinstance(result, raw.types.BadMsgNotification):
                     if result.error_code == 48:
                         future, _ = self._pending.pop(result.bad_msg_id, (None, None))
@@ -204,9 +210,7 @@ class Session:
 
                 # RPC result: match by req_msg_id, unwrap inner result
                 if isinstance(result, raw.types.RpcResult):
-                    future, _ = self._pending.pop(
-                        result.req_msg_id, (None, None)
-                    )
+                    future, _ = self._pending.pop(result.req_msg_id, (None, None))
                     if future is None or future.done():
                         continue
                     inner = result.result
