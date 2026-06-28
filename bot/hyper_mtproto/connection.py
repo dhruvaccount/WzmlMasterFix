@@ -15,9 +15,6 @@ class Connection:
 
     async def connect(self):
         host, port = get_dc_address(self.dc_id, self.test_mode, media=self.is_media)
-        if self.mode == 1:
-            host = get_dc_address(self.dc_id, self.test_mode)[0]
-            port = 5222
 
         if self.mode == 3:
             self.transport = TCPAbridgedO(ipv6=self.ipv6, proxy=self.proxy)

@@ -33,7 +33,7 @@ class MtprotoPool:
             self._locks[key] = Lock()
         return self._locks[key]
 
-    async def get_session(self, client_key, dc_id, is_media=True, mode=1):
+    async def get_session(self, client_key, dc_id, is_media=True, mode=3):
         ck = self._resolve_key(client_key)
         cache_key = (ck, dc_id)
         s = self._sessions.get(cache_key)

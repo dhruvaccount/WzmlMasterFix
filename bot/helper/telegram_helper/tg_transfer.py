@@ -46,7 +46,7 @@ class HypertgTransfer:
                 return i
         return None
 
-    async def _mk_session(self, client, dc_id, mode=1):
+    async def _mk_session(self, client, dc_id, mode=3):
         idx = self._client_idx(client)
         if idx is not None:
             return await self._pool.get_session(idx, dc_id, is_media=True, mode=mode)
@@ -75,7 +75,7 @@ class HypertgTransfer:
     async def _get_session(self, idx, dc_id, force=False):
         if force:
             await self._pool.drop_session(idx, dc_id)
-        return await self._pool.get_session(idx, dc_id, is_media=True, mode=1)
+        return await self._pool.get_session(idx, dc_id, is_media=True, mode=3)
 
     async def _warmup(self, indices, dc_id):
         async def _w(i):

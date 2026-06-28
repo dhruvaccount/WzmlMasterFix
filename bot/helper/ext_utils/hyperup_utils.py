@@ -64,7 +64,7 @@ class HypertgUpload(HypertgTransfer):
         dc_id = await client.storage.dc_id()
         is_big = file_size > 10 * MB
 
-        session = await self._mk_session(client, dc_id, mode=1)
+        session = await self._mk_session(client, dc_id, mode=3)
         fp = open(file_path, "rb", buffering=4 * MB)
         bytes_uploaded = 0
 
@@ -138,7 +138,7 @@ class HypertgUpload(HypertgTransfer):
         file_id = client.rnd_id()
         dc_id = await client.storage.dc_id()
 
-        session = await self._mk_session(client, dc_id, mode=1)
+        session = await self._mk_session(client, dc_id, mode=3)
         fp = open(file_path, "rb")
         h = md5()
 
