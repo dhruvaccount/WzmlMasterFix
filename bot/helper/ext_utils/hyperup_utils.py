@@ -121,9 +121,7 @@ class HypertgUpload(HypertgTransfer):
                             session = await _make_session()
                             pool[slot] = session
                         except (OSError, TimeoutError, ConnectionError):
-                            LOGGER.warning(
-                                f"HypertgUL worker {wid} transport err"
-                            )
+                            LOGGER.warning(f"HypertgUL worker {wid} transport err")
                             if attempt:
                                 raise
                             try:
@@ -146,10 +144,7 @@ class HypertgUpload(HypertgTransfer):
                 finally:
                     q.task_done()
 
-        workers = [
-            asyncio.create_task(_worker(i))
-            for i in range(n_workers)
-        ]
+        workers = [asyncio.create_task(_worker(i)) for i in range(n_workers)]
 
         LOGGER.info(
             f"HypertgUL start "

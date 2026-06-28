@@ -1,11 +1,11 @@
-from asyncio import Event, Lock, gather, sleep, open_connection, wait_for
+import socket
+import time
+from asyncio import Event, Lock, gather, open_connection, sleep, wait_for
 from concurrent.futures import ThreadPoolExecutor
 from os import cpu_count
 
 import pyrogram
-import socket
-import time
-from pyrogram import Client, raw, utils
+from pyrogram import raw, utils
 from pyrogram.connection import Connection
 from pyrogram.connection.transport.tcp import TCPAbridgedO
 from pyrogram.connection.transport.tcp.tcp import TCP
@@ -14,7 +14,6 @@ from pyrogram.errors import AuthBytesInvalid, AuthKeyDuplicated, RPCError
 from pyrogram.file_id import FileType, ThumbnailSource
 from pyrogram.raw.all import layer
 from pyrogram.session import Auth, Session
-from pyrogram.session.internals import DataCenter
 
 from ... import LOGGER
 from ...core.tg_client import TgClient
@@ -25,7 +24,6 @@ _crypto_workers = min(6, max(2, cpu_count() or 4))
 pyrogram.crypto_executor = ThreadPoolExecutor(
     max_workers=_crypto_workers, thread_name_prefix="crypto"
 )
-Client.MAX_CONCURRENT_TRANSMISSIONS = 1000
 
 
 async def _native_connect(self, address):
@@ -135,26 +133,14 @@ async def _safe_restart(self):
             return
         except Exception as e:
             LOGGER.warning(
-                f"Session restart dc={self.dc_id} attempt {attempt+1}/3 "
+                f"Session restart dc={self.dc_id} attempt {attempt + 1}/3 "
                 f"{type(e).__name__}: {e}"
             )
             if attempt < 2:
-                await sleep(2 ** attempt)
+                await sleep(2**attempt)
 
 
 Session.restart = _safe_restart
-
-_orig_dc_new = DataCenter.__new__
-
-
-def _dc_media_port(cls, dc_id, test_mode, ipv6, media):
-    ip, port = _orig_dc_new(cls, dc_id, test_mode, ipv6, media)
-    if media and not test_mode:
-        port = 5222
-    return ip, port
-
-
-#DataCenter.__new__ = staticmethod(_dc_media_port)
 
 
 class HypertgTransfer:
@@ -204,6 +190,9 @@ class HypertgTransfer:
                 s.is_media,
                 mode=mode,
             )
+            if mode == 1:
+                ip, _ = s.connection.address
+                s.connection.address = (ip, 5222)
             try:
                 await s.connection.connect()
                 s.network_task = s.client.loop.create_task(s.network_worker())
@@ -247,7 +236,7 @@ class HypertgTransfer:
             self._session_locks[key] = Lock()
         return self._session_locks[key]
 
-    async def _mk_session(self, client, dc_id, mode=3):
+    async def _mk_session(self, client, dc_id, mode=1):
         tm = await client.storage.test_mode()
         ak, is_cross = await self.create_auth(client, dc_id, tm)
         s = Session(client, dc_id, ak, tm, is_media=True)
