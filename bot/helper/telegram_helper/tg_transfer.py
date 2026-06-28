@@ -4,6 +4,7 @@ from os import cpu_count
 
 import pyrogram
 import socket
+import time
 from pyrogram import Client, raw, utils
 from pyrogram.connection import Connection
 from pyrogram.connection.transport.tcp import TCPAbridgedO
@@ -51,15 +52,23 @@ async def _native_connect(self, address):
     if sock:
         try:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * MB)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * MB)
+            #sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * MB)
+            #sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * MB)
         except (OSError, AttributeError):
             pass
 
 
 def _native_close(self):
-    if self.writer:
+    try:
         self.writer.close()
+    except AttributeError:
+        try:
+            self.socket.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        finally:
+            time.sleep(0.001)
+            self.socket.close()
 
 
 _orig_tcp_init = TCP.__init__

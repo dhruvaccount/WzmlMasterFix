@@ -120,17 +120,11 @@ class HypertgUpload(HypertgTransfer):
                             await session.stop()
                             session = await _make_session()
                             pool[slot] = session
-                            continue
-                        except StopTransmission:
-                            raise
-                        except asyncio.CancelledError:
-                            return
-                        except (OSError, TimeoutError, ConnectionError) as e:
+                        except (OSError, TimeoutError, ConnectionError):
                             LOGGER.warning(
-                                f"HypertgUL worker {wid} transport "
-                                f"err={type(e).__name__} attempt {attempt + 1}/5"
+                                f"HypertgUL worker {wid} transport err"
                             )
-                            if attempt == 4:
+                            if attempt:
                                 raise
                             try:
                                 await session.stop()
@@ -138,7 +132,13 @@ class HypertgUpload(HypertgTransfer):
                                 pass
                             session = await _make_session()
                             pool[slot] = session
-                            await asyncio.sleep(1)
+                            await session.invoke(rpc, retries=0)
+                            bytes_uploaded += len(chunk)
+                            break
+                        except StopTransmission:
+                            raise
+                        except asyncio.CancelledError:
+                            return
                         except Exception:
                             if attempt == 4:
                                 raise
@@ -226,6 +226,7 @@ class HypertgUpload(HypertgTransfer):
         finally:
             for t in workers:
                 t.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
             for s in pool:
                 try:
                     await s.stop()
