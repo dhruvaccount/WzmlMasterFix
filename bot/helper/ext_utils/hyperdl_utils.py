@@ -377,6 +377,14 @@ class HypertgDownload(HypertgTransfer):
                     await sleep(val + 1)
                 except CancelledError:
                     raise
+                except (ConnectionError, OSError, TimeoutError):
+                    pipe_timeouts += 1
+                    window = max(min_win, window - 1)
+                    if pipe_timeouts >= 3:
+                        bot_down = True
+                        return s, off, b""
+                    await sleep(min(3, pipe_timeouts))
+                    continue
             timeout_count += 1
             if timeout_count >= 3:
                 window = max(min_win, window - max(1, window // 4))
@@ -514,6 +522,12 @@ class HypertgDownload(HypertgTransfer):
                 all_bad_mode = True
 
             if retry_round > self._MAX_RETRIES and not all_bad_mode:
+                break
+            if all_bad_mode and retry_round > self._MAX_RETRIES + 2:
+                LOGGER.warning(
+                    f"HypertgDL retry: {len(all_failed_offsets)} offsets still failed "
+                    f"after all_bad_mode rounds, giving up"
+                )
                 break
 
             range_buckets = {i: [] for i in range(len(ranges))}

@@ -197,6 +197,9 @@ class Session:
 
         result = self._pending.pop(int_msg_id).value
 
+        if result is None:
+            raise ConnectionError("Session connection closed")
+
         if isinstance(result, raw.types.BadServerSalt):
             self.salt = result.new_server_salt
             log.info(
