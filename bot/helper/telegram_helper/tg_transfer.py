@@ -1,146 +1,16 @@
-import socket
-import time
-from asyncio import Event, Lock, gather, open_connection, sleep, wait_for
-from concurrent.futures import ThreadPoolExecutor
-from os import cpu_count
+from asyncio import Event, gather, sleep
 
-import pyrogram
 from pyrogram import raw, utils
-from pyrogram.connection import Connection
-from pyrogram.connection.transport.tcp import TCPAbridgedO
-from pyrogram.connection.transport.tcp.tcp import TCP
-from pyrogram.crypto import aes
-from pyrogram.errors import AuthBytesInvalid, AuthKeyDuplicated, RPCError
+from pyrogram.errors import AuthBytesInvalid
 from pyrogram.file_id import FileType, ThumbnailSource
-from pyrogram.raw.all import layer
-from pyrogram.session import Auth, Session
 
 from ... import LOGGER
 from ...core.tg_client import TgClient
+from ...hyper_mtproto import MtprotoPool
+from ...hyper_mtproto.auth import get_auth_key
+from ...hyper_mtproto.session import Session as HyperSession
 
 MB = 1024 * 1024
-
-_crypto_workers = min(6, max(2, cpu_count() or 4))
-pyrogram.crypto_executor = ThreadPoolExecutor(
-    max_workers=_crypto_workers, thread_name_prefix="crypto"
-)
-
-
-async def _native_connect(self, address):
-    host, port = address
-    family = socket.AF_INET6 if self.ipv6 else socket.AF_INET
-    if self.proxy:
-        import socks
-
-        scheme = self.proxy.get("scheme")
-        pt = getattr(socks, scheme.upper())
-        sock = socks.socksocket(family)
-        sock.set_proxy(
-            proxy_type=pt, addr=self.proxy["hostname"], port=self.proxy["port"]
-        )
-        sock.settimeout(10)
-        await self.loop.sock_connect(sock, (host, port))
-        sock.setblocking(False)
-        self.reader, self.writer = await open_connection(sock=sock)
-    else:
-        self.reader, self.writer = await wait_for(
-            open_connection(host=host, port=port, family=family), 10
-        )
-    sock = self.writer.get_extra_info("socket")
-    if sock:
-        try:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-            #sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * MB)
-            #sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * MB)
-        except (OSError, AttributeError):
-            pass
-
-
-def _native_close(self):
-    try:
-        self.writer.close()
-    except AttributeError:
-        try:
-            self.socket.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-        finally:
-            time.sleep(0.001)
-            self.socket.close()
-
-
-_orig_tcp_init = TCP.__init__
-
-
-def _tcp_init_patched(self, ipv6, proxy):
-    _orig_tcp_init(self, ipv6, proxy)
-    self.ipv6 = ipv6
-    self.proxy = proxy
-
-
-TCP.connect = _native_connect
-TCP.close = _native_close
-TCP.__init__ = _tcp_init_patched
-
-
-async def _safe_abridged_send(self, data):
-    length = len(data) // 4
-    header = (
-        bytes([length]) if length <= 126 else b"\x7f" + length.to_bytes(3, "little")
-    )
-    data = header + data
-    payload = await self.loop.run_in_executor(
-        pyrogram.crypto_executor, aes.ctr256_encrypt, data, *self.encrypt
-    )
-    async with self.lock:
-        self.writer.write(payload)
-        await self.writer.drain()
-
-
-TCPAbridgedO.send = _safe_abridged_send
-
-_orig_session_start = Session.start
-
-
-async def _safe_session_start(self):
-    if not hasattr(self, "_start_lock"):
-        self._start_lock = Lock()
-    async with self._start_lock:
-        await _orig_session_start(self)
-
-
-Session.start = _safe_session_start
-
-_orig_session_stop = Session.stop
-
-
-async def _safe_session_stop(self):
-    if not hasattr(self, "_stop_lock"):
-        self._stop_lock = Lock()
-    async with self._stop_lock:
-        await _orig_session_stop(self)
-
-
-Session.stop = _safe_session_stop
-
-_orig_restart = Session.restart
-
-
-async def _safe_restart(self):
-    for attempt in range(3):
-        try:
-            await _orig_restart(self)
-            return
-        except Exception as e:
-            LOGGER.warning(
-                f"Session restart dc={self.dc_id} attempt {attempt + 1}/3 "
-                f"{type(e).__name__}: {e}"
-            )
-            if attempt < 2:
-                await sleep(2**attempt)
-
-
-Session.restart = _safe_restart
 
 
 class HypertgTransfer:
@@ -149,98 +19,42 @@ class HypertgTransfer:
         self._listener = obj._listener
         self.clients = dict(TgClient.helper_bots)
         self.work_loads = dict(TgClient.helper_loads)
+        self.client_ids = list(self.clients.keys())
         if TgClient.helper_users:
             for no, client in TgClient.helper_users.items():
                 self.clients[-no] = client
+                self.client_ids.append(-no)
             for no, load in TgClient.helper_user_loads.items():
                 self.work_loads[-no] = load
         if TgClient.user and all(c is not TgClient.user for c in self.clients.values()):
             key = -(len(TgClient.helper_users) + 1)
             self.clients[key] = TgClient.user
+            self.client_ids.append(key)
             self.work_loads[key] = 0
         self.num_clients = len(self.clients)
-        self._sessions = {}
-        self._session_locks = {}
+        self._pool = MtprotoPool(self.clients)
         self._cancel = Event()
         self._tasks = []
         LOGGER.info(
             f"HypertgTransfer init clients={self.num_clients} "
-            f"loads={dict(self.work_loads)}"
+            f"loads={dict(TgClient.helper_loads)}"
         )
 
-    @staticmethod
-    async def create_auth(client, dc_id, tm=None):
-        if tm is None:
-            tm = await client.storage.test_mode()
-        main_dc = await client.storage.dc_id()
-        if dc_id != main_dc:
-            ak = await Auth(client, dc_id, tm).create()
-            return ak, True
-        ak = await client.storage.auth_key()
-        return ak, False
-
-    @staticmethod
-    async def start_session(s, mode=3):
-        while True:
-            s.connection = Connection(
-                s.dc_id,
-                s.test_mode,
-                s.client.ipv6,
-                s.client.proxy,
-                s.is_media,
-                mode=mode,
-            )
-            if mode == 1:
-                ip, _ = s.connection.address
-                s.connection.address = (ip, 5222)
-            try:
-                await s.connection.connect()
-                s.network_task = s.client.loop.create_task(s.network_worker())
-                await s.send(
-                    raw.functions.Ping(ping_id=0), timeout=Session.START_TIMEOUT
-                )
-                if not s.is_cdn:
-                    await s.send(
-                        raw.functions.InvokeWithLayer(
-                            layer=layer,
-                            query=raw.functions.InitConnection(
-                                api_id=await s.client.storage.api_id(),
-                                app_version=s.client.app_version,
-                                device_model=s.client.device_model,
-                                system_version=s.client.system_version,
-                                system_lang_code=s.client.lang_code,
-                                lang_code=s.client.lang_code,
-                                lang_pack="",
-                                query=raw.functions.help.GetConfig(),
-                            ),
-                        ),
-                        timeout=Session.START_TIMEOUT,
-                    )
-                s.ping_task = s.client.loop.create_task(s.ping_worker())
-            except AuthKeyDuplicated as e:
-                await s.stop()
-                raise e
-            except (OSError, TimeoutError, RPCError):
-                await s.stop()
-                continue
-            except Exception as e:
-                await s.stop()
-                raise e
-            else:
-                break
-        s.is_connected.set()
-
-    def _get_lock(self, client_id, dc_id):
-        key = (client_id, dc_id)
-        if key not in self._session_locks:
-            self._session_locks[key] = Lock()
-        return self._session_locks[key]
+    def _client_idx(self, client):
+        for i, c in self.clients.items():
+            if c is client:
+                return i
+        return None
 
     async def _mk_session(self, client, dc_id, mode=1):
-        tm = await client.storage.test_mode()
-        ak, is_cross = await self.create_auth(client, dc_id, tm)
-        s = Session(client, dc_id, ak, tm, is_media=True)
-        await self.start_session(s, mode=mode)
+        idx = self._client_idx(client)
+        if idx is not None:
+            return await self._pool.get_session(idx, dc_id, is_media=True, mode=mode)
+        ak, is_cross = await get_auth_key(client, dc_id)
+        s = HyperSession(
+            client, dc_id, ak, await client.storage.test_mode(), is_media=True
+        )
+        await s.start(mode=mode)
         if is_cross:
             for attempt in range(6):
                 try:
@@ -252,59 +66,28 @@ class HypertgTransfer:
                     )
                     break
                 except AuthBytesInvalid:
-                    LOGGER.warning(
-                        f"HypertgTransfer AuthBytesInvalid attempt {attempt + 1}/6 "
-                        f"client={client.me.username} dc={dc_id}"
-                    )
                     await sleep(1)
             else:
                 await s.stop()
-                LOGGER.error(f"HypertgTransfer mk_session dc={dc_id} auth failed")
                 raise AuthBytesInvalid
         return s
 
     async def _get_session(self, idx, dc_id, force=False):
-        s = self._sessions.get(idx)
-        if s and not force:
-            if s.is_connected and s.dc_id == dc_id:
-                return s
-            try:
-                await s.stop()
-            except Exception:
-                pass
-        lock = self._get_lock(id(self.clients[idx]), dc_id)
-        async with lock:
-            s = self._sessions.get(idx)
-            if s and not force:
-                if s.is_connected and s.dc_id == dc_id:
-                    return s
-            s = await self._mk_session(self.clients[idx], dc_id)
-            self._sessions[idx] = s
-        return s
+        if force:
+            await self._pool.drop_session(idx, dc_id)
+        return await self._pool.get_session(idx, dc_id, is_media=True, mode=1)
 
     async def _warmup(self, indices, dc_id):
         async def _w(i):
             try:
-                await self._get_session(i, dc_id)
+                await self._pool.get_session(i, dc_id)
             except Exception as e:
                 LOGGER.warning(f"HypertgTransfer warmup fail client {i}: {e}")
 
         await gather(*[_w(i) for i in indices])
 
     async def _close_all(self):
-        sessions = list(self._sessions.values())
-        self._sessions.clear()
-        LOGGER.info(f"HypertgTransfer close_all {len(sessions)} sessions")
-        for i, s in enumerate(sessions):
-            try:
-                for client in self.clients.values():
-                    if s in client.media_sessions.values():
-                        break
-                else:
-                    if s.is_connected:
-                        await s.stop()
-            except Exception:
-                pass
+        await self._pool.stop()
 
     @staticmethod
     def _location(fid):

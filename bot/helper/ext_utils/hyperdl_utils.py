@@ -31,8 +31,9 @@ from pyrogram.errors import (
     RequestTokenInvalid,
 )
 from pyrogram.file_id import PHOTO_TYPES, FileId, FileType
-from pyrogram.session import Auth, Session
+from pyrogram.session import Auth
 from pyrogram.session.internals import MsgId
+from ...hyper_mtproto.session import Session as HyperSession
 
 from ... import LOGGER
 from ...core.config_manager import Config
@@ -168,11 +169,11 @@ class HypertgDownload(HypertgTransfer):
     async def _get_cdn_session(self, idx, cdn_dc, client):
         key = (idx, cdn_dc)
         s = self._cdn_sessions.get(key)
-        if s and s.is_connected:
+        if s and s.is_connected.is_set() and not s._closed:
             return s
         tm = await client.storage.test_mode()
         ak = await Auth(client, cdn_dc, tm).create()
-        s = Session(client, cdn_dc, ak, tm, is_media=True, is_cdn=True)
+        s = HyperSession(client, cdn_dc, ak, tm, is_media=True, is_cdn=True)
         await s.start()
         self._cdn_sessions[key] = s
         return s

@@ -478,6 +478,8 @@ class TelegramUploader:
         title="",
     ):
         f_path = f_path or self._up_path
+        if not await aiopath.exists(f_path):
+            raise FileNotFoundError(f"File not found: {f_path}")
         up_size = await aiopath.getsize(f_path)
 
         if up_size > (TgClient.MAX_SPLIT_SIZE if self._user_session else 2097152000):
@@ -599,20 +601,8 @@ class TelegramUploader:
                 title=title,
             )
         except OSError as e:
-            LOGGER.warning(f"Transport error during upload, retrying: {e}")
-            await sleep(5)
-            return await self._hyperul_upload(
-                cap_mono,
-                file,
-                thumb,
-                key,
-                f_path=f_path,
-                duration=duration,
-                width=width,
-                height=height,
-                artist=artist,
-                title=title,
-            )
+            LOGGER.warning(f"Transport error during upload: {e}")
+            raise
         except BadRequest:
             if key != "documents":
                 LOGGER.error(f"Retrying As Document. Path: {f_path}")
