@@ -9,9 +9,13 @@ from concurrent.futures import ThreadPoolExecutor
 import pyrogram
 from pyrogram import raw
 from pyrogram.errors import (
-    RPCError, InternalServerError, AuthKeyDuplicated,
-    FloodWait, FloodPremiumWait,
-    ServiceUnavailable, BadMsgNotification,
+    RPCError,
+    InternalServerError,
+    AuthKeyDuplicated,
+    FloodWait,
+    FloodPremiumWait,
+    ServiceUnavailable,
+    BadMsgNotification,
     SecurityCheckMismatch,
 )
 from pyrogram.raw.all import layer
@@ -43,7 +47,7 @@ class Session:
     TRANSPORT_ERRORS = {
         404: "auth key not found",
         429: "transport flood",
-        444: "invalid DC"
+        444: "invalid DC",
     }
 
     CUR_ALWD_INNR_QRYS = (
@@ -59,7 +63,7 @@ class Session:
         auth_key: bytes,
         test_mode: bool,
         is_media: bool = False,
-        is_cdn: bool = False
+        is_cdn: bool = False,
     ):
         self.client = client
         self.dc_id = dc_id
@@ -99,6 +103,11 @@ class Session:
     async def start(self, mode=3):
         self._closed = False
         self.mode = mode
+        self.session_id = os.urandom(8)
+        self.salt = 0
+        self.msg_factory = MsgFactory()
+        self.stored_msg_ids = []
+        self.pending_acks = set()
 
         while True:
             self.connection = Connection(
@@ -115,7 +124,9 @@ class Session:
 
                 self.network_task = self.client.loop.create_task(self.network_worker())
 
-                await self.send(raw.functions.Ping(ping_id=0), timeout=self.START_TIMEOUT)
+                await self.send(
+                    raw.functions.Ping(ping_id=0), timeout=self.START_TIMEOUT
+                )
 
                 if not self.is_cdn:
                     await self.send(
@@ -133,18 +144,26 @@ class Session:
                                 proxy=raw.types.InputClientProxy(
                                     address=self.client._un_docu_gnihts[0],
                                     port=self.client._un_docu_gnihts[1],
-                                ) if len(self.client._un_docu_gnihts) == 3 else None,
-                                params=self.client._un_docu_gnihts[2] if len(self.client._un_docu_gnihts) == 3 else None
-                            )
+                                )
+                                if len(self.client._un_docu_gnihts) == 3
+                                else None,
+                                params=self.client._un_docu_gnihts[2]
+                                if len(self.client._un_docu_gnihts) == 3
+                                else None,
+                            ),
                         ),
-                        timeout=self.START_TIMEOUT
+                        timeout=self.START_TIMEOUT,
                     )
 
                 self.ping_task = self.client.loop.create_task(self.ping_worker())
 
                 log.info(f"Session initialized: Layer {layer}")
-                log.info(f"Device: {self.client.device_model} - {self.client.app_version}")
-                log.info(f"System: {self.client.system_version} ({self.client.lang_code.upper()})")
+                log.info(
+                    f"Device: {self.client.device_model} - {self.client.app_version}"
+                )
+                log.info(
+                    f"System: {self.client.system_version} ({self.client.lang_code.upper()})"
+                )
 
             except AuthKeyDuplicated as e:
                 await self.stop()
@@ -180,6 +199,10 @@ class Session:
         for i in self.results.values():
             i.event.set()
 
+        self.results.clear()
+        self.stored_msg_ids.clear()
+        self.pending_acks.clear()
+
         if not self.is_media and callable(self.client.disconnect_handler):
             try:
                 await self.client.disconnect_handler(self.client)
@@ -205,11 +228,7 @@ class Session:
         except SecurityCheckMismatch:
             return
 
-        messages = (
-            data.body.messages
-            if isinstance(data.body, MsgContainer)
-            else [data]
-        )
+        messages = data.body.messages if isinstance(data.body, MsgContainer) else [data]
 
         log.debug("Received:")
         log.debug(data)
@@ -223,31 +242,41 @@ class Session:
 
             try:
                 if len(self.stored_msg_ids) > Session.STORED_MSG_IDS_MAX_SIZE:
-                    del self.stored_msg_ids[:Session.STORED_MSG_IDS_MAX_SIZE // 2]
+                    del self.stored_msg_ids[: Session.STORED_MSG_IDS_MAX_SIZE // 2]
 
                 if self.stored_msg_ids:
                     if msg.msg_id < self.stored_msg_ids[0]:
-                        raise SecurityCheckMismatch("The msg_id is lower than all the stored values")
+                        raise SecurityCheckMismatch(
+                            "The msg_id is lower than all the stored values"
+                        )
 
                     if msg.msg_id in self.stored_msg_ids:
-                        raise SecurityCheckMismatch("The msg_id is equal to any of the stored values")
+                        raise SecurityCheckMismatch(
+                            "The msg_id is equal to any of the stored values"
+                        )
 
-                    time_diff = (msg.msg_id - MsgId()) / 2 ** 32
+                    time_diff = (msg.msg_id - MsgId()) / 2**32
 
                     if time_diff > 30:
-                        raise SecurityCheckMismatch("The msg_id belongs to over 30 seconds in the future. "
-                                                    "Most likely the client time has to be synchronized.")
+                        raise SecurityCheckMismatch(
+                            "The msg_id belongs to over 30 seconds in the future. "
+                            "Most likely the client time has to be synchronized."
+                        )
 
                     if time_diff < -300:
-                        raise SecurityCheckMismatch("The msg_id belongs to over 300 seconds in the past. "
-                                                    "Most likely the client time has to be synchronized.")
+                        raise SecurityCheckMismatch(
+                            "The msg_id belongs to over 300 seconds in the past. "
+                            "Most likely the client time has to be synchronized."
+                        )
             except SecurityCheckMismatch as e:
                 log.info("Discarding packet: %s", e)
                 return
             else:
                 bisect.insort(self.stored_msg_ids, msg.msg_id)
 
-            if isinstance(msg.body, (raw.types.MsgDetailedInfo, raw.types.MsgNewDetailedInfo)):
+            if isinstance(
+                msg.body, (raw.types.MsgDetailedInfo, raw.types.MsgNewDetailedInfo)
+            ):
                 self.pending_acks.add(msg.body.answer_msg_id)
                 continue
 
@@ -256,7 +285,9 @@ class Session:
 
             msg_id = None
 
-            if isinstance(msg.body, (raw.types.BadMsgNotification, raw.types.BadServerSalt)):
+            if isinstance(
+                msg.body, (raw.types.BadMsgNotification, raw.types.BadServerSalt)
+            ):
                 msg_id = msg.body.bad_msg_id
             elif isinstance(msg.body, (FutureSalts, raw.types.RpcResult)):
                 msg_id = msg.body.req_msg_id
@@ -274,7 +305,9 @@ class Session:
             log.debug(f"Send {len(self.pending_acks)} acks")
 
             try:
-                await self.send(raw.types.MsgsAck(msg_ids=list(self.pending_acks)), False)
+                await self.send(
+                    raw.types.MsgsAck(msg_ids=list(self.pending_acks)), False
+                )
             except (OSError, TimeoutError):
                 pass
             else:
@@ -295,7 +328,8 @@ class Session:
                 await self.send(
                     raw.functions.PingDelayDisconnect(
                         ping_id=0, disconnect_delay=self.WAIT_TIMEOUT + 10
-                    ), False
+                    ),
+                    False,
                 )
             except (OSError, TimeoutError, RPCError):
                 pass
@@ -310,7 +344,11 @@ class Session:
 
             if packet is None or len(packet) == 4:
                 if packet:
-                    log.warning(f'Server sent "{Int.read(BytesIO(packet))}"')
+                    error_code = Int.read(BytesIO(packet))
+                    error_desc = Session.TRANSPORT_ERRORS.get(
+                        abs(error_code), "unknown"
+                    )
+                    log.warning(f'Server sent "{error_code}" ({error_desc})')
 
                 if self.is_connected.is_set():
                     self.client.loop.create_task(self.restart())
@@ -322,10 +360,7 @@ class Session:
         log.info("NetworkTask stopped")
 
     async def send(
-        self,
-        data: TLObject,
-        wait_response: bool = True,
-        timeout: float = WAIT_TIMEOUT
+        self, data: TLObject, wait_response: bool = True, timeout: float = WAIT_TIMEOUT
     ):
         message = self.msg_factory(data)
         msg_id = message.msg_id
@@ -343,13 +378,14 @@ class Session:
             self.salt,
             self.session_id,
             self.auth_key,
-            self.auth_key_id
+            self.auth_key_id,
         )
 
         try:
             await self.connection.send(payload)
         except OSError as e:
             self.results.pop(msg_id, None)
+            self.is_connected.clear()
             raise e
 
         if wait_response:
@@ -380,7 +416,7 @@ class Session:
         query: TLObject,
         retries: int = MAX_RETRIES,
         timeout: float = WAIT_TIMEOUT,
-        sleep_threshold: float = SLEEP_THRESHOLD
+        sleep_threshold: float = SLEEP_THRESHOLD,
     ):
         sleep_threshold = max(sleep_threshold, self.client.sleep_threshold)
 
@@ -405,25 +441,31 @@ class Session:
                 if amount > sleep_threshold >= 0:
                     raise
 
-                log.warning(f'[{self.client.name}] Waiting for {amount} seconds before continuing '
-                            f'(required by "{query_name}")')
+                log.warning(
+                    f"[{self.client.name}] Waiting for {amount} seconds before continuing "
+                    f'(required by "{query_name}")'
+                )
 
                 await asyncio.sleep(amount)
-            except (OSError, TimeoutError, InternalServerError, ServiceUnavailable) as e:
-                if (
-                    retries == 0 or
-                    (
-                        isinstance(e, InternalServerError) and
-                        getattr(e, "code", 0) == 500 and
-                        (e.ID or e.NAME) in [
-                            "HISTORY_GET_FAILED",
-                            "PERSISTENT_TIMESTAMP_OUTDATED",
-                        ]
-                    )
+            except (
+                OSError,
+                TimeoutError,
+                InternalServerError,
+                ServiceUnavailable,
+            ) as e:
+                if retries == 0 or (
+                    isinstance(e, InternalServerError)
+                    and getattr(e, "code", 0) == 500
+                    and (e.ID or e.NAME)
+                    in [
+                        "HISTORY_GET_FAILED",
+                        "PERSISTENT_TIMESTAMP_OUTDATED",
+                    ]
                 ):
                     raise e from None
                 (log.warning if retries < 2 else log.info)(
-                    f'[{Session.MAX_RETRIES - retries + 1}] Retrying "{query_name}" due to {str(e) or repr(e)}')
+                    f'[{Session.MAX_RETRIES - retries + 1}] Retrying "{query_name}" due to {str(e) or repr(e)}'
+                )
 
                 await asyncio.sleep(0.5)
 
