@@ -1,18 +1,17 @@
+import logging
 import time
-from struct import pack
+
+log = logging.getLogger(__name__)
 
 
 class MsgId:
     last_time = 0
     offset = 0
 
-    @classmethod
-    def generate(cls):
+    def __new__(cls) -> int:
         now = int(time.time())
         cls.offset = (cls.offset + 4) if now == cls.last_time else 0
-        msg_id = (now << 32) + cls.offset
+        msg_id = (now * 2 ** 32) + cls.offset
         cls.last_time = now
-        return pack("<q", msg_id)
 
-
-generate_msg_id = MsgId.generate
+        return msg_id

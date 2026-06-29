@@ -6,27 +6,33 @@ log = logging.getLogger(__name__)
 
 
 class TCPAbridged(TCP):
-    async def connect(self, address):
-        log.info("TCPAbridged connect %s", address)
+    def __init__(self, ipv6: bool, proxy: dict):
+        super().__init__(ipv6, proxy)
+
+    async def connect(self, address: tuple):
         await super().connect(address)
         await super().send(b"\xef")
 
-    async def send(self, data):
+    async def send(self, data: bytes, *args):
         length = len(data) // 4
-        if length <= 126:
-            header = bytes([length])
-        else:
-            header = b"\x7f" + length.to_bytes(3, "little")
-        async with self.lock:
-            self.writer.write(header + data)
-            await self.writer.drain()
-        log.info("TCPAbridged sent %dB header=%s", len(data), header.hex())
 
-    async def recv(self):
-        length = await self.reader.readexactly(1)
-        length = int.from_bytes(length, "little")
-        if length == 0x7F:
-            length = int.from_bytes(await self.reader.readexactly(3), "little")
-        data = await self.reader.readexactly(length * 4)
-        log.info("TCPAbridged recv %dB", len(data))
-        return data
+        await super().send(
+            (bytes([length])
+             if length <= 126
+             else b"\x7f" + length.to_bytes(3, "little"))
+            + data
+        )
+
+    async def recv(self, length: int = 0):
+        length = await super().recv(1)
+
+        if length is None:
+            return None
+
+        if length == b"\x7f":
+            length = await super().recv(3)
+
+            if length is None:
+                return None
+
+        return await super().recv(int.from_bytes(length, "little") * 4)

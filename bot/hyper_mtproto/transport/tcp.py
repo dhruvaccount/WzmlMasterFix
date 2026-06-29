@@ -1,77 +1,95 @@
 import asyncio
+import ipaddress
 import logging
 import socket
-from asyncio import Lock, open_connection, wait_for
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+import socks
 
 log = logging.getLogger(__name__)
 
-MB = 1024 * 1024
-RECV_TIMEOUT = 60
-
 
 class TCP:
-    def __init__(self, ipv6=False, proxy=None):
-        self.ipv6 = ipv6
-        self.proxy = proxy
+    TIMEOUT = 10
+
+    def __init__(self, ipv6: bool, proxy: dict):
+        self.socket = None
+
         self.reader = None
         self.writer = None
-        self.lock = Lock()
-        self._closed = False
 
-    async def connect(self, address):
-        host, port = address
-        log.info("TCP connect %s:%d", host, port)
-        family = socket.AF_INET6 if self.ipv6 else socket.AF_INET
-        if self.proxy:
-            import socks
+        self.lock = asyncio.Lock()
+        self.loop = asyncio.get_event_loop()
 
-            scheme = self.proxy.get("scheme")
-            pt = getattr(socks, scheme.upper())
-            sock = socks.socksocket(family)
-            sock.set_proxy(
-                proxy_type=pt,
-                addr=self.proxy["hostname"],
-                port=self.proxy["port"],
-            )
-            sock.settimeout(10)
-            loop = asyncio.get_running_loop()
-            await loop.sock_connect(sock, (host, port))
-            sock.setblocking(False)
-            self.reader, self.writer = await open_connection(sock=sock)
-        else:
-            self.reader, self.writer = await wait_for(
-                open_connection(host=host, port=port, family=family), 10
-            )
-        self._set_keepalive()
-        self._closed = False
+        if proxy:
+            hostname = proxy.get("hostname")
 
-    def _set_keepalive(self):
-        sock = self.writer.get_extra_info("socket")
-        if sock:
             try:
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                ip_address = ipaddress.ip_address(hostname)
+            except ValueError:
+                self.socket = socks.socksocket(socket.AF_INET)
+            else:
+                if isinstance(ip_address, ipaddress.IPv6Address):
+                    self.socket = socks.socksocket(socket.AF_INET6)
+                else:
+                    self.socket = socks.socksocket(socket.AF_INET)
+
+            self.socket.set_proxy(
+                proxy_type=getattr(socks, proxy.get("scheme").upper()),
+                addr=hostname,
+                port=proxy.get("port", None),
+                username=proxy.get("username", None),
+                password=proxy.get("password", None)
+            )
+
+            log.info(f"Using proxy {hostname}")
+        else:
+            self.socket = socks.socksocket(
+                socket.AF_INET6 if ipv6
+                else socket.AF_INET
+            )
+
+        self.socket.settimeout(TCP.TIMEOUT)
+
+    async def connect(self, address: tuple):
+        with ThreadPoolExecutor(1) as executor:
+            await self.loop.run_in_executor(executor, self.socket.connect, address)
+
+        self.reader, self.writer = await asyncio.open_connection(sock=self.socket)
+
+    def close(self):
+        try:
+            self.writer.close()
+        except AttributeError:
+            try:
+                self.socket.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
+            finally:
+                time.sleep(0.001)
+                self.socket.close()
 
-    async def close(self):
-        if self._closed:
-            return
-        self._closed = True
-        w = self.writer
-        self.writer = None
-        self.reader = None
-        if w:
-            try:
-                w.close()
-                await w.wait_closed()
-            except Exception:
-                pass
-
-    async def send(self, data):
+    async def send(self, data: bytes):
         async with self.lock:
             self.writer.write(data)
             await self.writer.drain()
 
-    async def recv(self, length):
-        return await wait_for(self.reader.readexactly(length), RECV_TIMEOUT)
+    async def recv(self, length: int = 0):
+        data = b""
+
+        while len(data) < length:
+            try:
+                chunk = await asyncio.wait_for(
+                    self.reader.read(length - len(data)),
+                    TCP.TIMEOUT
+                )
+            except (OSError, asyncio.TimeoutError):
+                return None
+            else:
+                if chunk:
+                    data += chunk
+                else:
+                    return None
+
+        return data

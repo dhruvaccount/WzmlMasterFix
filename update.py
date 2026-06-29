@@ -3,6 +3,8 @@ from hashlib import sha256
 from importlib import import_module
 from logging import ERROR, INFO, FileHandler, StreamHandler, basicConfig, getLogger
 from os import environ, path, remove
+from os.path import isdir
+from shutil import rmtree
 from subprocess import call as scall
 from subprocess import run as srun
 from sys import exit
@@ -167,6 +169,15 @@ def _update_packages():
     _LOGGER.info("Successfully Updated all the Packages!")
 
 
+def _cleanup():
+    for d in ["gen_scripts", ".github"]:
+        if isdir(d):
+            rmtree(d, ignore_errors=True)
+    for f in ["README.md", "LICENSE", "Dockerfile", "docker-compose.yml"]:
+        if path.exists(f):
+            remove(f)
+
+
 def main():
     _setup_logging()
     config_file = _load_config()
@@ -179,6 +190,7 @@ def main():
     upstream_repo = config_file.get("UPSTREAM_REPO", "").strip()
     upstream_branch = config_file.get("UPSTREAM_BRANCH", "").strip() or "wzv3"
     _run_update(upstream_repo, upstream_branch, version)
+    _cleanup()
     _update_packages()
 
 

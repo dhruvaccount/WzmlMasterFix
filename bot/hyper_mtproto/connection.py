@@ -1,6 +1,7 @@
+import asyncio
 import logging
 
-from .data_center import get_dc_address
+from .data_center import DataCenter
 from .transport.tcp_abridged import TCPAbridged
 from .transport.tcp_abridged_o import TCPAbridgedO
 
@@ -8,34 +9,54 @@ log = logging.getLogger(__name__)
 
 
 class Connection:
-    def __init__(self, dc_id, test_mode, ipv6, proxy, is_media, mode=3):
+    MAX_RETRIES = 3
+
+    MODES = {
+        1: TCPAbridged,
+        3: TCPAbridgedO,
+    }
+
+    def __init__(self, dc_id: int, test_mode: bool, ipv6: bool, proxy: dict, media: bool = False, mode: int = 3):
         self.dc_id = dc_id
         self.test_mode = test_mode
         self.ipv6 = ipv6
         self.proxy = proxy
-        self.is_media = is_media
-        self.mode = mode
-        self.transport = None
+        self.media = media
+        self.address = DataCenter.get(dc_id, test_mode, ipv6, media)
+        self.mode = self.MODES.get(mode, TCPAbridgedO)
+
+        self.protocol = None
 
     async def connect(self):
-        host, port = get_dc_address(self.dc_id, self.test_mode, media=self.is_media)
+        for i in range(Connection.MAX_RETRIES):
+            self.protocol = self.mode(self.ipv6, self.proxy)
 
-        tmode = "TCPAbridgedO" if self.mode == 3 else "TCPAbridged"
-        log.info("Connecting DC%d %s:%d transport=%s", self.dc_id, host, port, tmode)
-
-        if self.mode == 3:
-            self.transport = TCPAbridgedO(ipv6=self.ipv6, proxy=self.proxy)
+            try:
+                log.info("Connecting...")
+                await self.protocol.connect(self.address)
+            except OSError as e:
+                log.warning(f"Unable to connect due to network issues: {e}")
+                self.protocol.close()
+                await asyncio.sleep(1)
+            else:
+                log.info("Connected! DC{} transport={}".format(
+                    self.dc_id,
+                    self.mode.__name__,
+                ))
+                break
         else:
-            self.transport = TCPAbridged(ipv6=self.ipv6, proxy=self.proxy)
+            log.warning("Connection failed! Trying again...")
+            raise TimeoutError
 
-        await self.transport.connect((host, port))
+    def close(self):
+        self.protocol.close()
+        log.info("Disconnected")
 
-    async def send(self, data):
-        await self.transport.send(data)
+    async def send(self, data: bytes):
+        try:
+            await self.protocol.send(data)
+        except Exception as e:
+            raise OSError(e)
 
     async def recv(self):
-        return await self.transport.recv()
-
-    async def close(self):
-        if self.transport:
-            await self.transport.close()
+        return await self.protocol.recv()

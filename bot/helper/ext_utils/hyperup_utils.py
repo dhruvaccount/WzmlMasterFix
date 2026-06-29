@@ -1,14 +1,27 @@
 import asyncio
+import functools
+import inspect
+import io
+import math
+import os
 from hashlib import md5
 from math import ceil
 from mimetypes import guess_type
 from os import path as ospath
+from pathlib import PurePath
 from re import search as research
 
 from pyrogram import StopTransmission, raw, utils
-from pyrogram.errors import FilePartMissing, FloodPremiumWait, FloodWait
+from pyrogram.errors import (
+    AuthBytesInvalid,
+    FilePartMissing,
+    FloodPremiumWait,
+    FloodWait,
+)
 
 from ... import LOGGER
+from ...hyper_mtproto.auth import get_auth_key
+from ...hyper_mtproto.session import Session as HyperSession
 from ..telegram_helper.tg_transfer import MB, HypertgTransfer
 
 KB = 1024
@@ -54,150 +67,212 @@ class HypertgUpload(HypertgTransfer):
             force_file=media_type == "document",
         )
 
+    async def _save_file(
+        self,
+        client,
+        dc_id,
+        file_path,
+        file_id=None,
+        file_part=0,
+        progress=None,
+        progress_args=(),
+    ):
+        if file_path is None:
+            return None
+
+        async def worker(session):
+            while True:
+                data = await queue.get()
+                if data is None:
+                    return
+                try:
+                    await session.invoke(data)
+                except Exception as e:
+                    LOGGER.error(e)
+
+        part_size = 512 * 1024
+
+        if isinstance(file_path, (str, PurePath)):
+            fp = open(file_path, "rb")
+        elif isinstance(file_path, io.IOBase):
+            fp = file_path
+        else:
+            raise ValueError(
+                "Invalid file. Expected a file path as string or a binary (not text) file pointer"
+            )
+
+        file_name = getattr(fp, "name", "file.jpg")
+        fp.seek(0, os.SEEK_END)
+        file_size = fp.tell()
+        fp.seek(0)
+
+        if file_size == 0:
+            raise ValueError("File size equals to 0 B")
+
+        file_total_parts = int(math.ceil(file_size / part_size))
+        is_big = file_size > 10 * 1024 * 1024
+        pool_size = 3 if is_big else 1
+        workers_count = 4 if is_big else 1
+        is_missing_part = file_id is not None
+        file_id = file_id or client.rnd_id()
+        md5_sum = md5() if not is_big and not is_missing_part else None
+
+        ak, is_cross = await get_auth_key(client, dc_id)
+        test_mode = await client.storage.test_mode()
+        pool = [
+            HyperSession(client, dc_id, ak, test_mode, is_media=True)
+            for _ in range(pool_size)
+        ]
+        workers = [
+            asyncio.create_task(worker(s)) for s in pool for _ in range(workers_count)
+        ]
+        queue = asyncio.Queue(16)
+
+        try:
+            for s in pool:
+                await s.start(mode=3)
+
+            if is_cross:
+                for s in pool:
+                    for attempt in range(6):
+                        try:
+                            e = await client.invoke(
+                                raw.functions.auth.ExportAuthorization(dc_id=dc_id)
+                            )
+                            await s.invoke(
+                                raw.functions.auth.ImportAuthorization(
+                                    id=e.id, bytes=e.bytes
+                                )
+                            )
+                            break
+                        except AuthBytesInvalid:
+                            await asyncio.sleep(1)
+                    else:
+                        for ss in pool:
+                            await ss.stop()
+                        raise RuntimeError(f"Auth export/import failed for DC {dc_id}")
+
+            fp.seek(part_size * file_part)
+
+            while True:
+                if self._listener.is_cancelled:
+                    raise StopTransmission()
+                chunk = fp.read(part_size)
+
+                if not chunk:
+                    if not is_big and not is_missing_part:
+                        md5_sum = "".join(
+                            [hex(i)[2:].zfill(2) for i in md5_sum.digest()]
+                        )
+                    break
+
+                if is_big:
+                    rpc = raw.functions.upload.SaveBigFilePart(
+                        file_id=file_id,
+                        file_part=file_part,
+                        file_total_parts=file_total_parts,
+                        bytes=chunk,
+                    )
+                else:
+                    rpc = raw.functions.upload.SaveFilePart(
+                        file_id=file_id, file_part=file_part, bytes=chunk
+                    )
+
+                await queue.put(rpc)
+
+                if is_missing_part:
+                    return
+
+                if not is_big and not is_missing_part:
+                    md5_sum.update(chunk)
+
+                file_part += 1
+
+                if progress:
+                    func = functools.partial(
+                        progress,
+                        min(file_part * part_size, file_size),
+                        file_size,
+                        *progress_args,
+                    )
+
+                    if inspect.iscoroutinefunction(progress):
+                        await func()
+                    else:
+                        await asyncio.get_event_loop().run_in_executor(None, func)
+        except StopTransmission:
+            raise
+        except Exception as e:
+            LOGGER.error(e, exc_info=True)
+        else:
+            if is_big:
+                return raw.types.InputFileBig(
+                    id=file_id,
+                    parts=file_total_parts,
+                    name=file_name,
+                )
+            else:
+                return raw.types.InputFile(
+                    id=file_id,
+                    parts=file_total_parts,
+                    name=file_name,
+                    md5_checksum=md5_sum,
+                )
+        finally:
+            for _ in workers:
+                await queue.put(None)
+
+            await asyncio.gather(*workers)
+
+            for s in pool:
+                await s.stop()
+            if isinstance(file_path, (str, PurePath)):
+                fp.close()
+
     async def _upload_file(self, client, file_path):
         import time as _time
 
         _t0 = _time.monotonic()
         file_size = ospath.getsize(file_path)
         file_total_parts = ceil(file_size / PART_SIZE)
-        file_id = client.rnd_id()
         dc_id = await client.storage.dc_id()
-        is_big = file_size > 10 * MB
+        file_name = ospath.basename(file_path)
+        self._obj._processed_bytes = 0
 
-        session = await self._mk_session(client, dc_id, mode=3)
-        fp = open(file_path, "rb", buffering=4 * MB)
-        bytes_uploaded = 0
+        def _progress(current, total):
+            self._obj._processed_bytes = current
+            part = current // PART_SIZE
+            if part > 0 and part % max(1, file_total_parts // 10) == 0:
+                elapsed = _time.monotonic() - _t0
+                mb_done = current / MB
+                mb_total = file_size / MB
+                LOGGER.info(
+                    f"HypertgUL {file_name} "
+                    f"part={part}/{file_total_parts} "
+                    f"MB={mb_done:.0f}/{mb_total:.0f} "
+                    f"speed={mb_done / elapsed:.1f}MB/s"
+                )
 
         try:
-            for part_idx in range(file_total_parts):
-                if self._listener.is_cancelled:
-                    raise StopTransmission()
-                chunk = fp.read(PART_SIZE)
-                if not chunk:
-                    break
-                if is_big:
-                    rpc = raw.functions.upload.SaveBigFilePart(
-                        file_id=file_id,
-                        file_part=part_idx,
-                        file_total_parts=file_total_parts,
-                        bytes=chunk,
-                    )
-                else:
-                    rpc = raw.functions.upload.SaveFilePart(
-                        file_id=file_id,
-                        file_part=part_idx,
-                        bytes=chunk,
-                    )
-                await session.invoke(rpc)
-                bytes_uploaded += len(chunk)
-                self._obj._processed_bytes = bytes_uploaded
-
-                if part_idx > 0 and part_idx % max(1, file_total_parts // 10) == 0:
-                    elapsed = _time.monotonic() - _t0
-                    mb_done = bytes_uploaded / MB
-                    mb_total = file_size / MB
-                    LOGGER.info(
-                        f"HypertgUL {ospath.basename(file_path)} "
-                        f"part={part_idx + 1}/{file_total_parts} "
-                        f"MB={mb_done:.0f}/{mb_total:.0f} "
-                        f"speed={mb_done / elapsed:.1f}MB/s"
-                    )
-
+            result = await self._save_file(client, dc_id, file_path, progress=_progress)
             self._obj._processed_bytes = file_size
             elapsed = _time.monotonic() - _t0
             LOGGER.info(
-                f"HypertgUL done {ospath.basename(file_path)} "
+                f"HypertgUL done {file_name} "
                 f"elapsed={elapsed:.1f}s "
                 f"speed={file_size / MB / elapsed:.1f}MB/s"
             )
-
-            if is_big:
-                return raw.types.InputFileBig(
-                    id=file_id,
-                    parts=file_total_parts,
-                    name=ospath.basename(file_path),
-                )
-            return raw.types.InputFile(
-                id=file_id,
-                parts=file_total_parts,
-                name=ospath.basename(file_path),
-                md5_checksum=md5().hexdigest(),
-            )
+            return result
         except StopTransmission:
-            LOGGER.warning(f"HypertgUL upload cancelled {ospath.basename(file_path)}")
+            LOGGER.warning(f"HypertgUL upload cancelled {file_name}")
             raise
         except Exception as e:
             LOGGER.error(f"HypertgUL upload fail: {type(e).__name__}: {e}")
             raise
-        finally:
-            fp.close()
-
-    async def _upload_small(self, client, file_path):
-        file_size = ospath.getsize(file_path)
-        file_total_parts = ceil(file_size / PART_SIZE)
-        file_id = client.rnd_id()
-        dc_id = await client.storage.dc_id()
-
-        session = await self._mk_session(client, dc_id, mode=3)
-        fp = open(file_path, "rb")
-        h = md5()
-
-        try:
-            for part in range(file_total_parts):
-                if self._listener.is_cancelled:
-                    raise StopTransmission()
-                chunk = fp.read(PART_SIZE)
-                if not chunk:
-                    break
-                h.update(chunk)
-                await session.invoke(
-                    raw.functions.upload.SaveFilePart(
-                        file_id=file_id,
-                        file_part=part,
-                        bytes=chunk,
-                    )
-                )
-                self._obj._processed_bytes += len(chunk)
-            return raw.types.InputFile(
-                id=file_id,
-                parts=file_total_parts,
-                name=ospath.basename(file_path),
-                md5_checksum=h.hexdigest(),
-            )
-        finally:
-            fp.close()
 
     async def _upload_thumb(self, client, file_path):
-        file_size = ospath.getsize(file_path)
-        file_id = client.rnd_id()
-        file_total_parts = ceil(file_size / PART_SIZE)
-        fp = open(file_path, "rb")
-        h = md5()
-
-        try:
-            for part in range(file_total_parts):
-                if self._listener.is_cancelled:
-                    raise StopTransmission()
-                chunk = fp.read(PART_SIZE)
-                if not chunk:
-                    break
-                h.update(chunk)
-                await client.invoke(
-                    raw.functions.upload.SaveFilePart(
-                        file_id=file_id,
-                        file_part=part,
-                        bytes=chunk,
-                    )
-                )
-                self._obj._processed_bytes += len(chunk)
-            return raw.types.InputFile(
-                id=file_id,
-                parts=file_total_parts,
-                name=ospath.basename(file_path),
-                md5_checksum=h.hexdigest(),
-            )
-        finally:
-            fp.close()
+        dc_id = await client.storage.dc_id()
+        return await self._save_file(client, dc_id, file_path)
 
     async def _reupload_part(self, client, file_path, input_file, part_num):
         offset = part_num * PART_SIZE
@@ -208,6 +283,8 @@ class HypertgUpload(HypertgTransfer):
             if not chunk:
                 LOGGER.warning(f"HypertgUL reupload part={part_num} empty")
                 return
+            dc_id = await client.storage.dc_id()
+            session = await self._mk_session(client, dc_id, mode=3)
             if isinstance(input_file, raw.types.InputFileBig):
                 rpc = raw.functions.upload.SaveBigFilePart(
                     file_id=input_file.id,
@@ -221,7 +298,7 @@ class HypertgUpload(HypertgTransfer):
                     file_part=part_num,
                     bytes=chunk,
                 )
-            await client.invoke(rpc)
+            await session.invoke(rpc)
         except Exception as e:
             LOGGER.error(
                 f"HypertgUL reupload part={part_num} fail: {type(e).__name__}: {e}"
@@ -246,10 +323,7 @@ class HypertgUpload(HypertgTransfer):
         self._up_file = ospath.basename(file_path)
         self._up_size = ospath.getsize(file_path)
 
-        if self._up_size > 10 * MB:
-            input_file = await self._upload_file(target_client, file_path)
-        else:
-            input_file = await self._upload_small(target_client, file_path)
+        input_file = await self._upload_file(target_client, file_path)
 
         thumb_file = None
         if thumb_path and ospath.exists(thumb_path) and ospath.getsize(thumb_path) > 0:

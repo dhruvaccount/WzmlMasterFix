@@ -1,81 +1,67 @@
 import logging
 import os
 
-from ..crypto.aes import ctr256_decrypt, ctr256_encrypt
+from pyrogram.crypto import aes
+
 from .tcp import TCP
 
 log = logging.getLogger(__name__)
 
-RESERVED = (b"HEAD", b"POST", b"GET ", b"OPTI", b"\xee" * 4)
-
 
 class TCPAbridgedO(TCP):
-    def __init__(self, ipv6=False, proxy=None):
-        super().__init__(ipv6, proxy)
-        self.enc_key = None
-        self.enc_iv = None
-        self.enc_state = None
-        self.dec_key = None
-        self.dec_iv = None
-        self.dec_state = None
+    RESERVED = (b"HEAD", b"POST", b"GET ", b"OPTI", b"\xee" * 4)
 
-    async def connect(self, address):
-        log.info("TCPAbridgedO connect %s", address)
-        await TCP.connect(self, address)
+    def __init__(self, ipv6: bool, proxy: dict):
+        super().__init__(ipv6, proxy)
+
+        self.encrypt = None
+        self.decrypt = None
+
+    async def connect(self, address: tuple):
+        await super().connect(address)
 
         while True:
             nonce = bytearray(os.urandom(64))
 
-            if (
-                nonce[0] != 0xEF
-                and nonce[:4] not in RESERVED
-                and nonce[4:8] != b"\x00" * 4
-            ):
-                nonce[56] = nonce[57] = nonce[58] = nonce[59] = 0xEF
+            if nonce[0] != b"\xef" and nonce[:4] not in self.RESERVED and nonce[4:4] != b"\x00" * 4:
+                nonce[56] = nonce[57] = nonce[58] = nonce[59] = 0xef
                 break
 
         temp = bytearray(nonce[55:7:-1])
 
-        self.enc_key = bytes(nonce[8:40])
-        self.enc_iv = bytearray(nonce[40:56])
-        self.enc_state = bytearray(1)
+        self.encrypt = (nonce[8:40], nonce[40:56], bytearray(1))
+        self.decrypt = (temp[0:32], temp[32:48], bytearray(1))
 
-        self.dec_key = bytes(temp[0:32])
-        self.dec_iv = bytearray(temp[32:48])
-        self.dec_state = bytearray(1)
+        nonce[56:64] = aes.ctr256_encrypt(nonce, *self.encrypt)[56:64]
 
-        nonce[56:64] = ctr256_encrypt(nonce, self.enc_key, self.enc_iv, self.enc_state)[
-            56:64
-        ]
+        await super().send(nonce)
 
-        async with self.lock:
-            self.writer.write(nonce)
-            await self.writer.drain()
-        log.info("TCPAbridgedO nonce sent")
-
-    async def send(self, data):
+    async def send(self, data: bytes, *args):
         length = len(data) // 4
-        if length <= 126:
-            header = bytes([length])
-        else:
-            header = b"\x7f" + length.to_bytes(3, "little")
-        payload = ctr256_encrypt(
-            header + data, self.enc_key, self.enc_iv, self.enc_state
-        )
-        async with self.lock:
-            self.writer.write(payload)
-            await self.writer.drain()
-        log.info("TCPAbridgedO sent %dB enc", len(data))
+        data = (bytes([length]) if length <= 126 else b"\x7f" + length.to_bytes(3, "little")) + data
+        payload = await self.loop.run_in_executor(None, aes.ctr256_encrypt, data, *self.encrypt)
 
-    async def recv(self):
-        length = await self.reader.readexactly(1)
-        length = ctr256_decrypt(length, self.dec_key, self.dec_iv, self.dec_state)
+        await super().send(payload)
+
+    async def recv(self, length: int = 0):
+        length = await super().recv(1)
+
+        if length is None:
+            return None
+
+        length = aes.ctr256_decrypt(length, *self.decrypt)
 
         if length == b"\x7f":
-            length = await self.reader.readexactly(3)
-            length = ctr256_decrypt(length, self.dec_key, self.dec_iv, self.dec_state)
+            length = await super().recv(3)
 
-        data = await self.reader.readexactly(int.from_bytes(length, "little") * 4)
-        decrypted = ctr256_decrypt(data, self.dec_key, self.dec_iv, self.dec_state)
-        log.info("TCPAbridgedO recv %dB enc→%dB dec", len(data), len(decrypted))
-        return decrypted
+            if length is None:
+                return None
+
+            length = aes.ctr256_decrypt(length, *self.decrypt)
+
+        data = await super().recv(int.from_bytes(length, "little") * 4)
+
+        if data is None:
+            return None
+
+        return await self.loop.run_in_executor(None, aes.ctr256_decrypt, data, *self.decrypt)
