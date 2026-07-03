@@ -5,7 +5,7 @@ from gzip import compress as gzip_compress
 from hashlib import sha256
 from hmac import new as hmac_new
 from logging import ERROR, Formatter, Handler, getLogger
-from sys import platform
+from sys import platform, stderr
 from time import time
 from traceback import format_exception
 
@@ -89,6 +89,8 @@ def _make_payload(exc_type, exc_value, exc_traceback):
 
 
 def send_unhandled_exception(exc_type, exc_value, exc_traceback):
+    tb = "".join(format_exception(exc_type, exc_value, exc_traceback))
+    print(tb, file=stderr)
     if not Config.ENABLE_TELEMETRY:
         return
     payload = _make_payload(exc_type, exc_value, exc_traceback)
@@ -96,13 +98,15 @@ def send_unhandled_exception(exc_type, exc_value, exc_traceback):
 
 
 def send_async_exception(context):
+    exc = context.get("exception")
+    if exc:
+        tb = "".join(format_exception(type(exc), exc, exc.__traceback__))
+        print(tb, file=stderr)
     if not Config.ENABLE_TELEMETRY:
         return
-    exc = context.get("exception")
     if not exc:
         return
-    tb = exc.__traceback__
-    payload = _make_payload(type(exc), exc, tb)
+    payload = _make_payload(type(exc), exc, exc.__traceback__)
     message = context.get("message", "")
     if message:
         payload["logs"] = message
