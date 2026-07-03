@@ -7,7 +7,7 @@ from time import time
 from aioshutil import rmtree
 from natsort import natsorted
 from PIL import Image
-from pyrogram import StopTransmission, raw
+from pyrogram import StopTransmission
 from pyrogram.errors import BadRequest, FloodPremiumWait, FloodWait, RPCError
 
 from aiofiles.os import (
@@ -492,7 +492,7 @@ class TelegramUploader:
                     self._user_session = True
                     self._sent_msg = user_msg
 
-        if Config.USE_HYPER and up_size > 10 * 1024 * 1024:
+        if Config.USE_HYPER and Config.LEECH_DUMP_CHAT and up_size > 10 * 1024 * 1024:
             try:
                 if self._hu is None:
                     self._hu = HypertgUpload(self)
@@ -503,36 +503,15 @@ class TelegramUploader:
                     "documents": "document",
                     "photos": "photo",
                 }[key]
-                attributes = []
-                if key == "videos":
-                    attributes.append(
-                        raw.types.DocumentAttributeVideo(
-                            duration=duration,
-                            w=width,
-                            h=height,
-                            supports_streaming=True,
-                        )
-                    )
-                elif key == "audios":
-                    attributes.append(
-                        raw.types.DocumentAttributeAudio(
-                            duration=duration,
-                            performer=artist,
-                            title=title,
-                        )
-                    )
-                if key in ("videos", "audios", "documents"):
-                    attributes.append(
-                        raw.types.DocumentAttributeFilename(file_name=file)
-                    )
 
                 sent = await self._hu.upload(
-                    target_client=self._sent_msg._client,
-                    target_chat_id=self._sent_msg.chat.id,
                     file_path=f_path,
-                    dump_chat_id=0,
                     media_type=media_type,
-                    attributes=attributes,
+                    duration=duration,
+                    width=width,
+                    height=height,
+                    artist=artist,
+                    title=title,
                     thumb_path=thumb if thumb and thumb != "none" else None,
                     caption=cap_mono,
                     reply_to_message_id=self._sent_msg.id,

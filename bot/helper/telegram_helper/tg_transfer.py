@@ -1,27 +1,104 @@
 from asyncio import Event, gather, sleep
 
 from pyrogram import raw, utils
-from pyrogram.connection import Connection
 from pyrogram.errors import AuthBytesInvalid
 from pyrogram.file_id import FileType, ThumbnailSource
+from pyrogram.session import Auth, Session
 
 from ... import LOGGER
 from ...core.tg_client import TgClient
-from ...hyper_mtproto import MtprotoPool
-from ...hyper_mtproto.auth import get_auth_key
-from ...hyper_mtproto.session import Session as HyperSession
-
-_orig_connection_close = Connection.close
-
-
-def _safe_connection_close(self):
-    if self.protocol is not None:
-        return _orig_connection_close(self)
-
-
-Connection.close = _safe_connection_close
 
 MB = 1024 * 1024
+
+
+class MtprotoPool:
+    def __init__(self, clients):
+        if isinstance(clients, dict):
+            self._client_map = dict(clients)
+            self._client_order = list(clients.keys())
+        else:
+            self._client_map = {i: c for i, c in enumerate(clients)}
+            self._client_order = list(self._client_map.keys())
+        self._sessions = {}
+        self._locks = {}
+        self._closed = False
+
+    def _resolve_key(self, client_key):
+        if client_key in self._client_map:
+            return client_key
+        if isinstance(client_key, int) and self._client_order:
+            return self._client_order[client_key % len(self._client_order)]
+        raise KeyError(f"Client key {client_key} not found")
+
+    async def _get_auth_key(self, client, dc_id):
+        test_mode = await client.storage.test_mode()
+        main_dc = await client.storage.dc_id()
+        if dc_id == main_dc:
+            return await client.storage.auth_key(), False
+        ak = await Auth(client, dc_id, test_mode).create()
+        return ak, True
+
+    async def get_session(self, client_key, dc_id, is_media=True):
+        ck = self._resolve_key(client_key)
+        cache_key = (ck, dc_id)
+        s = self._sessions.get(cache_key)
+        if s and s.is_started.is_set():
+            return s
+        if cache_key not in self._locks:
+            self._locks[cache_key] = __import__("asyncio").Lock()
+        async with self._locks[cache_key]:
+            s = self._sessions.get(cache_key)
+            if s and s.is_started.is_set():
+                return s
+            if s:
+                try:
+                    await s.stop()
+                except Exception:
+                    pass
+            client = self._client_map[ck]
+            ak, is_cross = await self._get_auth_key(client, dc_id)
+            s = Session(
+                client, dc_id, ak, await client.storage.test_mode(), is_media=is_media
+            )
+            await s.start()
+            if is_cross:
+                for attempt in range(6):
+                    try:
+                        e = await client.invoke(
+                            raw.functions.auth.ExportAuthorization(dc_id=dc_id)
+                        )
+                        await s.invoke(
+                            raw.functions.auth.ImportAuthorization(
+                                id=e.id, bytes=e.bytes
+                            )
+                        )
+                        break
+                    except AuthBytesInvalid:
+                        await sleep(1)
+                else:
+                    await s.stop()
+                    raise RuntimeError(f"Auth export/import failed for DC {dc_id}")
+            self._sessions[cache_key] = s
+        return s
+
+    async def drop_session(self, client_key, dc_id):
+        ck = self._resolve_key(client_key)
+        cache_key = (ck, dc_id)
+        s = self._sessions.pop(cache_key, None)
+        if s:
+            try:
+                await s.stop()
+            except Exception:
+                pass
+
+    async def stop(self):
+        self._closed = True
+        for s in self._sessions.values():
+            try:
+                await s.stop()
+            except Exception:
+                pass
+        self._sessions.clear()
 
 
 class HypertgTransfer:
@@ -51,42 +128,19 @@ class HypertgTransfer:
             f"loads={dict(TgClient.helper_loads)}"
         )
 
+    def _pick_client(self):
+        return min(self.work_loads, key=self.work_loads.get)
+
     def _client_idx(self, client):
         for i, c in self.clients.items():
             if c is client:
                 return i
         return None
 
-    async def _mk_session(self, client, dc_id, mode=3):
-        idx = self._client_idx(client)
-        if idx is not None:
-            return await self._pool.get_session(idx, dc_id, is_media=True, mode=mode)
-        ak, is_cross = await get_auth_key(client, dc_id)
-        s = HyperSession(
-            client, dc_id, ak, await client.storage.test_mode(), is_media=True
-        )
-        await s.start(mode=mode)
-        if is_cross:
-            for attempt in range(6):
-                try:
-                    e = await client.invoke(
-                        raw.functions.auth.ExportAuthorization(dc_id=dc_id)
-                    )
-                    await s.invoke(
-                        raw.functions.auth.ImportAuthorization(id=e.id, bytes=e.bytes)
-                    )
-                    break
-                except AuthBytesInvalid:
-                    await sleep(1)
-            else:
-                await s.stop()
-                raise AuthBytesInvalid
-        return s
-
     async def _get_session(self, idx, dc_id, force=False):
         if force:
             await self._pool.drop_session(idx, dc_id)
-        return await self._pool.get_session(idx, dc_id, is_media=True, mode=3)
+        return await self._pool.get_session(idx, dc_id, is_media=True)
 
     async def _warmup(self, indices, dc_id):
         async def _w(i):
