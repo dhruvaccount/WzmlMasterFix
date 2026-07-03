@@ -751,7 +751,7 @@ class HypertgDownload(HypertgTransfer):
                     self.work_loads[k] = max(0, self.work_loads.get(k, 0) - 1)
             for s in self._cdn_sessions.values():
                 try:
-                    if s.is_connected:
+                    if s.is_started.is_set():
                         await s.stop()
                 except Exception:
                     pass
