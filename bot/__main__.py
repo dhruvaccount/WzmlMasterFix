@@ -139,7 +139,7 @@ from .helper.listeners.aria2_listener import add_aria2_callbacks
 
 add_aria2_callbacks()
 create_help_buttons()
-add_handlers()
+bot_loop.run_until_complete(add_handlers())
 
 from .modules import restart_notification
 
@@ -186,7 +186,7 @@ async def restart_sessions_confirm(_, query):
         restart_message = await send_message(reply_to, "Restarting Session(s)...")
         await delete_message(message)
         await TgClient.reload()
-        add_handlers()
+        await add_handlers()
         TgClient.bot.add_handler(
             CallbackQueryHandler(
                 restart_sessions_confirm,
