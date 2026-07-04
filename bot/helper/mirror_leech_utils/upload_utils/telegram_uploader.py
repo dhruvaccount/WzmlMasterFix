@@ -19,6 +19,7 @@ from pyrogram.types import (
     InputMediaDocument,
     InputMediaPhoto,
     InputMediaVideo,
+    ReplyParameters,
 )
 
 from ....core.config_manager import Config
@@ -285,7 +286,7 @@ class TelegramUploader:
             self._sent_msg = (
                 await self._sent_msg.reply_media_group(
                     media=batch,
-                    quote=True,
+                    reply_parameters=ReplyParameters(message_id=self._sent_msg.id),
                     disable_notification=True,
                 )
             )[-1]
@@ -302,7 +303,7 @@ class TelegramUploader:
                 )
         msgs_list = await msgs[0].reply_to_message.reply_media_group(
             media=self._get_input_media(subkey, key),
-            quote=True,
+            reply_parameters=ReplyParameters(message_id=msgs[0].reply_to_message.id),
             disable_notification=True,
         )
         for msg in msgs:

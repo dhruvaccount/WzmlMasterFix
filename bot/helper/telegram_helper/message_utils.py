@@ -3,7 +3,7 @@ from random import choice
 from re import match as re_match
 from time import time
 
-from pyrogram.types import Message, InputMediaPhoto
+from pyrogram.types import Message, InputMediaPhoto, ReplyParameters
 from pyrogram.enums import ButtonStyle, ParseMode
 from pyrogram.errors import (
     FloodWait,
@@ -54,7 +54,7 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
                     if isinstance(message, Message):
                         return await message.reply(
                             text=text,
-                            quote=True,
+                            reply_parameters=ReplyParameters(message_id=message.id),
                             disable_web_page_preview=True,
                             disable_notification=True,
                             reply_markup=buttons,
@@ -70,9 +70,8 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
                 if isinstance(message, Message):
                     return await message.reply_photo(
                         photo=photo,
-                        reply_to_message_id=message.id,
                         caption=text,
-                        quote=True,
+                        reply_parameters=ReplyParameters(message_id=message.id),
                         reply_markup=buttons,
                         disable_notification=True,
                         **kwargs,
@@ -122,7 +121,7 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
         if isinstance(message, Message):
             return await message.reply(
                 text=text,
-                quote=True,
+                reply_parameters=ReplyParameters(message_id=message.id),
                 disable_web_page_preview=True,
                 disable_notification=True,
                 reply_markup=buttons,
@@ -233,7 +232,7 @@ async def send_file(message, file, caption="", buttons=None):
     try:
         return await message.reply_document(
             document=file,
-            quote=True,
+            reply_parameters=ReplyParameters(message_id=message.id),
             caption=caption,
             disable_notification=True,
             reply_markup=buttons,
