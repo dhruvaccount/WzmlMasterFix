@@ -84,7 +84,6 @@ DEFAULT_VALUES = {
 BOOL_VARS = [
     "AS_DOCUMENT",
     "BOT_PM",
-    "CLEAN_LOG_MSG",
     "COLORED_BTNS",
     "DELETE_LINKS",
     "DRIVE_CATEGORY_MODE",
@@ -192,7 +191,6 @@ DEFAULT_DESP = {
     "LEECH_DUMP_CHAT": "Chat ID (integer) to dump all leeched files. Leave empty to disable.",
     "LINKS_LOG_ID": "Chat ID for link logging.",
     "MIRROR_LOG_ID": "Chat ID(s) for mirror logs. Space-separated for multiple.",
-    "CLEAN_LOG_MSG": "Clean leech log and bot PM task messages. Default: False.",
     "LEECH_PREFIX": "Prefix added to leeched file names.",
     "LEECH_CAPTION": "Custom caption for leeched files. Supports HTML.",
     "LEECH_SUFFIX": "Suffix added to leeched file names.",

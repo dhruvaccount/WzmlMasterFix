@@ -6,9 +6,9 @@ from time import time
 
 from aioshutil import rmtree
 from natsort import natsorted
-from PIL import Image
 from pyrogram import StopTransmission
-from pyrogram.errors import BadRequest, FloodPremiumWait, FloodWait, RPCError
+from pyrogram.enums import ChatType
+from pyrogram.errors import RPCError
 
 from aiofiles.os import (
     path as aiopath,
@@ -27,16 +27,9 @@ from ....core.tg_client import TgClient
 from ...ext_utils.bot_utils import sync_to_async
 from ...ext_utils.files_utils import get_base_name, is_archive
 from ...ext_utils.status_utils import get_readable_file_size, get_readable_time
-from ...telegram_helper.message_utils import send_message
-from ...ext_utils.media_utils import (
-    get_audio_thumbnail,
-    get_document_type,
-    get_media_info,
-    get_multiple_frames_thumbnail,
-    get_video_thumbnail,
-    get_md5_hash,
-)
-from ...telegram_helper.message_utils import delete_message
+
+from ...ext_utils.media_utils import get_md5_hash, get_media_info
+from ...telegram_helper.message_utils import delete_message, send_message
 from ...ext_utils.hyperup_utils import HypertgUpload
 
 LOGGER = getLogger(__name__)
@@ -44,7 +37,6 @@ LOGGER = getLogger(__name__)
 
 class TelegramUploader:
     def __init__(self, listener, path):
-        self._last_uploaded = 0
         self._processed_bytes = 0
         self._listener = listener
         self._path = path
@@ -66,7 +58,6 @@ class TelegramUploader:
         self._media_group = False
         self._is_private = False
         self._sent_msg = None
-        self._log_msg = None
         self._user_session = self._listener.transmission_mode in ("user", "both")
         self._hu: HypertgUpload | None = None
         self._error = ""
@@ -94,53 +85,8 @@ class TelegramUploader:
     async def _msg_to_reply(self):
         if self._user_session and TgClient.user is None:
             self._user_session = False
-        if self._listener.up_dest:
-            msg_link = (
-                self._listener.message.link if self._listener.is_super_chat else ""
-            )
-            msg = f"""➲ <b><u>Leech Started :</u></b>
-┃
-┠ <b>User :</b> {self._listener.user.mention} ( #ID{self._listener.user_id} ){f"\n┠ <b>Message Link :</b> <a href='{msg_link}'>Click Here</a>" if msg_link else ""}
-┖ <b>Source :</b> <a href='{self._listener.source_url}'>Click Here</a>"""
-            try:
-                self._log_msg = await TgClient.bot.send_message(
-                    chat_id=self._listener.up_dest,
-                    text=msg,
-                    disable_web_page_preview=True,
-                    message_thread_id=self._listener.chat_thread_id,
-                    disable_notification=True,
-                )
-                self._sent_msg = self._log_msg
-                if self._user_session:
-                    self._sent_msg = await TgClient.user.get_messages(
-                        chat_id=self._sent_msg.chat.id,
-                        message_ids=self._sent_msg.id,
-                    )
-                else:
-                    self._is_private = self._sent_msg.chat.type.name == "PRIVATE"
-                if self._listener.leech_dest:
-                    try:
-                        leech_dest = self._listener.leech_dest
-                        if not isinstance(leech_dest, int):
-                            if "|" in str(leech_dest):
-                                leech_dest, _ = str(leech_dest).split("|", 1)
-                            if leech_dest.lstrip("-").isdigit():
-                                leech_dest = int(leech_dest)
-                        await self._log_msg.copy(chat_id=leech_dest)
-                    except Exception as e:
-                        if not self._listener.is_cancelled:
-                            LOGGER.error(
-                                f"Failed to copy 'Leech Started' message to {self._listener.leech_dest}: {e}"
-                            )
-                            await send_message(
-                                self._listener.user_id,
-                                f"Failed to send 'Leech Started' message to {self._listener.leech_dest}\n{e}",
-                            )
-            except Exception as e:
-                await self._listener.on_upload_error(str(e))
-                return False
 
-        elif self._user_session:
+        if self._user_session:
             self._sent_msg = await TgClient.user.get_messages(
                 chat_id=self._listener.message.chat.id, message_ids=self._listener.mid
             )
@@ -151,19 +97,22 @@ class TelegramUploader:
                     disable_web_page_preview=True,
                     disable_notification=True,
                 )
+            self._is_private = self._sent_msg.chat.type == ChatType.PRIVATE
         else:
             self._sent_msg = self._listener.message
-        return True
+            self._is_private = self._sent_msg.chat.type == ChatType.PRIVATE
 
-    async def _upload_progress(self, current, _):
-        if self._listener.is_cancelled:
-            if self._user_session:
-                TgClient.user.stop_transmission()
-            else:
-                self._listener.client.stop_transmission()
-        chunk_size = current - self._last_uploaded
-        self._last_uploaded = current
-        self._processed_bytes += chunk_size
+        if Config.LINKS_LOG_ID:
+            await send_message(
+                Config.LINKS_LOG_ID,
+                f"""➲  <b><u>Leech Started:</u></b>
+ ┃
+ ┠ <b>User :</b> {self._listener.tag} ( #ID{self._listener.user_id} )
+ ┠ <b>Message Link :</b> <a href='{self._listener.message.link}'>Click Here</a>
+ ┗ <b>Link:</b> <a href='{self._listener.link}'>Click Here</a>
+ """,
+            )
+        return True
 
     async def _prepare_file(self, pre_file_, dirpath):
         cap_file_ = file_ = pre_file_
@@ -333,9 +282,12 @@ class TelegramUploader:
 
     async def _upload_file_task(self, file_, f_path, dirpath):
         up_path = None
+        was_user_session = self._user_session
         try:
             up_path, cap_mono = await self._prepare_file(file_, dirpath)
-            sent = await self._upload_file(cap_mono, file_, up_path)
+            sent = await self._upload_file(
+                cap_mono, file_, up_path, user_session=was_user_session
+            )
             if sent and not self._is_corrupted:
                 if self._listener.is_super_chat or self._listener.up_dest:
                     if not self._is_private:
@@ -358,7 +310,6 @@ class TelegramUploader:
         res = await self._msg_to_reply()
         if not res:
             return
-        is_log_del = False
         upload_tasks = []
         for dirpath, _, files in natsorted(await sync_to_async(walk, self._path)):
             if dirpath.strip().endswith("/yt-dlp-thumb"):
@@ -446,9 +397,6 @@ class TelegramUploader:
                         )
         if self._listener.is_cancelled:
             return
-        if self._log_msg and not is_log_del and Config.CLEAN_LOG_MSG:
-            await delete_message(self._log_msg)
-            is_log_del = True
         if self._total_files == 0:
             await self._listener.on_upload_error(
                 "No files to upload. In case you have filled EXCLUDED_EXTENSIONS, then check if all files have those extensions or not."
@@ -465,138 +413,9 @@ class TelegramUploader:
         )
         return
 
-    async def _hyperul_upload(
-        self,
-        cap_mono,
-        file,
-        thumb,
-        key,
-        f_path=None,
-        duration=0,
-        width=0,
-        height=0,
-        artist="",
-        title="",
+    async def _upload_file(
+        self, cap_mono, file, o_path, force_document=False, user_session=False
     ):
-        f_path = f_path or self._up_path
-        if not await aiopath.exists(f_path):
-            raise FileNotFoundError(f"File not found: {f_path}")
-        up_size = await aiopath.getsize(f_path)
-
-        if up_size > (TgClient.MAX_SPLIT_SIZE if self._user_session else 2097152000):
-            if not self._user_session and TgClient.user is not None:
-                user_msg = await TgClient.user.get_messages(
-                    chat_id=self._sent_msg.chat.id,
-                    message_ids=self._sent_msg.id,
-                )
-                if user_msg is not None:
-                    self._user_session = True
-                    self._sent_msg = user_msg
-
-        if Config.USE_HYPER and Config.LEECH_DUMP_CHAT and up_size > 10 * 1024 * 1024:
-            try:
-                if self._hu is None:
-                    self._hu = HypertgUpload(self)
-
-                media_type = {
-                    "videos": "video",
-                    "audios": "audio",
-                    "documents": "document",
-                    "photos": "photo",
-                }[key]
-
-                sent = await self._hu.upload(
-                    file_path=f_path,
-                    media_type=media_type,
-                    duration=duration,
-                    width=width,
-                    height=height,
-                    artist=artist,
-                    title=title,
-                    thumb_path=thumb if thumb and thumb != "none" else None,
-                    caption=cap_mono,
-                    reply_to_message_id=self._sent_msg.id,
-                )
-                LOGGER.info(f"HypertgUL uploaded {file}")
-                return sent
-            except Exception as e:
-                LOGGER.warning(
-                    f"HypertgUL fail for {file}, "
-                    f"falling back to reply path: {type(e).__name__}: {e}"
-                )
-
-        sent = None
-        try:
-            if key == "videos":
-                sent = await self._sent_msg.reply_video(
-                    video=f_path,
-                    caption=cap_mono,
-                    duration=duration or 0,
-                    width=width or 480,
-                    height=height or 320,
-                    cover=thumb if thumb and thumb != "none" else None,
-                    supports_streaming=True,
-                    disable_notification=True,
-                    progress=self._upload_progress,
-                )
-            elif key == "audios":
-                sent = await self._sent_msg.reply_audio(
-                    audio=f_path,
-                    caption=cap_mono,
-                    duration=duration or 0,
-                    performer=artist or "",
-                    title=title or "",
-                    thumb=thumb if thumb and thumb != "none" else None,
-                    disable_notification=True,
-                    progress=self._upload_progress,
-                )
-            elif key == "documents":
-                sent = await self._sent_msg.reply_document(
-                    document=f_path,
-                    caption=cap_mono,
-                    thumb=thumb if thumb and thumb != "none" else None,
-                    disable_notification=True,
-                    progress=self._upload_progress,
-                )
-            else:
-                sent = await self._sent_msg.reply_photo(
-                    photo=f_path,
-                    caption=cap_mono,
-                    disable_notification=True,
-                    progress=self._upload_progress,
-                )
-        except (FloodWait, FloodPremiumWait) as f:
-            LOGGER.warning(str(f))
-            await sleep(f.value * 1.3)
-            return await self._hyperul_upload(
-                cap_mono,
-                file,
-                thumb,
-                key,
-                f_path=f_path,
-                duration=duration,
-                width=width,
-                height=height,
-                artist=artist,
-                title=title,
-            )
-        except OSError as e:
-            LOGGER.warning(f"Transport error during upload: {e}")
-            raise
-        except BadRequest:
-            if key != "documents":
-                LOGGER.error(f"Retrying As Document. Path: {f_path}")
-                return await self._hyperul_upload(
-                    cap_mono,
-                    file,
-                    thumb,
-                    "documents",
-                    f_path=f_path,
-                )
-            raise
-        return sent
-
-    async def _upload_file(self, cap_mono, file, o_path, force_document=False):
         if self._sent_msg is None:
             LOGGER.error("Cannot upload: _sent_msg is None")
             await self._listener.on_upload_error(
@@ -617,92 +436,21 @@ class TelegramUploader:
             and self._thumb != "none"
         ):
             self._thumb = None
-        thumb = self._thumb
         self._is_corrupted = False
         try:
-            is_video, is_audio, is_image = await get_document_type(o_path)
+            if self._hu is None:
+                self._hu = HypertgUpload(self)
 
-            if not is_image and thumb is None:
-                file_name = ospath.splitext(file)[0]
-                thumb_path = f"{self._path}/yt-dlp-thumb/{file_name}.jpg"
-                if await aiopath.isfile(thumb_path):
-                    thumb = thumb_path
-                elif await aiopath.isfile(thumb_path.replace("/yt-dlp-thumb", "")):
-                    thumb = thumb_path.replace("/yt-dlp-thumb", "")
-                elif is_audio and not is_video:
-                    thumb = await get_audio_thumbnail(o_path)
+            sent_msg = await self._hu.upload(
+                file_path=o_path,
+                cap_mono=cap_mono,
+                reply_target=self._sent_msg,
+                reply_to_message_id=self._sent_msg.id,
+                force_document=force_document,
+            )
 
-            if (
-                self._listener.as_doc
-                or force_document
-                or (not is_video and not is_audio and not is_image)
-            ):
-                key = "documents"
-                if is_video and thumb is None:
-                    thumb = await get_video_thumbnail(o_path, None)
-
-                if self._listener.is_cancelled:
-                    return
-                if thumb == "none":
-                    thumb = None
-                sent_msg = await self._hyperul_upload(
-                    cap_mono, file, thumb, key, f_path=o_path
-                )
-            elif is_video:
-                key = "videos"
-                duration = (await get_media_info(o_path))[0]
-                if thumb is None and self._listener.thumbnail_layout:
-                    thumb = await get_multiple_frames_thumbnail(
-                        o_path,
-                        self._listener.thumbnail_layout,
-                        self._listener.screen_shots,
-                    )
-                if thumb is None:
-                    thumb = await get_video_thumbnail(o_path, duration)
-                if thumb is not None and thumb != "none":
-                    with Image.open(thumb) as img:
-                        width, height = img.size
-                else:
-                    width = 480
-                    height = 320
-                if self._listener.is_cancelled:
-                    return
-                if thumb == "none":
-                    thumb = None
-                sent_msg = await self._hyperul_upload(
-                    cap_mono,
-                    file,
-                    thumb,
-                    key,
-                    f_path=o_path,
-                    duration=duration,
-                    width=width,
-                    height=height,
-                )
-            elif is_audio:
-                key = "audios"
-                duration, artist, title = await get_media_info(o_path)
-                if self._listener.is_cancelled:
-                    return
-                if thumb == "none":
-                    thumb = None
-                sent_msg = await self._hyperul_upload(
-                    cap_mono,
-                    file,
-                    thumb,
-                    key,
-                    f_path=o_path,
-                    duration=duration,
-                    artist=artist,
-                    title=title,
-                )
-            else:
-                key = "photos"
-                if self._listener.is_cancelled:
-                    return
-                sent_msg = await self._hyperul_upload(
-                    cap_mono, file, thumb, key, f_path=o_path
-                )
+            if self._listener.is_cancelled:
+                return
 
             self._sent_msg = sent_msg
 
@@ -726,49 +474,56 @@ class TelegramUploader:
                     else:
                         self._last_msg_in_group = True
 
-            self._sent_msg = sent_msg
+            src_chat_id = self._listener.message.chat.id
+            upl_chat_id = sent_msg.chat.id
+            if upl_chat_id != src_chat_id:
+                try:
+                    bot_copy = await TgClient.bot.copy_message(
+                        chat_id=src_chat_id,
+                        from_chat_id=upl_chat_id,
+                        message_id=sent_msg.id,
+                    )
+                    self._sent_msg = bot_copy
+                except Exception as e:
+                    LOGGER.error(f"Failed to copy from dump_chat: {e}")
+            elif user_session and not self._is_private:
+                try:
+                    bot_copy = await TgClient.bot.copy_message(
+                        chat_id=upl_chat_id,
+                        from_chat_id=upl_chat_id,
+                        message_id=sent_msg.id,
+                    )
+                    await delete_message(sent_msg)
+                    self._sent_msg = bot_copy
+                    sent_msg = bot_copy
+                except Exception as e:
+                    LOGGER.error(f"Failed to copy for ghost mode: {e}")
 
             if self._sent_msg:
                 await self._copy_media()
-                if self._listener.leech_dest:
+                for dest_attr in ("cmd_up_dest", "leech_dest"):
+                    dest = getattr(self._listener, dest_attr, None)
+                    if not dest or dest == self._listener.up_dest:
+                        continue
+                    if not isinstance(dest, int):
+                        if "|" in str(dest):
+                            dest, _ = str(dest).split("|", 1)
+                        if str(dest).lstrip("-").isdigit():
+                            dest = int(dest)
                     try:
-                        leech_dest = self._listener.leech_dest
-                        if not isinstance(leech_dest, int):
-                            if "|" in str(leech_dest):
-                                leech_dest, _ = str(leech_dest).split("|", 1)
-                            if leech_dest.lstrip("-").isdigit():
-                                leech_dest = int(leech_dest)
                         await TgClient.bot.copy_message(
-                            chat_id=leech_dest,
+                            chat_id=dest,
                             from_chat_id=sent_msg.chat.id,
                             message_id=sent_msg.id,
                         )
                     except Exception as e:
                         if not self._listener.is_cancelled:
-                            LOGGER.error(
-                                f"Failed to forward to {self._listener.leech_dest}: {e}"
-                            )
-                            await send_message(
-                                self._listener.user_id,
-                                f"Failed to forward to {self._listener.leech_dest}\n{e}",
-                            )
+                            LOGGER.error(f"Failed to forward to {dest_attr}: {e}")
 
-            if (
-                self._thumb is None
-                and thumb is not None
-                and await aiopath.exists(thumb)
-            ):
-                await remove(thumb)
             return sent_msg
         except StopTransmission:
             raise
         except Exception as err:
-            if (
-                self._thumb is None
-                and thumb is not None
-                and await aiopath.exists(thumb)
-            ):
-                await remove(thumb)
             err_type = "RPCError: " if isinstance(err, RPCError) else ""
             LOGGER.error(f"{err_type}{err}. Path: {o_path}", exc_info=True)
             raise err

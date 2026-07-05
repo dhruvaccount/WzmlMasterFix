@@ -107,7 +107,6 @@ IMDB_TEMPLATE = """<b>Title: </b> {title} [{year}]
 FORCE_SUB_IDS = ""
 MEDIA_STORE = True
 DELETE_LINKS = False
-CLEAN_LOG_MSG = False
 
 # Limiters
 BOT_MAX_TASKS = 0

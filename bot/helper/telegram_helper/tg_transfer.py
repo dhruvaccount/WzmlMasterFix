@@ -10,6 +10,8 @@ from ...core.tg_client import TgClient
 
 MB = 1024 * 1024
 
+_global_work_loads = None
+
 
 class MtprotoPool:
     def __init__(self, clients):
@@ -103,22 +105,28 @@ class MtprotoPool:
 
 class HypertgTransfer:
     def __init__(self, obj):
+        global _global_work_loads
         self._obj = obj
         self._listener = obj._listener
         self.clients = dict(TgClient.helper_bots)
-        self.work_loads = dict(TgClient.helper_loads)
+        if _global_work_loads is None:
+            _global_work_loads = dict(TgClient.helper_loads)
+            if TgClient.helper_users:
+                for no, load in TgClient.helper_user_loads.items():
+                    _global_work_loads[-no] = load
+            if TgClient.user:
+                key = -(len(TgClient.helper_users) + 1)
+                _global_work_loads[key] = 0
+        self.work_loads = _global_work_loads
         self.client_ids = list(self.clients.keys())
         if TgClient.helper_users:
             for no, client in TgClient.helper_users.items():
                 self.clients[-no] = client
                 self.client_ids.append(-no)
-            for no, load in TgClient.helper_user_loads.items():
-                self.work_loads[-no] = load
         if TgClient.user and all(c is not TgClient.user for c in self.clients.values()):
             key = -(len(TgClient.helper_users) + 1)
             self.clients[key] = TgClient.user
             self.client_ids.append(key)
-            self.work_loads[key] = 0
         self.num_clients = len(self.clients)
         self._pool = MtprotoPool(self.clients)
         self._cancel = Event()

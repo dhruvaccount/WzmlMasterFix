@@ -477,15 +477,17 @@ class TaskListener(TaskConfig):
                 msg += "〶 <b><u>Files List :</u></b>\n"
                 fmsg = ""
                 for index, (link, name) in enumerate(files.items(), start=1):
-                    chat_id, msg_id = link.split("/")[-2:]
                     fmsg += f"{index}. <a href='{link}'>{name}</a>"
                     if Config.MEDIA_STORE and (
                         self.is_super_chat or Config.LEECH_DUMP_CHAT
                     ):
-                        if chat_id.isdigit():
-                            chat_id = f"-100{chat_id}"
-                        flink = f"https://t.me/{TgClient.BNAME}?start={encode_slink('file' + chat_id + '&&' + msg_id)}"
-                        fmsg += f"\n┖ <b>Get Media</b> → <a href='{flink}'>Store Link</a> | <a href='https://t.me/share/url?url={flink}'>Share Link</a>"
+                        parts = link.split("/")[-2:]
+                        if len(parts) == 2:
+                            chat_id, msg_id = parts
+                            if chat_id.isdigit():
+                                chat_id = f"-100{chat_id}"
+                            flink = f"https://t.me/{TgClient.BNAME}?start={encode_slink('file' + chat_id + '&&' + msg_id)}"
+                            fmsg += f"\n┖ <b>Get Media</b> → <a href='{flink}'>Store Link</a> | <a href='https://t.me/share/url?url={flink}'>Share Link</a>"
                     fmsg += "\n"
                     if len(fmsg.encode() + msg.encode()) > 4000:
                         await send_message(log_chat, msg + fmsg)
@@ -502,7 +504,6 @@ class TaskListener(TaskConfig):
             multi_link_msg = ""
             multi_links = []
             if isinstance(link, dict) and not self.is_yt:
-                # MultiUphoster result
                 for service, result in link.items():
                     if "error" in result:
                         multi_link_msg += (
@@ -513,7 +514,7 @@ class TaskListener(TaskConfig):
                             (f"{service.capitalize()} Link", result["link"])
                         )
                 multi_link_msg = multi_link_msg.strip()
-                link = None  # Disable single link button logic
+                link = None
 
             if (
                 link
@@ -592,7 +593,7 @@ class TaskListener(TaskConfig):
             await start_from_queued()
             return
 
-        if self.pm_msg and (not Config.DELETE_LINKS or Config.CLEAN_LOG_MSG):
+        if self.pm_msg and not Config.DELETE_LINKS:
             await delete_message(self.pm_msg)
 
         await delete_links(self.message)

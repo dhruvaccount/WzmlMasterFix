@@ -31,7 +31,7 @@ from sabnzbdapi import SabnzbdClient
 
 getLogger("requests").setLevel(WARNING)
 getLogger("urllib3").setLevel(WARNING)
-#getLogger("pyrogram").setLevel(ERROR)
+getLogger("pyrogram").setLevel(ERROR)
 getLogger("apscheduler").setLevel(ERROR)
 getLogger("httpx").setLevel(WARNING)
 getLogger("pymongo").setLevel(WARNING)

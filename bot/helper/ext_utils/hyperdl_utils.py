@@ -99,12 +99,10 @@ class HypertgDownload(HypertgTransfer):
             cached = self._ref_get(idx)
             if cached is not None:
                 return cached
-        # Try with the given client first
         fid = await self._fetch_ref_try(client)
         if fid:
             self._ref_put(idx, fid)
             return fid
-        # Fallback: try each available bot client
         LOGGER.warning(
             "HypertgDL ref ci=%d: client can't access dump_chat=%s, trying bots",
             idx,
