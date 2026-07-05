@@ -117,13 +117,19 @@ class HypertgUpload(HypertgTransfer):
                     title=title,
                 )
             else:
+                upload_chat_id = Config.LEECH_DUMP_CHAT or reply_target.chat.id
+                direct_rply = (
+                    reply_to_message_id
+                    if upload_chat_id == reply_target.chat.id
+                    else None
+                )
                 sent = await self._direct_send(
                     file_path,
                     key,
                     thumb,
                     cap_mono,
-                    reply_target,
-                    reply_to_message_id,
+                    upload_chat_id,
+                    direct_rply,
                     duration=duration,
                     width=width,
                     height=height,
@@ -214,7 +220,7 @@ class HypertgUpload(HypertgTransfer):
         key,
         thumb,
         cap_mono,
-        reply_target,
+        chat_id,
         reply_to_message_id,
         duration=0,
         width=0,
@@ -222,7 +228,9 @@ class HypertgUpload(HypertgTransfer):
         artist="",
         title="",
     ):
+        client = self._listener.client
         kwargs = {
+            "chat_id": chat_id,
             "disable_notification": True,
             "progress": self._progress,
             "progress_args": (file_path,),
@@ -242,7 +250,7 @@ class HypertgUpload(HypertgTransfer):
                 kwargs["width"] = width
             if height:
                 kwargs["height"] = height
-            sent = await reply_target.reply_video(**kwargs)
+            sent = await client.send_video(**kwargs)
         elif key == "audios":
             kwargs["audio"] = file_path
             if thumb:
@@ -253,15 +261,15 @@ class HypertgUpload(HypertgTransfer):
                 kwargs["performer"] = artist
             if title:
                 kwargs["title"] = title
-            sent = await reply_target.reply_audio(**kwargs)
+            sent = await client.send_audio(**kwargs)
         elif key == "photos":
             kwargs["photo"] = file_path
-            sent = await reply_target.reply_photo(**kwargs)
+            sent = await client.send_photo(**kwargs)
         else:
             kwargs["document"] = file_path
             if thumb:
                 kwargs["thumb"] = thumb
-            sent = await reply_target.reply_document(**kwargs)
+            sent = await client.send_document(**kwargs)
 
         return sent
 
