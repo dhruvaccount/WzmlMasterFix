@@ -534,7 +534,7 @@ class TelegramUploader:
                     duration=duration or 0,
                     width=width or 480,
                     height=height or 320,
-                    thumb=thumb if thumb and thumb != "none" else None,
+                    cover=thumb if thumb and thumb != "none" else None,
                     supports_streaming=True,
                     disable_notification=True,
                     progress=self._upload_progress,
