@@ -484,7 +484,7 @@ class TelegramUploader:
 
             src_chat_id = self._listener.message.chat.id
             upl_chat_id = sent_msg.chat.id
-            if upl_chat_id != src_chat_id:
+            if upl_chat_id != src_chat_id and not self._listener.up_dest:
                 try:
                     bot_copy = await TgClient.bot.copy_message(
                         chat_id=src_chat_id,
@@ -494,7 +494,7 @@ class TelegramUploader:
                     self._sent_msg = bot_copy
                 except Exception as e:
                     LOGGER.error(f"Failed to copy from dump_chat: {e}")
-            elif user_session and not self._is_private:
+            elif upl_chat_id == src_chat_id and user_session and not self._is_private:
                 try:
                     bot_copy = await TgClient.bot.copy_message(
                         chat_id=upl_chat_id,
