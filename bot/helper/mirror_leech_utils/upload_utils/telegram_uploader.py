@@ -30,7 +30,7 @@ from ...ext_utils.status_utils import get_readable_file_size, get_readable_time
 
 from ...ext_utils.media_utils import get_md5_hash, get_media_info
 from ...telegram_helper.message_utils import delete_message, send_message
-from ...ext_utils.hyperup_utils import HypertgUpload
+from ...ext_utils.hyperul_utils import HypertgUpload
 
 LOGGER = getLogger(__name__)
 
