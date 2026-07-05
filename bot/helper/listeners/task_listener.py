@@ -545,11 +545,9 @@ class TaskListener(TaskConfig):
                         "🔗 Rclone Link", share_url, style=ButtonStyle.PRIMARY
                     )
                 if not rclone_path and dir_id:
-                    INDEX_URL = ""
-                    if self.private_link:
-                        INDEX_URL = self.user_dict.get("INDEX_URL", "") or ""
-                    elif Config.INDEX_URL:
-                        INDEX_URL = Config.INDEX_URL
+                    INDEX_URL = self.user_dict.get("INDEX_URL", "") or ""
+                    if not INDEX_URL:
+                        INDEX_URL = Config.INDEX_URL or ""
                     if INDEX_URL and self.name:
                         safe_name = rutils.quote(self.name.strip("/"))
                         share_url = f"{INDEX_URL}/{safe_name}"
