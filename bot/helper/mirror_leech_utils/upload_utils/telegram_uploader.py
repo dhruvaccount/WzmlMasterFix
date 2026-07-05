@@ -354,28 +354,12 @@ class TelegramUploader:
                                         await self._send_media_group(subkey, key, msgs)
                     if self._listener.transmission_mode == "both":
                         self._user_session = f_size > 2097152000
-                        if self._user_session:
-                            self._sent_msg = await TgClient.user.get_messages(
-                                chat_id=self._sent_msg.chat.id,
-                                message_ids=self._sent_msg.id,
-                            )
-                        else:
-                            self._sent_msg = await self._listener.client.get_messages(
-                                chat_id=self._sent_msg.chat.id,
-                                message_ids=self._sent_msg.id,
-                            )
                     elif (
                         not self._user_session
                         and f_size > 2097152000
                         and TgClient.user is not None
                     ):
-                        user_msg = await TgClient.user.get_messages(
-                            chat_id=self._sent_msg.chat.id,
-                            message_ids=self._sent_msg.id,
-                        )
-                        if user_msg is not None:
-                            self._user_session = True
-                            self._sent_msg = user_msg
+                        self._user_session = True
                     self._last_msg_in_group = False
                     task = ensure_future(self._upload_file_task(file_, f_path, dirpath))
                     upload_tasks.append(task)
