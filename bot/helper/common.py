@@ -539,7 +539,7 @@ class TaskConfig:
                     chat = None
                 if chat is None:
                     if self.transmission_mode == "bot":
-                        raise ValueError("Chat not found!")
+                        raise ValueError("Chat not found! Try adding the bot to the chat and try again!")
                 else:
                     uploader_id = self.client.me.id
                     if chat.type in [

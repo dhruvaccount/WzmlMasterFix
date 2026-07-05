@@ -94,10 +94,19 @@ class HypertgUpload(HypertgTransfer):
 
         up_size = ospath.getsize(file_path)
         use_hyper = Config.USE_HYPER and self.clients and up_size > 10 * 1024 * 1024
+        upload_chat_id = (
+            self._listener.up_dest
+            if self._listener.up_dest
+            else (Config.LEECH_DUMP_CHAT or reply_target.chat.id)
+        )
+        LOGGER.info(
+            f"HypertgUL chat_id={upload_chat_id} (up_dest={self._listener.up_dest} "
+            f"LEECH_DUMP_CHAT={Config.LEECH_DUMP_CHAT} "
+            f"reply_chat={reply_target.chat.id})"
+        )
 
         try:
             if use_hyper:
-                upload_chat_id = Config.LEECH_DUMP_CHAT or reply_target.chat.id
                 hyper_rply = (
                     reply_to_message_id
                     if upload_chat_id == reply_target.chat.id
@@ -117,7 +126,6 @@ class HypertgUpload(HypertgTransfer):
                     title=title,
                 )
             else:
-                upload_chat_id = Config.LEECH_DUMP_CHAT or reply_target.chat.id
                 direct_rply = (
                     reply_to_message_id
                     if upload_chat_id == reply_target.chat.id
