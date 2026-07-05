@@ -6,6 +6,7 @@ from aiofiles.os import path as aiopath, remove
 
 from ... import LOGGER
 from ...core.config_manager import Config
+from ...core.tg_client import TgClient
 from ..telegram_helper.tg_transfer import HypertgTransfer
 from ..ext_utils.media_utils import (
     get_audio_thumbnail,
@@ -36,6 +37,7 @@ class HypertgUpload(HypertgTransfer):
         reply_to_message_id,
         force_document=False,
         user_thumb=None,
+        user_session=False,
     ):
         self._cancel.clear()
         self._up_file = ospath.basename(file_path)
@@ -143,6 +145,7 @@ class HypertgUpload(HypertgTransfer):
                     height=height,
                     artist=artist,
                     title=title,
+                    user_session=user_session,
                 )
 
             LOGGER.info(f"HypertgUL uploaded {self._up_file}")
@@ -235,8 +238,13 @@ class HypertgUpload(HypertgTransfer):
         height=0,
         artist="",
         title="",
+        user_session=False,
     ):
-        client = self._listener.client
+        client = (
+            TgClient.user
+            if user_session and TgClient.user
+            else self._listener.client
+        )
         kwargs = {
             "chat_id": chat_id,
             "disable_notification": True,

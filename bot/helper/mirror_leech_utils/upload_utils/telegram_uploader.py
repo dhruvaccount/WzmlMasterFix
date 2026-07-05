@@ -87,16 +87,23 @@ class TelegramUploader:
             self._user_session = False
 
         if self._user_session:
-            self._sent_msg = await TgClient.user.get_messages(
-                chat_id=self._listener.message.chat.id, message_ids=self._listener.mid
-            )
-            if self._sent_msg is None:
-                self._sent_msg = await TgClient.user.send_message(
+            try:
+                self._sent_msg = await self._listener.client.get_messages(
                     chat_id=self._listener.message.chat.id,
-                    text="Deleted Cmd Message! Don't delete the cmd message again!",
-                    disable_web_page_preview=True,
-                    disable_notification=True,
+                    message_ids=self._listener.mid,
                 )
+            except Exception:
+                self._sent_msg = None
+            if self._sent_msg is None:
+                try:
+                    self._sent_msg = await self._listener.client.send_message(
+                        chat_id=self._listener.message.chat.id,
+                        text="Deleted Cmd Message! Don't delete the cmd message again!",
+                        disable_web_page_preview=True,
+                        disable_notification=True,
+                    )
+                except Exception:
+                    self._sent_msg = self._listener.message
             self._is_private = self._sent_msg.chat.type == ChatType.PRIVATE
         else:
             self._sent_msg = self._listener.message
@@ -447,6 +454,7 @@ class TelegramUploader:
                 reply_target=self._sent_msg,
                 reply_to_message_id=self._sent_msg.id,
                 force_document=force_document,
+                user_session=user_session,
             )
 
             if self._listener.is_cancelled:
