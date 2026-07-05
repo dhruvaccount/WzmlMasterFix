@@ -78,12 +78,15 @@ class HypertgUpload(HypertgTransfer):
 
             self._obj._processed_bytes = os.path.getsize(file_path)
 
-            copied = await TgClient.bot.copy_message(
-                chat_id=self._listener.message.chat.id,
-                from_chat_id=Config.LEECH_DUMP_CHAT,
-                message_id=sent.id,
-                reply_to_message_id=reply_to_message_id,
-            )
+            if not self._listener.bot_pm:
+                copied = await TgClient.bot.copy_message(
+                    chat_id=self._listener.message.chat.id,
+                    from_chat_id=Config.LEECH_DUMP_CHAT,
+                    message_id=sent.id,
+                    reply_to_message_id=reply_to_message_id,
+                )
+            else:
+                copied = sent
 
             LOGGER.info(f"HypertgUL uploaded {self._up_file}")
             return copied
