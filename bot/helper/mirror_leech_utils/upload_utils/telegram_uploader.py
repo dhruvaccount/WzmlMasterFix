@@ -94,7 +94,7 @@ class TelegramUploader:
                 )
             except Exception:
                 self._sent_msg = None
-            if self._sent_msg is None:
+            if self._sent_msg is None or self._sent_msg.chat is None:
                 try:
                     self._sent_msg = await self._listener.client.send_message(
                         chat_id=self._listener.message.chat.id,
@@ -104,6 +104,8 @@ class TelegramUploader:
                     )
                 except Exception:
                     self._sent_msg = self._listener.message
+            if self._sent_msg is None or self._sent_msg.chat is None:
+                self._sent_msg = self._listener.message
             self._is_private = self._sent_msg.chat.type == ChatType.PRIVATE
         else:
             self._sent_msg = self._listener.message
