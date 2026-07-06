@@ -441,6 +441,7 @@ class TelegramUploader:
                 reply_to_message_id=self._sent_msg.id,
                 force_document=force_document,
                 user_session=user_session,
+                user_thumb=self._thumb,
             )
 
             if self._listener.is_cancelled:
