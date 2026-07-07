@@ -95,7 +95,10 @@ class HypertgUpload(HypertgTransfer):
             thumb = None
 
         up_size = ospath.getsize(file_path)
-        use_hyper = Config.USE_HYPER and self.clients and up_size > 10 * 1024 * 1024
+        if up_size > TgClient.MAX_SPLIT_SIZE and user_session:
+            use_hyper = False
+        else:
+            use_hyper = Config.USE_HYPER and self.clients and up_size > 10 * 1024 * 1024
         upload_chat_id = (
             self._listener.up_dest
             if self._listener.up_dest

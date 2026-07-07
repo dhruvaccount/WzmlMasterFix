@@ -1,5 +1,7 @@
+from asyncio import TimeoutError as AsyncTimeout
 from xml.etree import ElementTree as ET
-from aiohttp import ClientSession
+
+from aiohttp import ClientSession, ClientTimeout
 
 from .. import LOGGER
 from ..core.config_manager import Config
@@ -59,7 +61,7 @@ async def search_nzbhydra(query, limit=50):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
     }
 
-    async with ClientSession() as session:
+    async with ClientSession(timeout=ClientTimeout(total=15)) as session:
         try:
             async with session.get(
                 search_url,
@@ -78,6 +80,9 @@ async def search_nzbhydra(query, limit=50):
                 return None
         except ET.ParseError:
             LOGGER.error("Failed to parse the XML response.")
+            return None
+        except AsyncTimeout:
+            LOGGER.error(f"Connection to NZBHydra timed out: {search_url}")
             return None
         except Exception as e:
             LOGGER.error(f"Error in search_nzbhydra: {e!s}")
