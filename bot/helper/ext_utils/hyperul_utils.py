@@ -217,6 +217,8 @@ class HypertgUpload(HypertgTransfer):
                     kwargs["width"] = width
                 if height:
                     kwargs["height"] = height
+                if thumb:
+                    kwargs["cover"] = thumb
                 sent = await client.send_video(**kwargs)
             elif key == "audios":
                 kwargs["audio"] = file_path
