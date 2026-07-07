@@ -95,8 +95,15 @@ class HypertgUpload(HypertgTransfer):
             thumb = None
 
         up_size = ospath.getsize(file_path)
-        if up_size > TgClient.MAX_SPLIT_SIZE and user_session:
-            use_hyper = False
+        hyper_user_only = False
+        if up_size > 2097152000 and (TgClient.user or any(k < 0 for k in self.clients)):
+            if TgClient.user:
+                use_hyper = False
+                user_session = True
+            else:
+                use_hyper = True
+                hyper_user_only = True
+                user_session = False
         else:
             use_hyper = Config.USE_HYPER and self.clients and up_size > 10 * 1024 * 1024
         upload_chat_id = (
@@ -123,6 +130,7 @@ class HypertgUpload(HypertgTransfer):
                     height=height,
                     artist=artist,
                     title=title,
+                    user_only=hyper_user_only,
                 )
             else:
                 direct_rply = (
@@ -174,8 +182,16 @@ class HypertgUpload(HypertgTransfer):
         height=0,
         artist="",
         title="",
+        user_only=False,
     ):
-        idx = self._pick_client()
+        if user_only:
+            candidates = {k: self.work_loads[k] for k in self.clients if k < 0}
+            if not candidates:
+                idx = self._pick_client()
+            else:
+                idx = min(candidates, key=candidates.get)
+        else:
+            idx = self._pick_client()
         client = self.clients[idx]
         self.work_loads[idx] += 1
 

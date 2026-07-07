@@ -287,13 +287,12 @@ class TelegramUploader:
             if not self._listener.is_cancelled:
                 LOGGER.error(f"Failed To Send in BotPM:\n{str(err)}")
 
-    async def _upload_file_task(self, file_, f_path, dirpath):
+    async def _upload_file_task(self, file_, f_path, dirpath, user_session):
         up_path = None
-        was_user_session = self._user_session
         try:
             up_path, cap_mono = await self._prepare_file(file_, dirpath)
             sent = await self._upload_file(
-                cap_mono, up_path, user_session=was_user_session
+                cap_mono, up_path, user_session=user_session
             )
             if sent and not self._is_corrupted:
                 if self._listener.is_super_chat or self._listener.up_dest:
@@ -361,7 +360,7 @@ class TelegramUploader:
                     ):
                         self._user_session = True
                     self._last_msg_in_group = False
-                    task = ensure_future(self._upload_file_task(file_, f_path, dirpath))
+                    task = ensure_future(self._upload_file_task(file_, f_path, dirpath, self._user_session))
                     upload_tasks.append(task)
                     if self._listener.is_cancelled:
                         return

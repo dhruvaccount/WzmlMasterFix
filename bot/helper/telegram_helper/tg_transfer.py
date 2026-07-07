@@ -131,7 +131,7 @@ class HypertgTransfer:
         self._tasks = []
         LOGGER.info(
             f"HypertgTransfer init clients={self.num_clients} "
-            f"loads={dict(TgClient.helper_loads)}"
+            f"loads={dict(self.work_loads)}"
         )
 
     def _pick_client(self):
