@@ -40,7 +40,6 @@ class TelegramUploader:
         self._processed_bytes = 0
         self._listener = listener
         self._path = path
-        self._client = None
         self._start_time = time()
         self._total_files = 0
         self._thumb = self._listener.thumb or f"thumbnails/{listener.user_id}.jpg"
@@ -49,7 +48,6 @@ class TelegramUploader:
         self._is_corrupted = False
         self._media_dict = {"videos": {}, "documents": {}}
         self._last_msg_in_group = False
-        self._up_path = ""
         self._lprefix = ""
         self._lsuffix = ""
         self._lcaption = ""
@@ -295,7 +293,7 @@ class TelegramUploader:
         try:
             up_path, cap_mono = await self._prepare_file(file_, dirpath)
             sent = await self._upload_file(
-                cap_mono, file_, up_path, user_session=was_user_session
+                cap_mono, up_path, user_session=was_user_session
             )
             if sent and not self._is_corrupted:
                 if self._listener.is_super_chat or self._listener.up_dest:
@@ -407,7 +405,7 @@ class TelegramUploader:
         return
 
     async def _upload_file(
-        self, cap_mono, file, o_path, force_document=False, user_session=False
+        self, cap_mono, o_path, force_document=False, user_session=False
     ):
         if self._sent_msg is None:
             LOGGER.error("Cannot upload: _sent_msg is None")

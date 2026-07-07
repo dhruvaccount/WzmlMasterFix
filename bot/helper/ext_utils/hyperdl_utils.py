@@ -40,7 +40,6 @@ from ...core.config_manager import Config
 from ...core.tg_client import TgClient
 from ..telegram_helper.tg_transfer import MB, HypertgTransfer
 
-KB = 1024
 _load_lock = Lock()
 
 

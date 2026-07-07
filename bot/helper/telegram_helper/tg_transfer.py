@@ -23,7 +23,6 @@ class MtprotoPool:
             self._client_order = list(self._client_map.keys())
         self._sessions = {}
         self._locks = {}
-        self._closed = False
 
     def _resolve_key(self, client_key):
         if client_key in self._client_map:
@@ -94,7 +93,6 @@ class MtprotoPool:
                 pass
 
     async def stop(self):
-        self._closed = True
         for s in self._sessions.values():
             try:
                 await s.stop()

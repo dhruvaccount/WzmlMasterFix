@@ -14,14 +14,14 @@ from pytz import timezone as tz_lookup
 
 from bot import LOGGER, bot_loop
 from bot.core.config_manager import Config
-from bot.version import get_version
+from bot.version import get_commit_hash, get_commit_url, get_version
 
 CRASH_REPORT_URL = "https://telemetry.wzmlx.com/api/v1/send-crash-report"
 API_KEY = hmac_new(b"wzmlx-crash-report", Config.BOT_TOKEN.encode(), sha256).hexdigest()
 
 
 class _LogCaptureHandler(Handler):
-    def __init__(self, capacity=10):
+    def __init__(self, capacity=20):
         super().__init__(level=0)
         self.buffer = deque(maxlen=capacity)
 
@@ -80,6 +80,7 @@ def _make_payload(exc_type, exc_value, exc_traceback):
     tb_lines = format_exception(exc_type, exc_value, exc_traceback)
     return {
         "version": get_version(),
+        "commit_url": get_commit_url(),
         "exception": f"{exc_type.__name__}: {exc_value}",
         "traceback": "".join(tb_lines),
         "platform": platform,
@@ -117,7 +118,12 @@ async def _upload_logs(log_lines):
     from .telegraph_helper import telegraph
 
     try:
-        html = (
+        commit_url = get_commit_url()
+        link_html = (
+            f'<p><a href="{commit_url}">Commit {get_commit_hash()}</a></p>'
+            if commit_url else ""
+        )
+        html = link_html + (
             "<pre>" + "".join(_esc_html(line) + "\n" for line in log_lines) + "</pre>"
         )
         page = await telegraph.create_page(title="Crash Logs", content=html)
