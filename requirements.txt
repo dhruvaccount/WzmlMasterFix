@@ -6,7 +6,7 @@ apscheduler
 aria2p
 asyncio
 beautifulsoup4
-cinemagoer
+cinemagoer==2023.5.1
 cloudscraper
 cryptography
 dnspython
