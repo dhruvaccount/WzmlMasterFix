@@ -204,8 +204,6 @@ class HypertgUpload(HypertgTransfer):
             }
             if cap_mono:
                 kwargs["caption"] = cap_mono
-            if thumb:
-                kwargs["thumb"] = thumb
             if reply_to_message_id:
                 kwargs["reply_to_message_id"] = reply_to_message_id
 
@@ -218,7 +216,8 @@ class HypertgUpload(HypertgTransfer):
                 if height:
                     kwargs["height"] = height
                 if thumb:
-                    kwargs["cover"] = thumb
+                    kwargs["video_cover"] = thumb
+                    kwargs["thumb"] = thumb
                 sent = await client.send_video(**kwargs)
             elif key == "audios":
                 kwargs["audio"] = file_path
@@ -228,6 +227,8 @@ class HypertgUpload(HypertgTransfer):
                     kwargs["performer"] = artist
                 if title:
                     kwargs["title"] = title
+                if thumb:
+                    kwargs["thumb"] = thumb
                 sent = await client.send_audio(**kwargs)
             elif key == "photos":
                 kwargs["photo"] = file_path
@@ -274,7 +275,8 @@ class HypertgUpload(HypertgTransfer):
         if key == "videos":
             kwargs["video"] = file_path
             if thumb:
-                kwargs["cover"] = thumb
+                kwargs["thumb"] = thumb
+                kwargs["video_cover"] = thumb
             if duration:
                 kwargs["duration"] = duration
             if width:
