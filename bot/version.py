@@ -7,9 +7,7 @@ _repo_url = ""
 
 
 async def _run_git(args):
-    proc = await sync_to_async(
-        srun, args, capture_output=True, text=True, timeout=5
-    )
+    proc = await sync_to_async(srun, args, capture_output=True, text=True, timeout=5)
     return proc.stdout.strip()
 
 

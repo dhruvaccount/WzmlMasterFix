@@ -121,7 +121,8 @@ async def _upload_logs(log_lines):
         commit_url = get_commit_url()
         link_html = (
             f'<p><a href="{commit_url}">Commit {get_commit_hash()}</a></p>'
-            if commit_url else ""
+            if commit_url
+            else ""
         )
         html = link_html + (
             "<pre>" + "".join(_esc_html(line) + "\n" for line in log_lines) + "</pre>"
