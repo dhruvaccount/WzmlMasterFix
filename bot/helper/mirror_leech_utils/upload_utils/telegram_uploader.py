@@ -109,16 +109,6 @@ class TelegramUploader:
             self._sent_msg = self._listener.message
             self._is_private = self._sent_msg.chat.type == ChatType.PRIVATE
 
-        if Config.LINKS_LOG_ID:
-            await send_message(
-                Config.LINKS_LOG_ID,
-                f"""➲  <b><u>Leech Started:</u></b>
- ┃
- ┠ <b>User :</b> {self._listener.tag} ( #ID{self._listener.user_id} )
- ┠ <b>Message Link :</b> <a href='{self._listener.message.link}'>Click Here</a>
- ┗ <b>Link:</b> <a href='{self._listener.link}'>Click Here</a>
- """,
-            )
         return True
 
     async def _prepare_file(self, pre_file_, dirpath):
