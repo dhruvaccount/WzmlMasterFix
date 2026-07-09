@@ -1,5 +1,6 @@
 from asyncio import create_subprocess_exec, gather, get_event_loop, sleep
 from datetime import datetime
+from importlib import reload as reload_module
 from os import execl as osexecl
 from sys import executable
 
@@ -193,9 +194,21 @@ async def confirm_restart(_, query):
     await delete_message(message)
     if data[1] == "confirm":
         intervals["stopAll"] = True
-        restart_message = await send_message(reply_to, "<i>Restarting...</i>")
+        if data[2] == "soft":
+            restart_msg = await send_message(reply_to, "<i>Reloading...</i>")
+            await _runtime_reload()
+            try:
+                await TgClient.bot.edit_message_text(
+                    chat_id=restart_msg.chat.id,
+                    message_id=restart_msg.id,
+                    text=_restart_header(datetime.now(timezone(Config.TIMEZONE))),
+                    disable_web_page_preview=True,
+                )
+            except Exception as e:
+                LOGGER.error(e)
+        else:
+            restart_message = await send_message(reply_to, "<i>Restarting...</i>")
 
-        if data[2] != "soft":
             if qb := intervals["qb"]:
                 qb.cancel()
             if jd := intervals["jd"]:
@@ -267,21 +280,105 @@ async def confirm_restart(_, query):
                 f"gunicorn|{BinConfig.ARIA2_NAME}|{BinConfig.QBIT_NAME}|{BinConfig.FFMPEG_NAME}|{BinConfig.RCLONE_NAME}|java|{BinConfig.SABNZBD_NAME}|7z|split",
             )
 
-        proc_update = await create_subprocess_exec("python3", "update.py")
-        await proc_update.wait()
+            proc_update = await create_subprocess_exec("python3", "update.py")
+            await proc_update.wait()
 
-        try:
-            async with aiopen(".restartmsg", "w") as f:
-                await f.write(f"{restart_message.chat.id}\n{restart_message.id}\n")
-        except Exception:
-            pass
+            try:
+                async with aiopen(".restartmsg", "w") as f:
+                    await f.write(f"{restart_message.chat.id}\n{restart_message.id}\n")
+            except Exception:
+                pass
 
-        if data[2] != "soft":
             get_event_loop().create_task(_background_cleanup())
 
-        osexecl(executable, executable, "-m", "bot")
+            osexecl(executable, executable, "-m", "bot")
     else:
         await delete_message(message, reply_to)
+
+
+async def _runtime_reload():
+    proc_update = await create_subprocess_exec("python3", "update.py")
+    await proc_update.wait()
+
+    import sys as _sys
+
+    modules_to_reload = [
+        "bot.helper.ext_utils.bot_utils",
+        "bot.helper.ext_utils.help_messages",
+        "bot.helper.telegram_helper.message_utils",
+        "bot.helper.telegram_helper.button_build",
+        "bot.helper.telegram_helper.filters",
+        "bot.helper.telegram_helper.bot_commands",
+        "bot.modules.bot_settings",
+        "bot.modules.cancel_task",
+        "bot.modules.chat_permission",
+        "bot.modules.clone",
+        "bot.modules.exec",
+        "bot.modules.file_selector",
+        "bot.modules.force_start",
+        "bot.modules.gd_count",
+        "bot.modules.gd_delete",
+        "bot.modules.gd_clean",
+        "bot.modules.gd_search",
+        "bot.modules.help",
+        "bot.modules.images",
+        "bot.modules.mediainfo",
+        "bot.modules.category_select",
+        "bot.modules.broadcast",
+        "bot.modules.mirror_leech",
+        "bot.modules.restart",
+        "bot.modules.imdb",
+        "bot.modules.rss",
+        "bot.modules.search",
+        "bot.modules.nzb_search",
+        "bot.modules.services",
+        "bot.modules.shell",
+        "bot.modules.stats",
+        "bot.modules.status",
+        "bot.modules.users_settings",
+        "bot.modules.gen_pyro_sess",
+        "bot.modules.ytdlp",
+    ]
+
+    for mod_name in modules_to_reload:
+        if mod_name in _sys.modules:
+            try:
+                reload_module(_sys.modules[mod_name])
+            except Exception as e:
+                LOGGER.error(f"Reload failed for {mod_name}: {e}")
+
+    try:
+        import bot.modules as _bm
+
+        reload_module(_bm)
+    except Exception as e:
+        LOGGER.error(f"Reload failed for bot.modules: {e}")
+
+    try:
+        import bot.core.handlers as _bh
+
+        reload_module(_bh)
+    except Exception as e:
+        LOGGER.error(f"Reload failed for bot.core.handlers: {e}")
+
+    try:
+        before = {g: len(hs) for g, hs in TgClient.bot.dispatcher.handlers.items()}
+    except Exception:
+        before = {}
+
+    try:
+        from bot.core.handlers import add_handlers
+
+        await add_handlers()
+    except Exception as e:
+        LOGGER.error(f"Handler re-registration failed: {e}")
+        return
+
+    for group, old_count in before.items():
+        if group in TgClient.bot.dispatcher.handlers:
+            TgClient.bot.dispatcher.handlers[group] = TgClient.bot.dispatcher.handlers[
+                group
+            ][old_count:]
 
 
 async def _background_cleanup():
