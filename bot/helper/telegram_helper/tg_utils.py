@@ -9,6 +9,7 @@ from ..ext_utils.links_utils import encode_slink
 from ... import LOGGER, user_data
 from ...core.config_manager import Config
 from ...core.tg_client import TgClient
+from ..ext_utils.db_handler import database
 from ..ext_utils.shortener_utils import short_url
 from ..ext_utils.status_utils import get_readable_time
 from .button_build import ButtonMaker
@@ -64,7 +65,11 @@ async def user_info(user_id):
 
 async def check_botpm(message, button=None):
     try:
-        await TgClient.bot.send_chat_action(message.from_user.id, ChatAction.TYPING)
+        user_id = message.from_user.id
+        pm_uids = await database.get_pm_uids()
+        if pm_uids is not None and user_id not in pm_uids:
+            raise Exception("User not in PM Database")
+        await TgClient.bot.send_chat_action(user_id, ChatAction.TYPING)
         return None, button
     except Exception:
         if button is None:
