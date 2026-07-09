@@ -9,7 +9,7 @@ from sys import platform, stderr
 from time import time
 from traceback import format_exception
 
-from httpx import AsyncClient
+from niquests import AsyncSession
 from pytz import timezone as tz_lookup
 
 from bot import LOGGER, bot_loop
@@ -123,7 +123,8 @@ async def _upload_logs(log_lines):
         commit_time = get_commit_time()
         link_html = (
             f"<p>Commit: <b>{commit_msg}</b><br>Time: {commit_time}</p>"
-            if commit_msg else ""
+            if commit_msg
+            else ""
         )
         html = link_html + (
             "<pre>" + "".join(_esc_html(line) + "\n" for line in log_lines) + "</pre>"
@@ -151,8 +152,8 @@ async def _post_report(payload):
         if len(encoded) > 0x19000:
             encoded = gzip_compress(encoded)
             headers["Content-Encoding"] = "gzip"
-        async with AsyncClient(timeout=15) as client:
-            r = await client.post(CRASH_REPORT_URL, content=encoded, headers=headers)
+        async with AsyncSession(timeout=15) as client:
+            r = await client.post(CRASH_REPORT_URL, data=encoded, headers=headers)
         if r.status_code == 200:
             LOGGER.info("Crash report sent to WZML-X devs")
         else:

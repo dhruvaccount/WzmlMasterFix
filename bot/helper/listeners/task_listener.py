@@ -7,7 +7,7 @@ from os import path as ospath
 from pyrogram.enums import ButtonStyle
 
 from aiofiles.os import listdir, remove, path as aiopath
-from requests import utils as rutils
+from niquests import utils as rutils
 
 from ... import (
     intervals,

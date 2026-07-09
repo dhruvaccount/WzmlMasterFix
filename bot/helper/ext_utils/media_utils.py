@@ -50,7 +50,7 @@ async def create_thumb(msg, _id=""):
 
 
 async def download_image_thumb(url):
-    from httpx import AsyncClient
+    from niquests import AsyncSession
 
     NON_IMAGE_TYPES = (
         "text/",
@@ -61,7 +61,7 @@ async def download_image_thumb(url):
         "audio/",
     )
     try:
-        async with AsyncClient(follow_redirects=True, timeout=30) as client:
+        async with AsyncSession(allow_redirects=True, timeout=30) as client:
             try:
                 head_resp = await client.head(url)
                 content_type = head_resp.headers.get("content-type", "")

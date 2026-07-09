@@ -567,16 +567,17 @@ async def open_drive_clean(message):
         buttons.build_menu(3),
     )
     start_time = time()
-    bot_cache[msg_id] = [None, False, False, start_time]
+    bot_cache[msg_id] = [None, False, False, start_time, None]
     while time() - start_time <= 60:
         await sleep(0.5)
         if bot_cache[msg_id][1] or bot_cache[msg_id][2]:
             break
     drive_id = bot_cache[msg_id][0]
     is_cancelled = bot_cache[msg_id][1]
+    cat_name = bot_cache[msg_id][4]
     if not is_cancelled:
         await delete_message(prompt)
     else:
         await edit_message(prompt, "<b>Task Cancelled</b>")
     del bot_cache[msg_id]
-    return drive_id, is_cancelled
+    return drive_id, is_cancelled, cat_name

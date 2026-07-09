@@ -1,5 +1,5 @@
 from json import loads as jloads, JSONDecodeError
-from httpx import AsyncClient
+from niquests import AsyncSession
 from pyrogram.enums import ButtonStyle
 from apscheduler.triggers.interval import IntervalTrigger
 from asyncio import Lock, sleep
@@ -250,8 +250,8 @@ async def rss_sub(_, message, pre_event):
             cmd = None
             stv = False
         try:
-            async with AsyncClient(
-                headers=headers, follow_redirects=True, timeout=60
+            async with AsyncSession(
+                headers=headers, allow_redirects=True, timeout=60
             ) as client:
                 res = await client.get(feed_link)
             html = res.text
@@ -467,8 +467,8 @@ async def rss_get(_, message, pre_event):
                 msg = await send_message(
                     message, f"Getting the last <b>{count}</b> item(s) from {title}"
                 )
-                async with AsyncClient(
-                    headers=headers, follow_redirects=True, timeout=60
+                async with AsyncSession(
+                    headers=headers, allow_redirects=True, timeout=60
                 ) as client:
                     res = await client.get(data["link"])
                 html = res.text
@@ -831,9 +831,9 @@ async def rss_monitor():
                 tries = 0
                 while True:
                     try:
-                        async with AsyncClient(
+                        async with AsyncSession(
                             headers=headers,
-                            follow_redirects=True,
+                            allow_redirects=True,
                             timeout=60,
                         ) as client:
                             res = await client.get(data["link"])

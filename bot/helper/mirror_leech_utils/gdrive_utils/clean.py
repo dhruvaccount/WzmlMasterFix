@@ -337,7 +337,7 @@ class GoogleDriveClean(GoogleDriveHelper):
         else:
             await self.list_drives()
 
-    async def start(self, link=None, drive_id=None):
+    async def start(self, link=None, drive_id=None, cat_name=None):
         if link:
             try:
                 file_id = self.get_id_from_url(link)
@@ -375,3 +375,9 @@ class GoogleDriveClean(GoogleDriveHelper):
             await self._event_handler()
         if self._reply_to:
             await delete_message(self._reply_to)
+        if not self.listener.is_cancelled:
+            display_name = cat_name or "Selected"
+            await send_message(
+                self.listener.message,
+                f"⌬ <b><i>Drive Cleaned</i></b>\n┟ <b>Category</b> → <code>{display_name}</code>\n┖ <b>Status</b> → <i>Completed</i>",
+            )
