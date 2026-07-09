@@ -29,7 +29,7 @@ from ...ext_utils.files_utils import get_base_name, is_archive
 from ...ext_utils.status_utils import get_readable_file_size, get_readable_time
 
 from ...ext_utils.media_utils import get_md5_hash, get_media_info
-from ...telegram_helper.message_utils import delete_message, send_message
+from ...telegram_helper.message_utils import delete_message
 from ...ext_utils.hyperul_utils import HypertgUpload
 
 LOGGER = getLogger(__name__)
@@ -109,16 +109,6 @@ class TelegramUploader:
             self._sent_msg = self._listener.message
             self._is_private = self._sent_msg.chat.type == ChatType.PRIVATE
 
-        if Config.LINKS_LOG_ID:
-            await send_message(
-                Config.LINKS_LOG_ID,
-                f"""➲  <b><u>Leech Started:</u></b>
- ┃
- ┠ <b>User :</b> {self._listener.tag} ( #ID{self._listener.user_id} )
- ┠ <b>Message Link :</b> <a href='{self._listener.message.link}'>Click Here</a>
- ┗ <b>Link:</b> <a href='{self._listener.link}'>Click Here</a>
- """,
-            )
         return True
 
     async def _prepare_file(self, pre_file_, dirpath):
@@ -291,9 +281,7 @@ class TelegramUploader:
         up_path = None
         try:
             up_path, cap_mono = await self._prepare_file(file_, dirpath)
-            sent = await self._upload_file(
-                cap_mono, up_path, user_session=user_session
-            )
+            sent = await self._upload_file(cap_mono, up_path, user_session=user_session)
             if sent and not self._is_corrupted:
                 if self._listener.is_super_chat or self._listener.up_dest:
                     if not self._is_private:
@@ -360,7 +348,11 @@ class TelegramUploader:
                     ):
                         self._user_session = True
                     self._last_msg_in_group = False
-                    task = ensure_future(self._upload_file_task(file_, f_path, dirpath, self._user_session))
+                    task = ensure_future(
+                        self._upload_file_task(
+                            file_, f_path, dirpath, self._user_session
+                        )
+                    )
                     upload_tasks.append(task)
                     if self._listener.is_cancelled:
                         return

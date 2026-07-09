@@ -42,6 +42,7 @@ class Config:
     FORCE_SUB_IDS = ""
     GOFILE_API = ""
     GOFILE_FOLDER_ID = ""
+    GOFILE_AUTO_CREATE_FOLDER = False
     PIXELDRAIN_KEY = ""
     PROTECTED_API = ""
     BUZZHEAVIER_API = ""

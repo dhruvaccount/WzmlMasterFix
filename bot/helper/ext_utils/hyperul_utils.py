@@ -271,9 +271,7 @@ class HypertgUpload(HypertgTransfer):
         user_session=False,
     ):
         client = (
-            TgClient.user
-            if user_session and TgClient.user
-            else self._listener.client
+            TgClient.user if user_session and TgClient.user else self._listener.client
         )
         kwargs = {
             "chat_id": chat_id,

@@ -378,7 +378,9 @@ class TaskListener(TaskConfig):
             LOGGER.info(f"Uphoster Upload Name: {self.name}")
             uphoster_service = self.user_dict.get("UPHOSTER_SERVICE", "gofile")
             services = uphoster_service.split(",")
-            ddl = MultiUphosterUpload(self, up_path, services)
+            ddl = MultiUphosterUpload(
+                self, up_path, services, self.folder_name.strip("/")
+            )
             async with task_dict_lock:
                 task_dict[self.mid] = UphosterStatus(self, ddl, gid, "up")
             await gather(
