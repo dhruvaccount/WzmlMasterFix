@@ -27,7 +27,7 @@ async def arg_usage(_, query):
         pages = COMMAND_USAGE.get(key)
         if not pages:
             return
-        btn_idx = pg_no + 1 if data[1] != "pre" else pg_no - 1
+        btn_idx = pg_no + 1
         if 1 <= btn_idx < len(pages):
             await edit_message(message, pages[0], pages[btn_idx])
     elif data[1] in COMMAND_USAGE:

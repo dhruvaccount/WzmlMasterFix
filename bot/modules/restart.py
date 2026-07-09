@@ -27,13 +27,16 @@ from ..helper.telegram_helper.message_utils import (
 
 @new_task
 async def restart_bot(_, message):
+    args = message.text.split()
+    mode = "soft" if "-s" in args else "hard"
     buttons = button_build.ButtonMaker()
-    buttons.data_button("Yes!", "botrestart confirm", style=ButtonStyle.SUCCESS)
+    buttons.data_button("Yes!", f"botrestart confirm {mode}", style=ButtonStyle.SUCCESS)
     buttons.data_button("No!", "botrestart cancel", style=ButtonStyle.DANGER)
     button = buttons.build_menu(2)
-    await send_message(
-        message, "<i>Are you really sure you want to restart the bot ?</i>", button
-    )
+    msg = "<i>Are you really sure you want to restart the bot ?</i>"
+    if mode == "soft":
+        msg += "\n<i>Mode: Soft (code reload only, tasks keep running)</i>"
+    await send_message(message, msg, button)
 
 
 @new_task
@@ -192,76 +195,77 @@ async def confirm_restart(_, query):
         intervals["stopAll"] = True
         restart_message = await send_message(reply_to, "<i>Restarting...</i>")
 
-        if qb := intervals["qb"]:
-            qb.cancel()
-        if jd := intervals["jd"]:
-            jd.cancel()
-        if nzb := intervals["nzb"]:
-            nzb.cancel()
-        if st := intervals["status"]:
-            for intvl in list(st.values()):
-                intvl.cancel()
+        if data[2] != "soft":
+            if qb := intervals["qb"]:
+                qb.cancel()
+            if jd := intervals["jd"]:
+                jd.cancel()
+            if nzb := intervals["nzb"]:
+                nzb.cancel()
+            if st := intervals["status"]:
+                for intvl in list(st.values()):
+                    intvl.cancel()
 
-        if scheduler.running:
-            scheduler.shutdown(wait=False)
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
 
-        await mega_cleanup()
+            await mega_cleanup()
 
-        sabnzbd_task = None
-        jd_task = None
-        if not Config.DISABLE_NZB and sabnzbd_client.LOGGED_IN:
-            sabnzbd_task = gather(
-                sabnzbd_client.pause_all(),
-                sabnzbd_client.delete_job("all", True),
-                sabnzbd_client.purge_all(True),
-                sabnzbd_client.delete_history("all", delete_files=True),
+            sabnzbd_task = None
+            jd_task = None
+            if not Config.DISABLE_NZB and sabnzbd_client.LOGGED_IN:
+                sabnzbd_task = gather(
+                    sabnzbd_client.pause_all(),
+                    sabnzbd_client.delete_job("all", True),
+                    sabnzbd_client.purge_all(True),
+                    sabnzbd_client.delete_history("all", delete_files=True),
+                )
+            if not Config.DISABLE_JD and jdownloader.is_connected:
+                jd_task = gather(
+                    jdownloader.device.downloadcontroller.stop_downloads(),
+                    jdownloader.device.linkgrabber.clear_list(),
+                    jdownloader.device.downloads.cleanup(
+                        "DELETE_ALL",
+                        "REMOVE_LINKS_AND_DELETE_FILES",
+                        "ALL",
+                    ),
+                )
+
+            try:
+                await TorrentManager.remove_all()
+            except Exception:
+                pass
+            await TorrentManager.close_all()
+
+            if sabnzbd_task is not None:
+                try:
+                    await sabnzbd_task
+                except Exception:
+                    pass
+                try:
+                    await sabnzbd_client.close()
+                except Exception:
+                    pass
+            if jd_task is not None:
+                try:
+                    await jd_task
+                except Exception:
+                    pass
+                try:
+                    await jdownloader.close()
+                except Exception:
+                    pass
+
+            await TgClient.stop()
+
+            THREAD_POOL.shutdown(wait=False)
+
+            await create_subprocess_exec(
+                "pkill",
+                "-9",
+                "-f",
+                f"gunicorn|{BinConfig.ARIA2_NAME}|{BinConfig.QBIT_NAME}|{BinConfig.FFMPEG_NAME}|{BinConfig.RCLONE_NAME}|java|{BinConfig.SABNZBD_NAME}|7z|split",
             )
-        if not Config.DISABLE_JD and jdownloader.is_connected:
-            jd_task = gather(
-                jdownloader.device.downloadcontroller.stop_downloads(),
-                jdownloader.device.linkgrabber.clear_list(),
-                jdownloader.device.downloads.cleanup(
-                    "DELETE_ALL",
-                    "REMOVE_LINKS_AND_DELETE_FILES",
-                    "ALL",
-                ),
-            )
-
-        try:
-            await TorrentManager.remove_all()
-        except Exception:
-            pass
-        await TorrentManager.close_all()
-
-        if sabnzbd_task is not None:
-            try:
-                await sabnzbd_task
-            except Exception:
-                pass
-            try:
-                await sabnzbd_client.close()
-            except Exception:
-                pass
-        if jd_task is not None:
-            try:
-                await jd_task
-            except Exception:
-                pass
-            try:
-                await jdownloader.close()
-            except Exception:
-                pass
-
-        await TgClient.stop()
-
-        THREAD_POOL.shutdown(wait=False)
-
-        await create_subprocess_exec(
-            "pkill",
-            "-9",
-            "-f",
-            f"gunicorn|{BinConfig.ARIA2_NAME}|{BinConfig.QBIT_NAME}|{BinConfig.FFMPEG_NAME}|{BinConfig.RCLONE_NAME}|java|{BinConfig.SABNZBD_NAME}|7z|split",
-        )
 
         proc_update = await create_subprocess_exec("python3", "update.py")
         await proc_update.wait()
@@ -272,7 +276,8 @@ async def confirm_restart(_, query):
         except Exception:
             pass
 
-        get_event_loop().create_task(_background_cleanup())
+        if data[2] != "soft":
+            get_event_loop().create_task(_background_cleanup())
 
         osexecl(executable, executable, "-m", "bot")
     else:
