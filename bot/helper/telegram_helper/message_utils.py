@@ -161,12 +161,6 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
 
 
 async def edit_message(message, text, buttons=None, block=True, photo=None):
-    if buttons is not None and not hasattr(buttons, "write"):
-        LOGGER.critical(
-            f"edit_message: buttons is {type(buttons).__name__}: {buttons!r}",
-            exc_info=True,
-        )
-        buttons = None
     try:
         if message.media:
             if photo:
