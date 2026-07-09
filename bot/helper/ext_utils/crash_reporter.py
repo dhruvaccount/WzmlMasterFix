@@ -14,7 +14,7 @@ from pytz import timezone as tz_lookup
 
 from bot import LOGGER, bot_loop
 from bot.core.config_manager import Config
-from bot.version import get_commit_hash, get_commit_url, get_version
+from bot.version import get_commit_message, get_commit_time, get_version
 
 CRASH_REPORT_URL = "https://telemetry.wzmlx.com/api/v1/send-crash-report"
 API_KEY = hmac_new(b"wzmlx-crash-report", Config.BOT_TOKEN.encode(), sha256).hexdigest()
@@ -80,7 +80,8 @@ def _make_payload(exc_type, exc_value, exc_traceback):
     tb_lines = format_exception(exc_type, exc_value, exc_traceback)
     return {
         "version": get_version(),
-        "commit_url": get_commit_url(),
+        "commit_message": get_commit_message(),
+        "commit_time": get_commit_time(),
         "exception": f"{exc_type.__name__}: {exc_value}",
         "traceback": "".join(tb_lines),
         "platform": platform,
@@ -118,10 +119,11 @@ async def _upload_logs(log_lines):
     from .telegraph_helper import telegraph
 
     try:
-        commit_url = get_commit_url()
+        commit_msg = get_commit_message()
+        commit_time = get_commit_time()
         link_html = (
-            f'<p><a href="{commit_url}">Commit {get_commit_hash()}</a></p>'
-            if commit_url else ""
+            f"<p>Commit: <b>{commit_msg}</b><br>Time: {commit_time}</p>"
+            if commit_msg else ""
         )
         html = link_html + (
             "<pre>" + "".join(_esc_html(line) + "\n" for line in log_lines) + "</pre>"

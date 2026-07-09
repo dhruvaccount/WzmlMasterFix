@@ -1,5 +1,6 @@
 from PIL import Image
 from pyrogram import StopTransmission
+from pyrogram.errors import PhotoInvalidDimensions
 
 from os import path as ospath
 from aiofiles.os import path as aiopath, remove
@@ -207,35 +208,48 @@ class HypertgUpload(HypertgTransfer):
             if reply_to_message_id:
                 kwargs["reply_to_message_id"] = reply_to_message_id
 
-            if key == "videos":
-                kwargs["video"] = file_path
-                if duration:
-                    kwargs["duration"] = duration
-                if width:
-                    kwargs["width"] = width
-                if height:
-                    kwargs["height"] = height
-                if thumb:
-                    kwargs["video_cover"] = thumb
-                    kwargs["thumb"] = thumb
-                sent = await client.send_video(**kwargs)
-            elif key == "audios":
-                kwargs["audio"] = file_path
-                if duration:
-                    kwargs["duration"] = duration
-                if artist:
-                    kwargs["performer"] = artist
-                if title:
-                    kwargs["title"] = title
-                if thumb:
-                    kwargs["thumb"] = thumb
-                sent = await client.send_audio(**kwargs)
-            elif key == "photos":
-                kwargs["photo"] = file_path
-                sent = await client.send_photo(**kwargs)
-            else:
-                kwargs["document"] = file_path
-                sent = await client.send_document(**kwargs)
+            try:
+                if key == "videos":
+                    kwargs["video"] = file_path
+                    if duration:
+                        kwargs["duration"] = duration
+                    if width:
+                        kwargs["width"] = width
+                    if height:
+                        kwargs["height"] = height
+                    if thumb:
+                        kwargs["video_cover"] = thumb
+                        kwargs["thumb"] = thumb
+                    sent = await client.send_video(**kwargs)
+                elif key == "audios":
+                    kwargs["audio"] = file_path
+                    if duration:
+                        kwargs["duration"] = duration
+                    if artist:
+                        kwargs["performer"] = artist
+                    if title:
+                        kwargs["title"] = title
+                    if thumb:
+                        kwargs["thumb"] = thumb
+                    sent = await client.send_audio(**kwargs)
+                elif key == "photos":
+                    kwargs["photo"] = file_path
+                    sent = await client.send_photo(**kwargs)
+                else:
+                    kwargs["document"] = file_path
+                    sent = await client.send_document(**kwargs)
+            except PhotoInvalidDimensions:
+                thumb = None
+                kwargs.pop("thumb", None)
+                kwargs.pop("video_cover", None)
+                if key == "videos":
+                    sent = await client.send_video(**kwargs)
+                elif key == "audios":
+                    sent = await client.send_audio(**kwargs)
+                elif key == "photos":
+                    sent = await client.send_photo(**kwargs)
+                else:
+                    sent = await client.send_document(**kwargs)
 
             return sent
         finally:
@@ -272,37 +286,49 @@ class HypertgUpload(HypertgTransfer):
         if reply_to_message_id:
             kwargs["reply_to_message_id"] = reply_to_message_id
 
-        if key == "videos":
-            kwargs["video"] = file_path
-            if thumb:
-                kwargs["thumb"] = thumb
-                kwargs["video_cover"] = thumb
-            if duration:
-                kwargs["duration"] = duration
-            if width:
-                kwargs["width"] = width
-            if height:
-                kwargs["height"] = height
-            sent = await client.send_video(**kwargs)
-        elif key == "audios":
-            kwargs["audio"] = file_path
-            if thumb:
-                kwargs["thumb"] = thumb
-            if duration:
-                kwargs["duration"] = duration
-            if artist:
-                kwargs["performer"] = artist
-            if title:
-                kwargs["title"] = title
-            sent = await client.send_audio(**kwargs)
-        elif key == "photos":
-            kwargs["photo"] = file_path
-            sent = await client.send_photo(**kwargs)
-        else:
-            kwargs["document"] = file_path
-            if thumb:
-                kwargs["thumb"] = thumb
-            sent = await client.send_document(**kwargs)
+        try:
+            if key == "videos":
+                kwargs["video"] = file_path
+                if thumb:
+                    kwargs["thumb"] = thumb
+                    kwargs["video_cover"] = thumb
+                if duration:
+                    kwargs["duration"] = duration
+                if width:
+                    kwargs["width"] = width
+                if height:
+                    kwargs["height"] = height
+                sent = await client.send_video(**kwargs)
+            elif key == "audios":
+                kwargs["audio"] = file_path
+                if thumb:
+                    kwargs["thumb"] = thumb
+                if duration:
+                    kwargs["duration"] = duration
+                if artist:
+                    kwargs["performer"] = artist
+                if title:
+                    kwargs["title"] = title
+                sent = await client.send_audio(**kwargs)
+            elif key == "photos":
+                kwargs["photo"] = file_path
+                sent = await client.send_photo(**kwargs)
+            else:
+                kwargs["document"] = file_path
+                if thumb:
+                    kwargs["thumb"] = thumb
+                sent = await client.send_document(**kwargs)
+        except PhotoInvalidDimensions:
+            kwargs.pop("thumb", None)
+            kwargs.pop("video_cover", None)
+            if key == "videos":
+                sent = await client.send_video(**kwargs)
+            elif key == "audios":
+                sent = await client.send_audio(**kwargs)
+            elif key == "photos":
+                sent = await client.send_photo(**kwargs)
+            else:
+                sent = await client.send_document(**kwargs)
 
         return sent
 

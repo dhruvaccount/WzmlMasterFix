@@ -9,6 +9,8 @@ from pyrogram.errors import (
     FloodWait,
     MessageNotModified,
     MessageEmpty,
+    MessageTooLong,
+    MessageDeleteForbidden,
     ReplyMarkupInvalid,
     PhotoInvalidDimensions,
     WebpageCurlFailed,
@@ -143,6 +145,8 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
     except ReplyMarkupInvalid as rmi:
         LOGGER.warning(str(rmi))
         return await send_message(message, text, None)
+    except MessageTooLong:
+        return await send_message(message, text[:4096], buttons, block, photo)
     except (MessageEmpty, EntityBoundsInvalid):
         return await send_message(message, text, parse_mode=ParseMode.DISABLED)
     except PeerIdInvalid:
@@ -157,6 +161,12 @@ async def send_message(message, text, buttons=None, block=True, photo=None, **kw
 
 
 async def edit_message(message, text, buttons=None, block=True, photo=None):
+    if buttons is not None and not hasattr(buttons, "write"):
+        LOGGER.critical(
+            f"edit_message: buttons is {type(buttons).__name__}: {buttons!r}",
+            exc_info=True,
+        )
+        buttons = None
     try:
         if message.media:
             if photo:
@@ -274,7 +284,9 @@ async def delete_message(*args):
         return
     results = await gather(*tasks, return_exceptions=True)
     for result in results:
-        if isinstance(result, Exception):
+        if isinstance(result, MessageDeleteForbidden):
+            pass
+        elif isinstance(result, Exception):
             LOGGER.error(result)
 
 
