@@ -405,10 +405,8 @@ async def download_image_url(url):
     image_name = url.split("/")[-1].split("?")[0]
     des_dir = ospath.join(path, image_name)
     try:
-        async with AsyncSession(
-            headers={"User-Agent": "Mozilla/5.0"}, allow_redirects=True
-        ) as client:
-            resp = await client.get(url, timeout=15)
+        async with AsyncSession(headers={"User-Agent": "Mozilla/5.0"}) as client:
+            resp = await client.get(url, allow_redirects=True, timeout=15)
             if resp.status_code == 200:
                 async with aiopen(des_dir, "wb") as f:
                     await f.write(resp.content)
