@@ -150,7 +150,12 @@ def create_help_buttons():
 
 
 def compare_versions(v1, v2):
-    v1, v2 = (list(map(int, v.split("-")[0].lstrip("v").split("."))) for v in (v1, v2))
+    try:
+        v1, v2 = (
+            list(map(int, v.split("-")[0].lstrip("v").split("."))) for v in (v1, v2)
+        )
+    except (ValueError, IndexError, AttributeError):
+        return f"Check Versions Manually | Local: {v1} | Latest: {v2}"
     return (
         "New Version Update is Available! Check Now!"
         if v1 < v2

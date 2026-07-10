@@ -197,6 +197,7 @@ async def confirm_restart(_, query):
         if data[2] == "soft":
             restart_msg = await send_message(reply_to, "<i>Reloading...</i>")
             await _runtime_reload()
+            intervals["stopAll"] = False
             try:
                 await TgClient.bot.edit_message_text(
                     chat_id=restart_msg.chat.id,

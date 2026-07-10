@@ -1,6 +1,13 @@
+from asyncio import sleep
+
 from PIL import Image
 from pyrogram import StopTransmission
-from pyrogram.errors import PhotoInvalidDimensions
+from pyrogram.errors import FloodWait, PhotoInvalidDimensions
+
+try:
+    from pyrogram.errors import FloodPremiumWait
+except ImportError:
+    FloodPremiumWait = FloodWait
 
 from os import path as ospath
 from aiofiles.os import path as aiopath, remove
@@ -170,6 +177,36 @@ class HypertgUpload(HypertgTransfer):
                 except Exception:
                     pass
 
+    async def _send_with_retry(self, send_func, **kwargs):
+        while True:
+            try:
+                return await send_func(**kwargs)
+            except (FloodWait, FloodPremiumWait) as f:
+                LOGGER.warning(f"HypertgUL flood {f.value}s on {self._up_file}")
+                await sleep(f.value + 1)
+
+    async def _try_send(self, key, client, kwargs):
+        try:
+            if key == "videos":
+                return await self._send_with_retry(client.send_video, **kwargs)
+            elif key == "audios":
+                return await self._send_with_retry(client.send_audio, **kwargs)
+            elif key == "photos":
+                return await self._send_with_retry(client.send_photo, **kwargs)
+            else:
+                return await self._send_with_retry(client.send_document, **kwargs)
+        except PhotoInvalidDimensions:
+            kwargs.pop("thumb", None)
+            kwargs.pop("video_cover", None)
+            if key == "videos":
+                return await self._send_with_retry(client.send_video, **kwargs)
+            elif key == "audios":
+                return await self._send_with_retry(client.send_audio, **kwargs)
+            elif key == "photos":
+                return await self._send_with_retry(client.send_photo, **kwargs)
+            else:
+                return await self._send_with_retry(client.send_document, **kwargs)
+
     async def _hyper_send(
         self,
         file_path,
@@ -208,49 +245,27 @@ class HypertgUpload(HypertgTransfer):
             if reply_to_message_id:
                 kwargs["reply_to_message_id"] = reply_to_message_id
 
-            try:
-                if key == "videos":
-                    kwargs["video"] = file_path
-                    if duration:
-                        kwargs["duration"] = duration
-                    if width:
-                        kwargs["width"] = width
-                    if height:
-                        kwargs["height"] = height
-                    if thumb:
-                        kwargs["video_cover"] = thumb
-                        kwargs["thumb"] = thumb
-                    sent = await client.send_video(**kwargs)
-                elif key == "audios":
-                    kwargs["audio"] = file_path
-                    if duration:
-                        kwargs["duration"] = duration
-                    if artist:
-                        kwargs["performer"] = artist
-                    if title:
-                        kwargs["title"] = title
-                    if thumb:
-                        kwargs["thumb"] = thumb
-                    sent = await client.send_audio(**kwargs)
-                elif key == "photos":
-                    kwargs["photo"] = file_path
-                    sent = await client.send_photo(**kwargs)
-                else:
-                    kwargs["document"] = file_path
-                    sent = await client.send_document(**kwargs)
-            except PhotoInvalidDimensions:
-                thumb = None
-                kwargs.pop("thumb", None)
-                kwargs.pop("video_cover", None)
-                if key == "videos":
-                    sent = await client.send_video(**kwargs)
-                elif key == "audios":
-                    sent = await client.send_audio(**kwargs)
-                elif key == "photos":
-                    sent = await client.send_photo(**kwargs)
-                else:
-                    sent = await client.send_document(**kwargs)
+            if key == "videos":
+                if duration:
+                    kwargs["duration"] = duration
+                if width:
+                    kwargs["width"] = width
+                if height:
+                    kwargs["height"] = height
+                if thumb:
+                    kwargs["video_cover"] = thumb
+                    kwargs["thumb"] = thumb
+            elif key == "audios":
+                if duration:
+                    kwargs["duration"] = duration
+                if artist:
+                    kwargs["performer"] = artist
+                if title:
+                    kwargs["title"] = title
+                if thumb:
+                    kwargs["thumb"] = thumb
 
+            sent = await self._try_send(key, client, kwargs)
             return sent
         finally:
             self.work_loads[idx] -= 1
@@ -284,51 +299,30 @@ class HypertgUpload(HypertgTransfer):
         if reply_to_message_id:
             kwargs["reply_to_message_id"] = reply_to_message_id
 
-        try:
-            if key == "videos":
-                kwargs["video"] = file_path
-                if thumb:
-                    kwargs["thumb"] = thumb
-                    kwargs["video_cover"] = thumb
-                if duration:
-                    kwargs["duration"] = duration
-                if width:
-                    kwargs["width"] = width
-                if height:
-                    kwargs["height"] = height
-                sent = await client.send_video(**kwargs)
-            elif key == "audios":
-                kwargs["audio"] = file_path
-                if thumb:
-                    kwargs["thumb"] = thumb
-                if duration:
-                    kwargs["duration"] = duration
-                if artist:
-                    kwargs["performer"] = artist
-                if title:
-                    kwargs["title"] = title
-                sent = await client.send_audio(**kwargs)
-            elif key == "photos":
-                kwargs["photo"] = file_path
-                sent = await client.send_photo(**kwargs)
-            else:
-                kwargs["document"] = file_path
-                if thumb:
-                    kwargs["thumb"] = thumb
-                sent = await client.send_document(**kwargs)
-        except PhotoInvalidDimensions:
-            kwargs.pop("thumb", None)
-            kwargs.pop("video_cover", None)
-            if key == "videos":
-                sent = await client.send_video(**kwargs)
-            elif key == "audios":
-                sent = await client.send_audio(**kwargs)
-            elif key == "photos":
-                sent = await client.send_photo(**kwargs)
-            else:
-                sent = await client.send_document(**kwargs)
+        if key == "videos":
+            if thumb:
+                kwargs["thumb"] = thumb
+                kwargs["video_cover"] = thumb
+            if duration:
+                kwargs["duration"] = duration
+            if width:
+                kwargs["width"] = width
+            if height:
+                kwargs["height"] = height
+        elif key == "audios":
+            if thumb:
+                kwargs["thumb"] = thumb
+            if duration:
+                kwargs["duration"] = duration
+            if artist:
+                kwargs["performer"] = artist
+            if title:
+                kwargs["title"] = title
+        else:
+            if thumb:
+                kwargs["thumb"] = thumb
 
-        return sent
+        return await self._try_send(key, client, kwargs)
 
     async def cancel(self):
         await super().cancel()

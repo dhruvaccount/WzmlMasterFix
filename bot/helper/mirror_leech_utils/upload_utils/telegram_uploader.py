@@ -8,7 +8,12 @@ from aioshutil import rmtree
 from natsort import natsorted
 from pyrogram import StopTransmission
 from pyrogram.enums import ChatType
-from pyrogram.errors import RPCError
+from pyrogram.errors import FloodWait, RPCError
+
+try:
+    from pyrogram.errors import FloodPremiumWait
+except ImportError:
+    FloodPremiumWait = FloodWait
 
 from aiofiles.os import (
     path as aiopath,
@@ -33,6 +38,15 @@ from ...telegram_helper.message_utils import delete_message
 from ...ext_utils.hyperul_utils import HypertgUpload
 
 LOGGER = getLogger(__name__)
+
+
+async def _call_with_flood_retry(method, *args, **kwargs):
+    while True:
+        try:
+            return await method(*args, **kwargs)
+        except (FloodWait, FloodPremiumWait) as f:
+            LOGGER.warning(f"FloodWait {f.value}s, retrying {method.__name__}")
+            await sleep(f.value + 1)
 
 
 class TelegramUploader:
@@ -86,7 +100,8 @@ class TelegramUploader:
 
         if self._user_session:
             try:
-                self._sent_msg = await self._listener.client.get_messages(
+                self._sent_msg = await _call_with_flood_retry(
+                    self._listener.client.get_messages,
                     chat_id=self._listener.message.chat.id,
                     message_ids=self._listener.mid,
                 )
@@ -94,7 +109,8 @@ class TelegramUploader:
                 self._sent_msg = None
             if self._sent_msg is None or self._sent_msg.chat is None:
                 try:
-                    self._sent_msg = await self._listener.client.send_message(
+                    self._sent_msg = await _call_with_flood_retry(
+                        self._listener.client.send_message,
                         chat_id=self._listener.message.chat.id,
                         text="Deleted Cmd Message! Don't delete the cmd message again!",
                         disable_web_page_preview=True,
@@ -224,13 +240,15 @@ class TelegramUploader:
         for i in range(0, len(inputs), 10):
             batch = inputs[i : i + 10]
             if Config.BOT_PM:
-                await TgClient.bot.send_media_group(
+                await _call_with_flood_retry(
+                    TgClient.bot.send_media_group,
                     chat_id=self._listener.user_id,
                     media=batch,
                     disable_notification=True,
                 )
             self._sent_msg = (
-                await self._sent_msg.reply_media_group(
+                await _call_with_flood_retry(
+                    self._sent_msg.reply_media_group,
                     media=batch,
                     reply_parameters=ReplyParameters(message_id=self._sent_msg.id),
                     disable_notification=True,
@@ -240,14 +258,17 @@ class TelegramUploader:
     async def _send_media_group(self, subkey, key, msgs):
         for index, msg in enumerate(msgs):
             if self._listener.transmission_mode == "both" or not self._user_session:
-                msgs[index] = await self._listener.client.get_messages(
-                    chat_id=msg[0], message_ids=msg[1]
+                msgs[index] = await _call_with_flood_retry(
+                    self._listener.client.get_messages,
+                    chat_id=msg[0],
+                    message_ids=msg[1],
                 )
             else:
-                msgs[index] = await TgClient.user.get_messages(
-                    chat_id=msg[0], message_ids=msg[1]
+                msgs[index] = await _call_with_flood_retry(
+                    TgClient.user.get_messages, chat_id=msg[0], message_ids=msg[1]
                 )
-        msgs_list = await msgs[0].reply_to_message.reply_media_group(
+        msgs_list = await _call_with_flood_retry(
+            msgs[0].reply_to_message.reply_media_group,
             media=self._get_input_media(subkey, key),
             reply_parameters=ReplyParameters(message_id=msgs[0].reply_to_message.id),
             disable_notification=True,
@@ -265,7 +286,8 @@ class TelegramUploader:
     async def _copy_media(self):
         try:
             if self._bot_pm:
-                await TgClient.bot.copy_message(
+                await _call_with_flood_retry(
+                    TgClient.bot.copy_message,
                     chat_id=self._listener.user_id,
                     from_chat_id=self._sent_msg.chat.id,
                     message_id=self._sent_msg.id,
@@ -322,10 +344,10 @@ class TelegramUploader:
                     f_size = await aiopath.getsize(f_path)
                     self._total_files += 1
                     if f_size == 0:
-                        LOGGER.error(
-                            f"{f_path} size is zero, telegram don't upload zero size files"
-                        )
+                        LOGGER.warning(f"{f_path} size is zero, skipping")
                         self._corrupted += 1
+                        if not self._listener.is_cancelled:
+                            await remove(f_path)
                         continue
                     if self._listener.is_cancelled:
                         return
@@ -462,7 +484,8 @@ class TelegramUploader:
             upl_chat_id = sent_msg.chat.id
             if upl_chat_id != src_chat_id and not self._listener.up_dest:
                 try:
-                    bot_copy = await TgClient.bot.copy_message(
+                    bot_copy = await _call_with_flood_retry(
+                        TgClient.bot.copy_message,
                         chat_id=src_chat_id,
                         from_chat_id=upl_chat_id,
                         message_id=sent_msg.id,
@@ -472,7 +495,8 @@ class TelegramUploader:
                     LOGGER.error(f"Failed to copy from dump_chat: {e}")
             elif upl_chat_id == src_chat_id and user_session and not self._is_private:
                 try:
-                    bot_copy = await TgClient.bot.copy_message(
+                    bot_copy = await _call_with_flood_retry(
+                        TgClient.bot.copy_message,
                         chat_id=upl_chat_id,
                         from_chat_id=upl_chat_id,
                         message_id=sent_msg.id,
@@ -495,7 +519,8 @@ class TelegramUploader:
                         if str(dest).lstrip("-").isdigit():
                             dest = int(dest)
                     try:
-                        await TgClient.bot.copy_message(
+                        await _call_with_flood_retry(
+                            TgClient.bot.copy_message,
                             chat_id=dest,
                             from_chat_id=sent_msg.chat.id,
                             message_id=sent_msg.id,
