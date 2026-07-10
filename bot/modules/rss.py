@@ -250,10 +250,8 @@ async def rss_sub(_, message, pre_event):
             cmd = None
             stv = False
         try:
-            async with AsyncSession(
-                headers=headers, allow_redirects=True, timeout=60
-            ) as client:
-                res = await client.get(feed_link)
+            async with AsyncSession(headers=headers, timeout=60) as client:
+                res = await client.get(feed_link, allow_redirects=True)
             html = res.text
             rss_d = _parse_feed(html)
             last_link = ""
@@ -467,10 +465,8 @@ async def rss_get(_, message, pre_event):
                 msg = await send_message(
                     message, f"Getting the last <b>{count}</b> item(s) from {title}"
                 )
-                async with AsyncSession(
-                    headers=headers, allow_redirects=True, timeout=60
-                ) as client:
-                    res = await client.get(data["link"])
+                async with AsyncSession(headers=headers, timeout=60) as client:
+                    res = await client.get(data["link"], allow_redirects=True)
                 html = res.text
                 rss_d = _parse_feed(html)
                 item_info = ""
@@ -833,10 +829,9 @@ async def rss_monitor():
                     try:
                         async with AsyncSession(
                             headers=headers,
-                            allow_redirects=True,
                             timeout=60,
                         ) as client:
-                            res = await client.get(data["link"])
+                            res = await client.get(data["link"], allow_redirects=True)
                         html = res.text
                         break
                     except Exception:
