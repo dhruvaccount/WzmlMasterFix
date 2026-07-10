@@ -486,17 +486,17 @@ async def rss_get(_, message, pre_event):
                 else:
                     await edit_message(msg, item_info)
             except IndexError as e:
-                LOGGER.error(str(e))
+                LOGGER.error(f"RSS get: {e}")
                 await edit_message(
                     msg, "Parse depth exceeded. Try again with a lower value."
                 )
             except Exception as e:
-                LOGGER.error(str(e))
-                await edit_message(msg, str(e))
+                LOGGER.error(f"RSS get: {e}")
+                await edit_message(msg, str(e) or "Unknown error occurred")
         else:
             await send_message(message, "Enter a valid title. Title not found!")
     except Exception as e:
-        LOGGER.error(str(e))
+        LOGGER.error(f"RSS get: {e}")
         await send_message(message, f"Enter a valid value!. {e}")
     await update_rss_menu(pre_event)
 
@@ -820,7 +820,7 @@ async def rss_monitor():
     elif chat.lstrip("-").isdigit():
         rss_chat_id = int(chat)
     for user, items in list(rss_dict.items()):
-        for title, data in items.items():
+        for title, data in list(items.items()):
             try:
                 if data["paused"]:
                     continue
@@ -949,7 +949,9 @@ async def rss_monitor():
                 LOGGER.info(ex)
                 break
             except Exception as e:
-                LOGGER.error(f"{e} - Feed Name: {title} - Feed Link: {data['link']}")
+                LOGGER.error(
+                    f"RSS monitor: {e} - Feed Name: {title} - Feed Link: {data['link']}"
+                )
                 continue
     if all_paused:
         scheduler.pause()

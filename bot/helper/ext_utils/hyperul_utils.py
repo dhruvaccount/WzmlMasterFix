@@ -265,6 +265,15 @@ class HypertgUpload(HypertgTransfer):
                 if thumb:
                     kwargs["thumb"] = thumb
 
+            if key == "videos":
+                kwargs["video"] = file_path
+            elif key == "audios":
+                kwargs["audio"] = file_path
+            elif key == "photos":
+                kwargs["photo"] = file_path
+            else:
+                kwargs["document"] = file_path
+
             sent = await self._try_send(key, client, kwargs)
             return sent
         finally:
@@ -321,6 +330,15 @@ class HypertgUpload(HypertgTransfer):
         else:
             if thumb:
                 kwargs["thumb"] = thumb
+
+        if key == "videos":
+            kwargs["video"] = file_path
+        elif key == "audios":
+            kwargs["audio"] = file_path
+        elif key == "photos":
+            kwargs["photo"] = file_path
+        else:
+            kwargs["document"] = file_path
 
         return await self._try_send(key, client, kwargs)
 
