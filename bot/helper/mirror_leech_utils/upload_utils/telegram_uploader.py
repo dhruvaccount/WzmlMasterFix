@@ -297,7 +297,13 @@ class TelegramUploader:
                 )
         except Exception as err:
             if not self._listener.is_cancelled:
-                LOGGER.error(f"Failed To Send in BotPM:\n{str(err)}")
+                err_msg = str(err)
+                if "Can't copy" in err_msg:
+                    LOGGER.warning(
+                        f"BotPM copy skipped (restricted content): {err_msg}"
+                    )
+                else:
+                    LOGGER.error(f"Failed To Send in BotPM:\n{err_msg}")
 
     async def _upload_file_task(self, file_, f_path, dirpath, user_session):
         up_path = None
