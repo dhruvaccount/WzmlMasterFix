@@ -1,4 +1,4 @@
-from asyncio import gather, sleep
+from asyncio import create_subprocess_shell, gather, sleep
 from importlib import import_module
 from os import environ, path as ospath, getenv
 
@@ -382,7 +382,7 @@ async def load_configurations():
     cmd = f'chmod 600 .netrc && cp .netrc /root/.netrc && chmod +x setpkgs.sh && ./setpkgs.sh {BinConfig.ARIA2_NAME} "{service_cores}" {Config.CPU_LIMIT}'
     if not Config.DISABLE_NZB:
         cmd += f" {BinConfig.SABNZBD_NAME}"
-    await cmd_exec(cmd + " </dev/null >/dev/null 2>&1", shell=True)
+    await (await create_subprocess_shell(cmd)).wait()
 
     if await aiopath.exists("cfg.zip"):
         if await aiopath.exists("/JDownloader/cfg"):
