@@ -9,6 +9,7 @@ from aioshutil import rmtree
 
 from .. import (
     LOGGER,
+    bot_loop,
     aria2_options,
     auth_chats,
     categories_dict,
@@ -418,11 +419,11 @@ async def load_configurations():
             access_pwd = token_bytes(32).hex()
             Config.WEB_ACCESS_PASSWORD = access_pwd
         env = f"WEB_ACCESS_PASSWORD={access_pwd} "
-        await cmd_exec(
+        bot_loop.create_task(cmd_exec(
             f"{env}gunicorn -k uvicorn.workers.UvicornWorker -w 1 web.wserver:app --bind 0.0.0.0:{PORT}",
             shell=True,
-        )
-        await cmd_exec("python3 cron_boot.py", shell=True)
+        ))
+        bot_loop.create_task(cmd_exec("python3 cron_boot.py", shell=True))
 
     from ..helper.ext_utils.tunnel_monitor import apply_tunnel_url_once
 
