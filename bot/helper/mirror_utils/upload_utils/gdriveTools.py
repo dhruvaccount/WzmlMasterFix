@@ -834,8 +834,9 @@ class GoogleDriveHelper:
                 msg += "</li><br><br>"
                 contents_no += 1
                 if len(msg.encode("utf-8")) > 39000:
+                    msg += "</ol>"
                     telegraph_content.append(msg)
-                    msg = ""
+                    msg = "<ol>"
             msg += "</ol>"
             if noMulti:
                 break
