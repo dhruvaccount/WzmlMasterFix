@@ -30,7 +30,6 @@ pytz
 qbittorrent-api
 niquests
 speedtest-cli
-telegraph
 tenacity
 uvicorn
 uvloop
