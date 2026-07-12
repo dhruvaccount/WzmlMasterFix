@@ -1,4 +1,4 @@
-from asyncio import create_subprocess_exec, gather, get_event_loop, sleep
+from asyncio import gather, get_event_loop, sleep
 from datetime import datetime
 from importlib import reload as reload_module
 from os import execl as osexecl
@@ -16,7 +16,12 @@ from ..core.config_manager import Config, BinConfig
 from ..core.jdownloader_booter import jdownloader
 from ..core.tg_client import TgClient
 from ..core.torrent_manager import TorrentManager
-from ..helper.ext_utils.bot_utils import THREAD_POOL, new_task, resolve_command
+from ..helper.ext_utils.bot_utils import (
+    THREAD_POOL,
+    cmd_exec,
+    new_task,
+    resolve_command,
+)
 from ..helper.ext_utils.db_handler import database
 from ..helper.listeners.mega_listener import mega_cleanup
 from ..helper.telegram_helper import button_build
@@ -274,15 +279,16 @@ async def confirm_restart(_, query):
 
             THREAD_POOL.shutdown(wait=False)
 
-            await create_subprocess_exec(
-                "pkill",
-                "-9",
-                "-f",
-                f"gunicorn|{BinConfig.ARIA2_NAME}|{BinConfig.QBIT_NAME}|{BinConfig.FFMPEG_NAME}|{BinConfig.RCLONE_NAME}|java|{BinConfig.SABNZBD_NAME}|7z|split",
+            await cmd_exec(
+                [
+                    "pkill",
+                    "-9",
+                    "-f",
+                    f"gunicorn|{BinConfig.ARIA2_NAME}|{BinConfig.QBIT_NAME}|{BinConfig.FFMPEG_NAME}|{BinConfig.RCLONE_NAME}|java|{BinConfig.SABNZBD_NAME}|7z|split",
+                ]
             )
 
-            proc_update = await create_subprocess_exec("python3", "update.py")
-            await proc_update.wait()
+            await cmd_exec(["python3", "update.py"])
 
             try:
                 async with aiopen(".restartmsg", "w") as f:
@@ -298,8 +304,7 @@ async def confirm_restart(_, query):
 
 
 async def _runtime_reload():
-    proc_update = await create_subprocess_exec("python3", "update.py")
-    await proc_update.wait()
+    await cmd_exec(["python3", "update.py"])
 
     import sys as _sys
 
@@ -384,7 +389,6 @@ async def _runtime_reload():
 
 async def _background_cleanup():
     try:
-        proc = await create_subprocess_exec("rm", "-rf", "/usr/src/app/downloads/")
-        await proc.wait()
+        await cmd_exec(["rm", "-rf", "/usr/src/app/downloads/"])
     except Exception:
         pass

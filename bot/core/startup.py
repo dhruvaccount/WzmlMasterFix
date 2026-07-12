@@ -1,4 +1,4 @@
-from asyncio import create_subprocess_exec, create_subprocess_shell, gather, sleep
+from asyncio import gather, sleep
 from importlib import import_module
 from os import environ, path as ospath, getenv
 
@@ -26,7 +26,7 @@ from .. import (
     sabnzbd_client,
     sudo_users,
 )
-from ..helper.ext_utils.bot_utils import derive_service_password
+from ..helper.ext_utils.bot_utils import cmd_exec, derive_service_password
 from ..helper.ext_utils.db_handler import database
 from .config_manager import Config, BinConfig
 from .tg_client import TgClient, db_partition_id
@@ -381,24 +381,18 @@ async def load_configurations():
     cmd = f'chmod 600 .netrc && cp .netrc /root/.netrc && chmod +x setpkgs.sh && ./setpkgs.sh {BinConfig.ARIA2_NAME} "{service_cores}" {Config.CPU_LIMIT}'
     if not Config.DISABLE_NZB:
         cmd += f" {BinConfig.SABNZBD_NAME}"
-    await (await create_subprocess_shell(cmd)).wait()
+    await cmd_exec(cmd, shell=True)
 
     if await aiopath.exists("cfg.zip"):
         if await aiopath.exists("/JDownloader/cfg"):
             await rmtree("/JDownloader/cfg", ignore_errors=True)
-        await (
-            await create_subprocess_exec("7z", "x", "cfg.zip", "-o/JDownloader")
-        ).wait()
+        await cmd_exec(["7z", "x", "cfg.zip", "-o/JDownloader"])
 
     if await aiopath.exists("accounts.zip"):
         if await aiopath.exists("accounts"):
             await rmtree("accounts", ignore_errors=True)
-        await (
-            await create_subprocess_exec(
-                "7z", "x", "-o.", "-aoa", "accounts.zip", "accounts/*.json"
-            )
-        ).wait()
-        await (await create_subprocess_exec("chmod", "-R", "777", "accounts")).wait()
+        await cmd_exec(["7z", "x", "-o.", "-aoa", "accounts.zip", "accounts/*.json"])
+        await cmd_exec(["chmod", "-R", "777", "accounts"])
         await remove("accounts.zip")
 
     if not await aiopath.exists("accounts"):
@@ -424,10 +418,11 @@ async def load_configurations():
             access_pwd = token_bytes(32).hex()
             Config.WEB_ACCESS_PASSWORD = access_pwd
         env = f"WEB_ACCESS_PASSWORD={access_pwd} "
-        await create_subprocess_shell(
-            f"{env}gunicorn -k uvicorn.workers.UvicornWorker -w 1 web.wserver:app --bind 0.0.0.0:{PORT}"
+        await cmd_exec(
+            f"{env}gunicorn -k uvicorn.workers.UvicornWorker -w 1 web.wserver:app --bind 0.0.0.0:{PORT}",
+            shell=True,
         )
-        await create_subprocess_shell("python3 cron_boot.py")
+        await cmd_exec("python3 cron_boot.py", shell=True)
 
     from ..helper.ext_utils.tunnel_monitor import apply_tunnel_url_once
 

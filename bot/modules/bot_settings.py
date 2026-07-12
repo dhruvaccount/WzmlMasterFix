@@ -1,6 +1,4 @@
 from asyncio import (
-    create_subprocess_exec,
-    create_subprocess_shell,
     gather,
     sleep,
 )
@@ -42,6 +40,7 @@ from .. import (
 )
 from ..helper.ext_utils.bot_utils import (
     SetInterval,
+    cmd_exec,
     new_task,
 )
 from ..core.config_manager import Config
@@ -713,7 +712,7 @@ async def _handle_service_toggle(key, disabled):
                 except Exception:
                     pass
                 try:
-                    await create_subprocess_exec("pkill", "-9", "-f", "java").wait()
+                    await cmd_exec(["pkill", "-9", "-f", "java"])
                 except Exception:
                     pass
                 LOGGER.info("JDownloader stopped via Module Settings")
@@ -737,7 +736,7 @@ async def _handle_service_toggle(key, disabled):
                 except Exception:
                     pass
                 try:
-                    await create_subprocess_exec("pkill", "-9", "-f", "SABnzbd").wait()
+                    await cmd_exec(["pkill", "-9", "-f", "SABnzbd"])
                 except Exception:
                     pass
                 LOGGER.info("SABnzbd stopped via Module Settings")
@@ -929,9 +928,7 @@ async def sync_jdownloader():
         await jdownloader.device.system.exit_jd()
     if await aiopath.exists("cfg.zip"):
         await remove("cfg.zip")
-    await (
-        await create_subprocess_exec("7z", "a", "cfg.zip", "/JDownloader/cfg")
-    ).wait()
+    await cmd_exec(["7z", "a", "cfg.zip", "/JDownloader/cfg"])
     await database.update_private_file("cfg.zip")
 
 
@@ -955,11 +952,9 @@ async def update_private_file(_, message, pre_message, key, new_file=False):
                 Config.USE_SERVICE_ACCOUNTS = False
                 await database.update_config({"USE_SERVICE_ACCOUNTS": False})
             elif file_name in [".netrc", "netrc"]:
-                await (await create_subprocess_exec("touch", ".netrc")).wait()
-                await (await create_subprocess_exec("chmod", "600", ".netrc")).wait()
-                await (
-                    await create_subprocess_exec("cp", ".netrc", "/root/.netrc")
-                ).wait()
+                await cmd_exec(["touch", ".netrc"])
+                await cmd_exec(["chmod", "600", ".netrc"])
+                await cmd_exec(["cp", ".netrc", "/root/.netrc"])
         await delete_message(message)
     elif doc := message.document:
         file_name = doc.file_name
@@ -972,20 +967,16 @@ async def update_private_file(_, message, pre_message, key, new_file=False):
                 await rmtree("accounts", ignore_errors=True)
             if await aiopath.exists("rclone_sa"):
                 await rmtree("rclone_sa", ignore_errors=True)
-            await (
-                await create_subprocess_exec(
-                    "7z", "x", "-o.", "-aoa", "accounts.zip", "accounts/*.json"
-                )
-            ).wait()
-            await (
-                await create_subprocess_exec("chmod", "-R", "777", "accounts")
-            ).wait()
+            await cmd_exec(
+                ["7z", "x", "-o.", "-aoa", "accounts.zip", "accounts/*.json"]
+            )
+            await cmd_exec(["chmod", "-R", "777", "accounts"])
         elif file_name in [".netrc", "netrc"]:
             if file_name == "netrc":
                 await rename("netrc", ".netrc")
                 file_name = ".netrc"
-            await (await create_subprocess_exec("chmod", "600", ".netrc")).wait()
-            await (await create_subprocess_exec("cp", ".netrc", "/root/.netrc")).wait()
+            await cmd_exec(["chmod", "600", ".netrc"])
+            await cmd_exec(["cp", ".netrc", "/root/.netrc"])
         elif file_name == "config.py":
             await load_config()
         if "@github.com" in Config.UPSTREAM_REPO:
@@ -1145,7 +1136,7 @@ async def edit_bot_settings(client, query):
             await TorrentManager.change_aria2_option("bt-stop-timeout", "0")
             await database.update_aria2("bt-stop-timeout", "0")
         elif data[2] in ("BASE_URL", "WEB_ACCESS_PASSWORD"):
-            await (await create_subprocess_exec("pkill", "-9", "-f", "gunicorn")).wait()
+            await cmd_exec(["pkill", "-9", "-f", "gunicorn"])
         elif data[2] == "GDRIVE_ID":
             if drives_names and drives_names[0] == "Main":
                 drives_names.pop(0)
@@ -1157,7 +1148,7 @@ async def edit_bot_settings(client, query):
         elif data[2] in ("INC_TASK_NOTIFY", "INC_TASK_RESUME"):
             await database.trunc_table("tasks")
         elif data[2] in ("JD_EMAIL", "JD_PASS"):
-            await create_subprocess_exec("pkill", "-9", "-f", "java")
+            await cmd_exec(["pkill", "-9", "-f", "java"])
         elif data[2] == "USENET_SERVERS":
             for s in (
                 Config.USENET_SERVERS if isinstance(Config.USENET_SERVERS, list) else []
@@ -1397,21 +1388,15 @@ async def edit_bot_settings(client, query):
         safe_filename = shlex_quote(filename)
         safe_branch = shlex_quote(Config.UPSTREAM_BRANCH)
         if await aiopath.exists(filename):
-            await (
-                await create_subprocess_shell(
-                    f"git add -f {safe_filename} \
-                    && git commit -sm botsettings -q \
-                    && git push origin {safe_branch} -qf"
-                )
-            ).wait()
+            await cmd_exec(
+                f"git add -f {safe_filename} && git commit -sm botsettings -q && git push origin {safe_branch} -qf",
+                shell=True,
+            )
         else:
-            await (
-                await create_subprocess_shell(
-                    f"git rm -r --cached {safe_filename} \
-                    && git commit -sm botsettings -q \
-                    && git push origin {safe_branch} -qf"
-                )
-            ).wait()
+            await cmd_exec(
+                f"git rm -r --cached {safe_filename} && git commit -sm botsettings -q && git push origin {safe_branch} -qf",
+                shell=True,
+            )
         await delete_message(message.reply_to_message)
         await delete_message(message)
 
@@ -1455,7 +1440,7 @@ async def load_config():
     if not Config.INC_TASK_NOTIFY and not Config.INC_TASK_RESUME:
         await database.trunc_table("tasks")
 
-    await (await create_subprocess_exec("pkill", "-9", "-f", "gunicorn")).wait()
+    await cmd_exec(["pkill", "-9", "-f", "gunicorn"])
     if Config.BASE_URL:
         port = getenv("PORT", "") or "8080"
         access_pwd = getenv("WEB_ACCESS_PASSWORD", "") or Config.WEB_ACCESS_PASSWORD
@@ -1465,8 +1450,11 @@ async def load_config():
             access_pwd = token_bytes(32).hex()
             Config.WEB_ACCESS_PASSWORD = access_pwd
         env = f"WEB_ACCESS_PASSWORD={access_pwd} "
-        await create_subprocess_shell(
-            f"{env}gunicorn -k uvicorn.workers.UvicornWorker -w 1 web.wserver:app --bind 0.0.0.0:{port}"
+        bot_loop.create_task(
+            cmd_exec(
+                f"{env}gunicorn -k uvicorn.workers.UvicornWorker -w 1 web.wserver:app --bind 0.0.0.0:{port}",
+                shell=True,
+            )
         )
 
     if Config.DATABASE_URL:

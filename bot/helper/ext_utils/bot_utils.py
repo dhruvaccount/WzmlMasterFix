@@ -5,6 +5,7 @@ from asyncio import (
     sleep,
 )
 from asyncio.subprocess import PIPE
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial, wraps
 from hashlib import sha256
@@ -401,6 +402,70 @@ def safe_int(value, default=0):
         return int(value)
     except (ValueError, TypeError):
         return default
+
+
+class GitInfo:
+    def __init__(self):
+        self._hash = ""
+        self._repo_url = ""
+        self._commit_message = ""
+        self._commit_time = ""
+
+    async def init(self):
+        try:
+            self._hash = (await cmd_exec(["git", "rev-parse", "--short", "HEAD"]))[0]
+        except Exception:
+            self._hash = "unknown"
+        try:
+            url = (await cmd_exec(["git", "remote", "get-url", "origin"]))[0]
+            if url.startswith("https://") and "@" in url:
+                url = "https://" + url.split("@", 1)[1]
+            self._repo_url = url.rstrip(".git")
+        except Exception:
+            self._repo_url = ""
+        try:
+            self._commit_message = (
+                await cmd_exec(["git", "log", "-1", "--format=%s"])
+            )[0]
+        except Exception:
+            self._commit_message = ""
+        try:
+            self._commit_time = (await cmd_exec(["git", "log", "-1", "--format=%ci"]))[
+                0
+            ]
+        except Exception:
+            self._commit_time = ""
+
+    def commit_hash(self):
+        return self._hash or "unknown"
+
+    def commit_url(self):
+        h = self.commit_hash()
+        if self._repo_url and h != "unknown":
+            return f"{self._repo_url}/commit/{h}"
+        return ""
+
+    def commit_msg(self):
+        return self._commit_message or ""
+
+    def commit_time(self):
+        return self._commit_time or ""
+
+    def commit_date(self):
+        if not self._commit_time:
+            return ""
+        try:
+            dt = datetime.strptime(
+                self._commit_time.split(" +")[0].split(" -")[0],
+                "%Y-%m-%d %H:%M:%S",
+            )
+            return dt.strftime("%d/%m/%Y (%H:%M)")
+        except Exception:
+            return self._commit_time
+
+
+git_info = GitInfo()
+bot_loop.create_task(git_info.init())
 
 
 async def download_image_url(url):
