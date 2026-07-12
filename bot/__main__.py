@@ -95,7 +95,7 @@ async def main():
         update_nzb_options(),
     )
     from .core.jdownloader_booter import jdownloader
-    from .helper.ext_utils.bot_utils import search_images
+    from .helper.ext_utils.bot_utils import git_info, search_images
     from .helper.ext_utils.files_utils import clean_all
     from .helper.ext_utils.telegraph_helper import telegraph
     from .helper.mirror_leech_utils.rclone_utils.serve import rclone_serve_booter
@@ -105,6 +105,7 @@ async def main():
     )
 
     await save_settings()
+    await git_info.init()
     if not Config.DISABLE_JD:
         bot_loop.create_task(jdownloader.boot())
     global _clean_task

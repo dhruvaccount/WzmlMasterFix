@@ -465,7 +465,6 @@ class GitInfo:
 
 
 git_info = GitInfo()
-bot_loop.create_task(git_info.init())
 
 
 async def download_image_url(url):
